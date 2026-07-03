@@ -2,11 +2,13 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import AppLoadingScreen from '../components/AppLoadingScreen';
 import { useAuth } from '../context/AuthContext';
 
 export default function Home() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const message = loading ? 'Checking secure access' : user ? 'Opening your dashboard' : 'Opening sign in';
 
   useEffect(() => {
     if (loading) return;
@@ -14,9 +16,5 @@ export default function Home() {
     else router.replace(user.role === 'admin' ? '/admin/dashboard' : '/truck/dashboard');
   }, [user, loading, router]);
 
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <p className="text-iceblue-600 font-medium">Loading Tiruppur Ice Since 2000...</p>
-    </div>
-  );
+  return <AppLoadingScreen message={message} role={user?.role || null} />;
 }

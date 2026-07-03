@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../context/AuthContext';
+import AppLoadingScreen from './AppLoadingScreen';
 
 export default function RequireRole({
   role,
@@ -24,11 +25,8 @@ export default function RequireRole({
   }, [user, loading, role, router]);
 
   if (loading || !user || user.role !== role) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-iceblue-600 font-medium">Loading...</p>
-      </div>
-    );
+    const message = loading ? 'Checking secure access' : user ? 'Opening your dashboard' : 'Opening sign in';
+    return <AppLoadingScreen message={message} role={user?.role || role} />;
   }
 
   return <>{children}</>;

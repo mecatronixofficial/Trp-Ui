@@ -14,12 +14,14 @@ interface Customer {
   defaultSaleType: string;
   creditBalance: number;
   isActive: boolean;
+  truck?: { _id: string; truckName: string; truckNumber: string; driverName?: string } | string | null;
 }
 
-const emptyForm = { name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', notes: '' };
+const emptyForm = { name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '' };
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [trucks, setTrucks] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -31,8 +33,12 @@ export default function CustomersPage() {
 
   const load = async (q?: string) => {
     setLoading(true);
-    const { data } = await api.get('/customers', { params: { search: q } });
+    const [{ data }, truckRows] = await Promise.all([
+      api.get('/customers', { params: { search: q } }),
+      api.get('/trucks'),
+    ]);
     setCustomers(data);
+    setTrucks(truckRows.data);
     setLoading(false);
   };
 
@@ -48,14 +54,16 @@ export default function CustomersPage() {
 
   const openEdit = (c: Customer) => {
     setEditing(c);
-    setForm({ name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType });
+    const truckId = typeof c.truck === 'string' ? c.truck : c.truck?._id || '';
+    setForm({ name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType, truck: truckId });
     setModalOpen(true);
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editing) await api.patch(`/customers/${editing._id}`, form);
-    else await api.post('/customers', form);
+    const payload = { ...form, truck: form.truck || null };
+    if (editing) await api.patch(`/customers/${editing._id}`, payload);
+    else await api.post('/customers', payload);
     setModalOpen(false);
     load(search);
   };
@@ -110,11 +118,12 @@ export default function CustomersPage() {
         {loading ? (
           <p className="text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[700px]">
+          <table className="table-base min-w-[820px]">
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Phone</th>
+                <th>Truck</th>
                 <th>Type</th>
                 <th>Credit Balance</th>
                 <th>Actions</th>
@@ -125,6 +134,13 @@ export default function CustomersPage() {
                 <tr key={c._id}>
                   <td className="font-medium">{c.name}</td>
                   <td>{c.phoneNumber}</td>
+                  <td>
+                    {typeof c.truck === 'object' && c.truck ? (
+                      <span>{c.truck.truckName}</span>
+                    ) : (
+                      <span className="text-navy-800/40">All trucks</span>
+                    )}
+                  </td>
                   <td className="capitalize">{c.defaultSaleType}</td>
                   <td className={c.creditBalance > 0 ? 'text-red-500 font-semibold' : ''}>{formatCurrency(c.creditBalance)}</td>
                   <td>
@@ -167,6 +183,17 @@ export default function CustomersPage() {
               <select className="input-field" value={form.defaultSaleType} onChange={(e) => setForm({ ...form, defaultSaleType: e.target.value })}>
                 <option value="retail">Retail</option>
                 <option value="wholesale">Wholesale</option>
+              </select>
+            </div>
+            <div>
+              <label className="label-text">Assigned Truck</label>
+              <select className="input-field" value={form.truck} onChange={(e) => setForm({ ...form, truck: e.target.value })}>
+                <option value="">All trucks / unassigned</option>
+                {trucks.map((truck) => (
+                  <option key={truck._id} value={truck._id}>
+                    {truck.truckName} ({truck.truckNumber})
+                  </option>
+                ))}
               </select>
             </div>
             <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Customer'}</button>

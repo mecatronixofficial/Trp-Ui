@@ -1,13 +1,35 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, BarChart, Bar,
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
-import { FiBox, FiShoppingCart, FiTrash2, FiDollarSign, FiTrendingUp, FiPackage } from 'react-icons/fi';
+import {
+  FiBox,
+  FiClock,
+  FiDollarSign,
+  FiPackage,
+  FiShoppingCart,
+  FiTrendingUp,
+  FiTrash2,
+  FiUsers,
+} from 'react-icons/fi';
 import api from '../../../lib/api';
-import { formatCurrency } from '../../../lib/api';
-import StatCard from '../../../components/StatCard';
+import { formatCurrency, formatDate } from '../../../lib/api';
+
+const chartColors = ['#1ca6d1', '#16a34a', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6'];
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState<any>(null);
@@ -29,89 +51,359 @@ export default function AdminDashboardPage() {
     })();
   }, []);
 
-  if (loading) return <p className="text-navy-800/60">Loading dashboard...</p>;
-  if (!data) return <p className="text-red-500">Could not load dashboard data.</p>;
+  const dashboard = useMemo(() => {
+    if (!data) return null;
 
-  const truckRows = Object.entries(data.truckWiseSalesToday || {});
+    const truckRows = Object.entries(data.truckWiseSalesToday || {}).map(([id, row]: any) => ({
+      id,
+      truckName: row.truckName || 'Truck',
+      quantity: Number(row.quantity || 0),
+      totalAmount: Number(row.totalAmount || 0),
+    }));
+    const soldBars = truckRows.reduce((sum, row) => sum + row.quantity, 0);
+    const stockRows = data.pendingStock?.sizeWise || [];
+    const stockChart = stockRows.map((row: any) => ({
+      size: `${row.size} bar`,
+      quantity: Number(row.quantity || 0),
+    }));
+    const paymentMix = [
+      { name: 'Collected', value: Number(data.today.collection || 0), color: '#16a34a' },
+      { name: 'Balance', value: Number(data.today.balance || 0), color: '#ef4444' },
+      { name: 'Old Payments', value: Number(data.payments?.todayCollectedLater || 0), color: '#1ca6d1' },
+    ].filter((row) => row.value > 0);
+    const last7DaysSales = (data.last7DaysSales || []).map((row: any) => ({
+      ...row,
+      label: formatDate(row.date).replace(/ 202\d/, ''),
+    }));
+    const monthlyProfit = profitChart.map((row) => ({
+      ...row,
+      label: String(row.month || '').slice(5) || row.month,
+    }));
+
+    return {
+      truckRows,
+      soldBars,
+      stockChart,
+      paymentMix,
+      last7DaysSales,
+      monthlyProfit,
+      pendingPayments: data.payments?.pendingBills || [],
+      recentPayments: data.payments?.recentToday || [],
+      truckCustomerRows: Object.entries(data.customers?.truckWise || {}),
+      recentCustomers: data.customers?.recent || [],
+    };
+  }, [data, profitChart]);
+
+  if (loading) {
+    return (
+      <div className="grid min-h-[45vh] place-items-center">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-2xl border-4 border-iceblue-100 border-t-iceblue-500" />
+          <p className="font-medium text-navy-800/70">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+  if (!data || !dashboard) return <p className="text-red-500">Could not load dashboard data.</p>;
+
+  const stockTotal = Number(data.pendingStock?.totalClosingStock || 0);
+  const pendingAmount = Number(data.payments?.pendingAmount || 0);
+  const todayProfit = Number(data.today.profit || 0);
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Today's Production" value={data.today.production} suffix="bars" icon={FiBox} accent="iceblue" />
-        <StatCard label="Today's Sales" value={formatCurrency(data.today.sales)} icon={FiShoppingCart} accent="green" />
-        <StatCard label="Today's Wastage" value={data.today.wastage} suffix="bars" icon={FiTrash2} accent="red" />
-        <StatCard label="Today's Making Cost" value={formatCurrency(data.today.makingCost)} icon={FiDollarSign} accent="amber" />
-        <StatCard label="Today's Profit" value={formatCurrency(data.today.profit)} icon={FiTrendingUp} accent="navy" />
-        <StatCard label="Pending Stock" value={data.pendingStock.totalClosingStock} suffix="bars" icon={FiPackage} accent="iceblue" />
-        <StatCard label="Monthly Sales" value={formatCurrency(data.monthlySales)} icon={FiShoppingCart} accent="green" />
-        <StatCard label="Yearly Sales" value={formatCurrency(data.yearlySales)} icon={FiShoppingCart} accent="green" />
-      </div>
+    <div className="space-y-5 pb-8 xl:space-y-6">
+      <section className="overflow-hidden rounded-[1.5rem] bg-white shadow-ice border border-iceblue-100">
+        <div className="grid gap-5 p-5 sm:p-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)] xl:items-stretch">
+          <div className="min-w-0 rounded-[1.25rem] bg-[linear-gradient(135deg,#0a1c2a_0%,#136a8b_52%,#1ca6d1_100%)] p-5 text-white sm:p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-50/75">Admin Dashboard</p>
+            <h1 className="mt-3 font-display text-3xl font-bold sm:text-4xl">Tiruppur Ice Control</h1>
+            <p className="mt-2 max-w-2xl text-sm text-cyan-50/80">
+              Production, sales, collection, stock, and customer dues in one view.
+            </p>
 
-      <div className="grid lg:grid-cols-2 gap-4">
-        <div className="card">
-          <p className="font-display font-semibold mb-4">Last 7 Days Sales</p>
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={data.last7DaysSales}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-              <Line type="monotone" dataKey="total" stroke="#1ca6d1" strokeWidth={2.5} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
+            <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <HeroMetric label="Production" value={data.today.production} suffix="bars" />
+              <HeroMetric label="Sold" value={dashboard.soldBars} suffix="bars" />
+              <HeroMetric label="Collection" value={formatCurrency(data.today.collection)} />
+              <HeroMetric label="Profit" value={formatCurrency(todayProfit)} tone={todayProfit >= 0 ? 'good' : 'bad'} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <KpiCard icon={FiShoppingCart} label="Today Sales" value={formatCurrency(data.today.sales)} tone="green" />
+            <KpiCard icon={FiTrash2} label="Wastage" value={data.today.wastage} suffix="bars" tone="red" />
+            <KpiCard icon={FiPackage} label="Pending Stock" value={stockTotal} suffix="bars" tone="blue" />
+            <KpiCard icon={FiClock} label="Pending Bills" value={formatCurrency(pendingAmount)} tone="amber" />
+          </div>
         </div>
+      </section>
 
-        <div className="card">
-          <p className="font-display font-semibold mb-4">Monthly Profit</p>
-          <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={profitChart}>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <KpiCard icon={FiDollarSign} label="Making Cost" value={formatCurrency(data.today.makingCost)} tone="amber" />
+        <KpiCard icon={FiTrendingUp} label="Monthly Sales" value={formatCurrency(data.monthlySales)} tone="green" />
+        <KpiCard icon={FiShoppingCart} label="Yearly Sales" value={formatCurrency(data.yearlySales)} tone="blue" />
+        <KpiCard icon={FiDollarSign} label="Old Payments Today" value={formatCurrency(data.payments?.todayCollectedLater || 0)} tone="navy" />
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
+        <Panel title="Last 7 Days Sales" icon={FiTrendingUp}>
+          <ResponsiveContainer width="100%" height={300}>
+            <AreaChart data={dashboard.last7DaysSales}>
+              <defs>
+                <linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#1ca6d1" stopOpacity={0.35} />
+                  <stop offset="95%" stopColor="#1ca6d1" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
               <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-              <Bar dataKey="profit" fill="#1284ac" radius={[6, 6, 0, 0]} />
+              <Area type="monotone" dataKey="total" stroke="#1284ac" strokeWidth={3} fill="url(#salesFill)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </Panel>
+
+        <Panel title="Today Collection" icon={FiDollarSign}>
+          {dashboard.paymentMix.length === 0 ? (
+            <EmptyState text="No collection data today." />
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie data={dashboard.paymentMix} dataKey="value" nameKey="name" innerRadius={58} outerRadius={94} paddingAngle={4}>
+                  {dashboard.paymentMix.map((entry, index) => (
+                    <Cell key={entry.name} fill={entry.color || chartColors[index % chartColors.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
+                <Legend iconType="circle" />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </Panel>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Monthly Sales, Cost, Profit" icon={FiTrendingUp}>
+          <ResponsiveContainer width="100%" height={310}>
+            <BarChart data={dashboard.monthlyProfit}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
+              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
+              <Legend />
+              <Bar dataKey="sales" name="Sales" fill="#1ca6d1" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="cost" name="Cost" fill="#f59e0b" radius={[6, 6, 0, 0]} />
+              <Bar dataKey="profit" name="Profit" fill="#16a34a" radius={[6, 6, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-        </div>
-      </div>
+        </Panel>
 
-      <div className="card">
-        <p className="font-display font-semibold mb-4">Truck-wise Sales Today</p>
-        {truckRows.length === 0 ? (
-          <p className="text-sm text-navy-800/50">No sales recorded today yet.</p>
-        ) : (
-          <table className="table-base">
-            <thead>
-              <tr>
-                <th>Truck</th>
-                <th>Bars Sold</th>
-                <th>Sales Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {truckRows.map(([id, v]: any) => (
-                <tr key={id}>
-                  <td>{v.truckName}</td>
-                  <td>{v.quantity}</td>
-                  <td>{formatCurrency(v.totalAmount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+        <Panel title="Truck-wise Sales Today" icon={FiBox}>
+          {dashboard.truckRows.length === 0 ? (
+            <EmptyState text="No truck sales recorded today." />
+          ) : (
+            <ResponsiveContainer width="100%" height={310}>
+              <BarChart data={dashboard.truckRows}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
+                <XAxis dataKey="truckName" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
+                <Tooltip formatter={(v: any, name: any) => (name === 'Sales' ? formatCurrency(Number(v)) : v)} />
+                <Legend />
+                <Bar yAxisId="left" dataKey="quantity" name="Bars" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                <Bar yAxisId="right" dataKey="totalAmount" name="Sales" fill="#14b8a6" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Panel>
+      </section>
 
-      <div className="card">
-        <p className="font-display font-semibold mb-4">Pending Stock (Size-wise)</p>
-        <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-          {data.pendingStock.sizeWise.map((s: any) => (
-            <div key={s.size} className="rounded-xl bg-iceblue-50 border border-iceblue-100 p-3 text-center">
-              <p className="text-xs text-navy-800/60">{s.size} bar</p>
-              <p className="text-lg font-bold text-iceblue-700">{s.quantity}</p>
+      <section className="grid gap-4 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
+        <Panel title="Pending Stock Size-wise" icon={FiPackage}>
+          {dashboard.stockChart.length === 0 ? (
+            <EmptyState text="No stock data available." />
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={dashboard.stockChart}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
+                <XAxis dataKey="size" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Bar dataKey="quantity" name="Bars" fill="#1ca6d1" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Panel>
+
+        <Panel title="Pending Customer Payments" icon={FiClock}>
+          {dashboard.pendingPayments.length === 0 ? (
+            <EmptyState text="No pending payments." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-base min-w-[720px]">
+                <thead>
+                  <tr>
+                    <th>Bill Date</th>
+                    <th>Customer</th>
+                    <th>Truck</th>
+                    <th>Total</th>
+                    <th>Paid</th>
+                    <th>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dashboard.pendingPayments.map((sale: any) => (
+                    <tr key={sale._id}>
+                      <td>{formatDate(sale.date)}</td>
+                      <td>
+                        <p className="font-medium">{sale.customer?.name}</p>
+                        <p className="text-xs text-navy-800/45">{sale.customer?.phoneNumber || 'No phone'}</p>
+                      </td>
+                      <td>{sale.truck?.truckName || '-'}</td>
+                      <td>{formatCurrency(sale.totalAmount)}</td>
+                      <td>{formatCurrency(sale.paidAmount)}</td>
+                      <td className="font-semibold text-red-500">{formatCurrency(sale.balanceAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
+          )}
+        </Panel>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <Panel title="Payments Collected Today" icon={FiDollarSign}>
+          {dashboard.recentPayments.length === 0 ? (
+            <EmptyState text="No old payments collected today." />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="table-base min-w-[620px]">
+                <thead>
+                  <tr>
+                    <th>Payment Date</th>
+                    <th>Customer</th>
+                    <th>Truck</th>
+                    <th>Mode</th>
+                    <th>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dashboard.recentPayments.map((payment: any, index: number) => (
+                    <tr key={`${payment.saleId}-${index}`}>
+                      <td>{formatDate(payment.date)}</td>
+                      <td>
+                        <p className="font-medium">{payment.customer?.name}</p>
+                        <p className="text-xs text-navy-800/45">Bill: {formatDate(payment.billDate)}</p>
+                      </td>
+                      <td>{payment.truck?.truckName || '-'}</td>
+                      <td className="capitalize">{payment.paymentMode}</td>
+                      <td className="font-semibold text-emerald-600">{formatCurrency(payment.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Recent Customers" icon={FiUsers}>
+          {dashboard.recentCustomers.length === 0 ? (
+            <EmptyState text="No customers yet." />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {dashboard.recentCustomers.map((customer: any) => (
+                <div key={customer._id} className="rounded-xl border border-iceblue-100 bg-iceblue-50/60 p-3">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-iceblue-600">
+                      <FiUsers />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold text-navy-900">{customer.name}</p>
+                      <p className="mt-1 text-xs text-navy-800/55">{customer.phoneNumber || 'No phone'}</p>
+                      <p className="mt-1 text-xs text-navy-800/45">
+                        {customer.truck?.truckName || 'Local'} · {formatDate(customer.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      </section>
+    </div>
+  );
+}
+
+function HeroMetric({ label, value, suffix, tone = 'normal' }: { label: string; value: string | number; suffix?: string; tone?: 'normal' | 'good' | 'bad' }) {
+  return (
+    <div className="rounded-xl bg-white/12 p-3 ring-1 ring-white/15 backdrop-blur">
+      <p className="text-[11px] font-semibold uppercase text-cyan-50/70">{label}</p>
+      <p className={`mt-2 truncate font-display text-2xl font-bold ${tone === 'bad' ? 'text-red-100' : tone === 'good' ? 'text-emerald-100' : 'text-white'}`}>
+        {value}
+        {suffix && <span className="ml-1 text-sm font-medium text-cyan-50/65">{suffix}</span>}
+      </p>
+    </div>
+  );
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  suffix,
+  tone,
+}: {
+  icon: any;
+  label: string;
+  value: string | number;
+  suffix?: string;
+  tone: 'blue' | 'green' | 'red' | 'amber' | 'navy';
+}) {
+  const tones: Record<string, string> = {
+    blue: 'bg-iceblue-50 text-iceblue-700',
+    green: 'bg-emerald-50 text-emerald-700',
+    red: 'bg-red-50 text-red-600',
+    amber: 'bg-amber-50 text-amber-700',
+    navy: 'bg-navy-900/5 text-navy-800',
+  };
+
+  return (
+    <div className="rounded-[1.25rem] border border-iceblue-100 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase text-navy-800/55">{label}</p>
+        <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tones[tone]}`}>
+          <Icon size={18} />
+        </span>
       </div>
+      <p className="mt-3 truncate font-display text-2xl font-bold text-navy-900">
+        {value}
+        {suffix && <span className="ml-1 text-sm font-medium text-navy-800/45">{suffix}</span>}
+      </p>
+    </div>
+  );
+}
+
+function Panel({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
+  return (
+    <div className="rounded-[1.25rem] border border-iceblue-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <p className="font-display text-lg font-semibold text-navy-900">{title}</p>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700">
+          <Icon size={18} />
+        </span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="grid min-h-[220px] place-items-center rounded-xl border border-dashed border-iceblue-100 bg-iceblue-50/50 px-4 text-center">
+      <p className="text-sm font-medium text-navy-800/50">{text}</p>
     </div>
   );
 }
