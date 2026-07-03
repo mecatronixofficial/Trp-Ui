@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { FiPlus, FiTrash2 } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { ICE_BAR_SIZES, formatDate, todayISO } from '../../../lib/api';
+import { PRODUCTION_ICE_BAR_SIZES, formatDate, todayISO } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 
 export default function ProductionPage() {
@@ -14,7 +14,7 @@ export default function ProductionPage() {
   const [shift, setShift] = useState('full_day');
   const [notes, setNotes] = useState('');
   const [sizeWise, setSizeWise] = useState<Record<string, string>>(
-    Object.fromEntries(ICE_BAR_SIZES.map((s) => [s, ''])),
+    Object.fromEntries(PRODUCTION_ICE_BAR_SIZES.map((s) => [s, ''])),
   );
 
   const load = async () => {
@@ -36,11 +36,11 @@ export default function ProductionPage() {
       date,
       shift,
       notes,
-      sizeWise: ICE_BAR_SIZES.map((size) => ({ size, quantity: Number(sizeWise[size]) || 0 })).filter((s) => s.quantity > 0),
+      sizeWise: PRODUCTION_ICE_BAR_SIZES.map((size) => ({ size, quantity: Number(sizeWise[size]) || 0 })).filter((s) => s.quantity > 0),
     };
     await api.post('/production', payload);
     setModalOpen(false);
-    setSizeWise(Object.fromEntries(ICE_BAR_SIZES.map((s) => [s, ''])));
+    setSizeWise(Object.fromEntries(PRODUCTION_ICE_BAR_SIZES.map((s) => [s, ''])));
     setNotes('');
     load();
   };
@@ -113,9 +113,9 @@ export default function ProductionPage() {
             </div>
 
             <div>
-              <label className="label-text">Size-wise Production</label>
+              <label className="label-text">Full Bar Production</label>
               <div className="grid grid-cols-3 gap-3">
-                {ICE_BAR_SIZES.map((size) => (
+                {PRODUCTION_ICE_BAR_SIZES.map((size) => (
                   <div key={size}>
                     <span className="text-xs text-navy-800/60">{size} bar</span>
                     <input

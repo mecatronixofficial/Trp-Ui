@@ -17,7 +17,7 @@ interface AuthContextValue {
   user: AuthUser | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -28,27 +28,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    const stored = Cookies.get('tii_user');
-    if (stored) {
-      try {
-        setUser(JSON.parse(stored));
-      } catch {
-        /* ignore */
-      }
-    }
-    setLoading(false);
+    let active = true;
+
+    api
+      .get('/auth/me')
+      .then(({ data }) => {
+        if (!active) return;
+        const currentUser = {
+          id: data.id || data.userId,
+          username: data.username,
+          role: data.role,
+          truck: data.truck,
+          displayName: data.displayName,
+        };
+        setUser(currentUser);
+        Cookies.set('tii_user', JSON.stringify(currentUser), { expires: 1, sameSite: 'lax' });
+      })
+      .catch(() => {
+        if (!active) return;
+        Cookies.remove('tii_user');
+        setUser(null);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const login = async (username: string, password: string) => {
     const { data } = await api.post('/auth/login', { username, password });
-    Cookies.set('tii_token', data.access_token, { expires: 1 });
-    Cookies.set('tii_user', JSON.stringify(data.user), { expires: 1 });
+    Cookies.set('tii_user', JSON.stringify(data.user), { expires: 1, sameSite: 'lax' });
     setUser(data.user);
     router.push(data.user.role === 'admin' ? '/admin/dashboard' : '/truck/dashboard');
   };
 
-  const logout = () => {
-    Cookies.remove('tii_token');
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      /* local cleanup still runs */
+    }
     Cookies.remove('tii_user');
     setUser(null);
     router.push('/login');

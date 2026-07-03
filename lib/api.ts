@@ -3,19 +3,13 @@ import Cookies from 'js-cookie';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api',
-});
-
-api.interceptors.request.use((config) => {
-  const token = Cookies.get('tii_token');
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err?.response?.status === 401 && typeof window !== 'undefined') {
-      Cookies.remove('tii_token');
       Cookies.remove('tii_user');
       if (!window.location.pathname.startsWith('/login')) {
         window.location.href = '/login';
@@ -27,8 +21,9 @@ api.interceptors.response.use(
 
 export default api;
 
-// Ice bar sizes shared across forms
-export const ICE_BAR_SIZES = ['1/4', '1/2', '3/4', '1', '2', '3'] as const;
+// A full ice bar is size 1. Smaller sizes are split from full bars when selling.
+export const ICE_BAR_SIZES = ['1/4', '1/2', '3/4', '1'] as const;
+export const PRODUCTION_ICE_BAR_SIZES = ['1'] as const;
 
 export const COST_TYPES = [
   { value: 'electricity', label: 'Electricity' },
