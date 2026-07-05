@@ -11,10 +11,12 @@ import {
   FiLogOut,
   FiMenu,
   FiMoon,
+  FiNavigation,
   FiSettings,
   FiShoppingCart,
   FiSun,
   FiTruck,
+  FiUserCheck,
   FiUsers,
   FiX,
 } from 'react-icons/fi';
@@ -25,6 +27,7 @@ const adminLinks = [
   ['/admin/dashboard', 'Dashboard', FiGrid],
   ['/admin/trucks', 'Trucks', FiTruck],
   ['/admin/customers', 'Customers', FiUsers],
+  ['/admin/workers', 'Workers', FiUserCheck],
   ['/admin/production', 'Production', FiBox],
   ['/admin/making-cost', 'Making Cost', FiDollarSign],
   ['/admin/sales', 'Sales', FiShoppingCart],
@@ -59,31 +62,33 @@ export default function Topbar({ title }: { title: string }) {
   }, []);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-iceblue-100/80 bg-[linear-gradient(135deg,#ffffff_0%,#f0fbff_48%,#dff5fd_100%)] shadow-lg shadow-iceblue-900/5">
-      <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-iceblue-200/0 via-iceblue-400/70 to-iceblue-200/0" />
-      <div className="flex items-center justify-between gap-3 px-3 py-3 sm:px-4 md:px-8">
+    <header className="sticky top-0 z-30 bg-iceblue-50/80 px-3 py-3 backdrop-blur-xl sm:px-4 md:px-8">
+      <div className="flex items-center justify-between gap-3 rounded-3xl border border-white/80 bg-white px-3 py-2.5 shadow-lg shadow-iceblue-900/10">
         <div className="flex min-w-0 items-center gap-3">
           <button
-            className="flex h-11 w-11 items-center justify-center rounded-[1.15rem] border border-iceblue-200 bg-white text-navy-800 shadow-sm transition hover:bg-iceblue-50 md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-navy-900 text-white shadow-sm transition hover:bg-iceblue-700 md:hidden"
             onClick={() => setOpen(!open)}
             aria-label="Toggle navigation"
           >
             {open ? <FiX size={22} /> : <FiMenu size={22} />}
           </button>
 
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[1.25rem] bg-navy-900 text-white shadow-xl shadow-navy-900/20 ring-4 ring-white">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#071824] text-white shadow-lg shadow-navy-900/20">
             <TbSnowflake className="text-2xl" />
           </div>
 
           <div className="min-w-0">
-            <p className="hidden text-[11px] font-semibold uppercase tracking-[0.22em] text-iceblue-700 sm:block">{activeArea}</p>
-            <h1 className="truncate font-display text-base font-bold text-navy-900 sm:text-lg">{title}</h1>
+            <div className="hidden items-center gap-2 sm:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-iceblue-500" />
+              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-navy-800/45">{activeArea}</p>
+            </div>
+            <h1 className="truncate font-display text-base font-semibold text-navy-900 sm:text-lg">{title}</h1>
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
-          <div className="hidden items-center gap-2 rounded-[1.15rem] border border-iceblue-100 bg-white/75 px-3 py-2 text-navy-900 shadow-sm backdrop-blur sm:flex">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700">
+          <div className="hidden items-center gap-2 rounded-2xl bg-iceblue-50 px-3 py-1.5 text-navy-900 sm:flex">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-iceblue-700 shadow-sm">
               <TimeIcon />
             </span>
             <div>
@@ -92,8 +97,8 @@ export default function Topbar({ title }: { title: string }) {
             </div>
           </div>
 
-          <div className="hidden items-center gap-3 rounded-[1.15rem] border border-iceblue-100 bg-white/85 px-3 py-2 shadow-sm backdrop-blur md:flex">
-            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-navy-900 text-sm font-bold text-white">
+          <div className="hidden items-center gap-3 rounded-2xl border border-iceblue-100 bg-white px-2.5 py-1.5 shadow-sm md:flex">
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#071824] text-sm font-bold text-white">
               {initial}
             </span>
             <div className="min-w-0">
@@ -104,7 +109,7 @@ export default function Topbar({ title }: { title: string }) {
 
           <button
             onClick={logout}
-            className="flex h-11 w-11 items-center justify-center rounded-[1.15rem] border border-red-100 bg-white text-red-500 shadow-sm transition hover:bg-red-50 md:w-auto md:px-4"
+            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-500 transition hover:bg-red-100 md:w-auto md:px-4"
             aria-label="Logout"
           >
             <FiLogOut />
@@ -114,22 +119,22 @@ export default function Topbar({ title }: { title: string }) {
       </div>
 
       {open && (
-        <div className="border-t border-iceblue-100 bg-white/95 px-3 py-3 shadow-xl shadow-iceblue-900/10 md:hidden">
-          <div className="mb-3 grid grid-cols-[1fr_auto] gap-3 rounded-[1.25rem] bg-[linear-gradient(135deg,#f0fbff,#ffffff)] px-3 py-3">
+        <div className="mt-3 rounded-3xl border border-white/80 bg-white px-3 py-3 shadow-xl shadow-iceblue-900/10 md:hidden">
+          <div className="mb-3 grid grid-cols-[1fr_auto] gap-3 rounded-2xl bg-[#071824] px-3 py-3 text-white">
             <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-navy-900 text-sm font-bold text-white">
-              {initial}
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-navy-900">{greeting}, {userName}</p>
-              <p className="text-xs capitalize text-navy-800/55">{activeArea}</p>
+              <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-sm font-bold text-navy-900">
+                {initial}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">{greeting}, {userName}</p>
+                <p className="text-xs capitalize text-iceblue-200/80">{activeArea}</p>
+              </div>
             </div>
-            </div>
-            <div className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-right shadow-sm">
-              <TimeIcon className="text-iceblue-600" />
+            <div className="flex items-center gap-2 rounded-2xl bg-white/10 px-3 py-2 text-right">
+              <TimeIcon className="text-iceblue-200" />
               <div>
-                <p className="text-sm font-bold leading-none text-navy-900">{timeLabel}</p>
-                <p className="mt-1 text-[10px] font-medium text-navy-800/50">{dateLabel}</p>
+                <p className="text-sm font-bold leading-none">{timeLabel}</p>
+                <p className="mt-1 text-[10px] font-medium text-iceblue-100/70">{dateLabel}</p>
               </div>
             </div>
           </div>
@@ -144,12 +149,15 @@ export default function Topbar({ title }: { title: string }) {
                   key={href as string}
                   href={href as string}
                   onClick={() => setOpen(false)}
-                  className={`flex h-12 items-center gap-3 rounded-[1.1rem] px-3 text-sm font-semibold ${
-                    active ? 'bg-navy-900 text-white shadow-lg shadow-navy-900/15' : 'text-navy-800 hover:bg-iceblue-50'
+                  className={`flex h-12 items-center gap-3 rounded-2xl px-3 text-sm font-semibold transition ${
+                    active ? 'bg-[#071824] text-white shadow-lg shadow-navy-900/15' : 'text-navy-800 hover:bg-iceblue-50'
                   }`}
                 >
-                  <LinkIcon className="text-lg" />
+                  <span className={`flex h-8 w-8 items-center justify-center rounded-xl ${active ? 'bg-white/15' : 'bg-iceblue-50 text-iceblue-700'}`}>
+                    <LinkIcon className="text-lg" />
+                  </span>
                   {label as string}
+                  {active && <FiNavigation className="ml-auto text-white/70" />}
                 </Link>
               );
             })}
@@ -157,7 +165,7 @@ export default function Topbar({ title }: { title: string }) {
 
           <button
             onClick={logout}
-            className="mt-3 flex h-12 w-full items-center gap-3 rounded-[1.1rem] bg-red-50 px-3 text-left text-sm font-semibold text-red-500"
+            className="mt-3 flex h-12 w-full items-center gap-3 rounded-2xl bg-red-50 px-3 text-left text-sm font-semibold text-red-500"
           >
             <FiLogOut className="text-lg" />
             Logout

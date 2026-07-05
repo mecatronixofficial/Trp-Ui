@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FiCheckCircle, FiPlus, FiSearch, FiTrash2, FiUser, FiUserPlus } from 'react-icons/fi';
 import api from '../lib/api';
-import { ICE_BAR_SIZES, PAYMENT_MODES, formatCurrency, todayISO } from '../lib/api';
+import { PAYMENT_MODES, formatBarQuantity, formatCurrency, getItemBarUsed, todayISO } from '../lib/api';
 
 interface SaleFormProps {
   trucks?: { _id: string; truckName: string }[]; // only needed for admin (truck picker)
@@ -49,7 +49,14 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
     address: '',
   });
   const [items, setItems] = useState<Item[]>(
-    initial?.items?.map((i: any) => ({ size: i.size, quantity: String(i.quantity), pricePerBar: String(i.pricePerBar) })) || [
+    initial?.items?.map((i: any) => {
+      const totalBars = getItemBarUsed(i);
+      return {
+        size: '1',
+        quantity: formatBarQuantity(totalBars),
+        pricePerBar: String(Number(i.quantity || 0) * Number(i.pricePerBar || 0)),
+      };
+    }) || [
       { size: '1', quantity: '', pricePerBar: '' },
     ],
   );
@@ -164,8 +171,9 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
     }
   };
 
-  const lookupPrice = (size: string) => {
-    const match = priceList.find((p) => p.size === size && p.saleType === saleType);
+  const lookupPrice = (quantity: string) => {
+    const normalizedQuantity = formatBarQuantity(quantity);
+    const match = priceList.find((p) => formatBarQuantity(p.size) === normalizedQuantity && p.saleType === saleType);
     return match ? String(match.price) : '';
   };
 
@@ -173,7 +181,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
     if (!priceList.length) return;
     setItems((prev) => prev.map((item) => {
       if (item.pricePerBar) return item;
-      const suggested = lookupPrice(item.size);
+      const suggested = lookupPrice(item.quantity);
       return suggested ? { ...item, pricePerBar: suggested } : item;
     }));
   }, [priceList, saleType]);
@@ -182,7 +190,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
     setItems((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: value };
-      if (field === 'size') {
+      if (field === 'quantity') {
         const suggested = lookupPrice(value);
         if (suggested) next[idx].pricePerBar = suggested;
       }
@@ -193,7 +201,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const addItem = () => setItems([...items, { size: '1', quantity: '', pricePerBar: '' }]);
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
 
-  const totalAmount = items.reduce((sum, i) => sum + (Number(i.quantity) || 0) * (Number(i.pricePerBar) || 0), 0);
+  const totalAmount = items.reduce((sum, i) => sum + (Number(i.pricePerBar) || 0), 0);
   const balance = totalAmount - (Number(paidAmount) || 0);
   const derivedTruck = fixedTruckId || getCustomerTruckId(selectedCustomer) || truck || trucks?.[0]?._id || '';
 
@@ -217,7 +225,11 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         saleType,
         items: items
           .filter((i) => Number(i.quantity) > 0)
-          .map((i) => ({ size: i.size, quantity: Number(i.quantity), pricePerBar: Number(i.pricePerBar) })),
+          .map((i) => {
+            const quantity = Number(i.quantity);
+            const linePrice = Number(i.pricePerBar);
+            return { size: '1', quantity, pricePerBar: quantity ? linePrice / quantity : 0 };
+          }),
         paymentMode,
         paidAmount: Number(paidAmount) || 0,
         notes,
@@ -409,24 +421,21 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           {items.map((item, idx) => (
             <div key={idx} className="rounded-2xl border border-iceblue-100 bg-iceblue-50/60 p-3">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-12 sm:items-center">
-                <select className="input-field h-11 sm:col-span-3" value={item.size} onChange={(e) => updateItem(idx, 'size', e.target.value)}>
-                  {ICE_BAR_SIZES.map((s) => <option key={s} value={s}>{s} bar</option>)}
-                </select>
                 <input
-                  type="number" min={1} placeholder="Qty" required
-                  className="input-field h-11 sm:col-span-3"
+                  type="number" min={0.25} step={0.25} placeholder="Bar Used e.g. 0.25, 1.25" required
+                  className="input-field h-11 sm:col-span-4"
                   value={item.quantity}
                   onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
                 />
                 <input
-                  type="number" min={0} step="0.01" placeholder="Price/bar" required
-                  className="input-field h-11 sm:col-span-3"
+                  type="number" min={0} step="0.01" placeholder="Price" required
+                  className="input-field h-11 sm:col-span-4"
                   value={item.pricePerBar}
                   onChange={(e) => updateItem(idx, 'pricePerBar', e.target.value)}
                 />
-                <div className="flex h-11 items-center justify-between rounded-xl bg-white px-3 text-sm font-semibold text-navy-800 sm:col-span-2 sm:justify-end">
+                <div className="flex h-11 items-center justify-between rounded-xl bg-white px-3 text-sm font-semibold text-navy-800 sm:col-span-3 sm:justify-end">
                   <span className="text-xs font-medium text-navy-800/45 sm:hidden">Total</span>
-                  {formatCurrency((Number(item.quantity) || 0) * (Number(item.pricePerBar) || 0))}
+                  {formatCurrency(Number(item.pricePerBar) || 0)}
                 </div>
                 <button
                   type="button"
@@ -442,7 +451,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           ))}
         </div>
         <button type="button" onClick={addItem} className="mt-2 text-iceblue-600 text-sm font-medium flex items-center gap-1">
-          <FiPlus /> Add another size
+          <FiPlus /> Add another item
         </button>
       </div>
 

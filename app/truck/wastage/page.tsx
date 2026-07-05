@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '../../../lib/api';
-import { ICE_BAR_SIZES, WASTAGE_REASONS, todayISO } from '../../../lib/api';
+import { WASTAGE_REASONS, todayISO } from '../../../lib/api';
 
 export default function TruckWastagePage() {
   const router = useRouter();
@@ -16,7 +16,7 @@ export default function TruckWastagePage() {
     setSaving(true);
     setError('');
     try {
-      await api.post('/wastage', { ...form, quantity: Number(form.quantity) });
+      await api.post('/wastage', { ...form, size: '1', quantity: Number(form.quantity) });
       router.push('/truck/dashboard');
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Could not save wastage');
@@ -32,17 +32,18 @@ export default function TruckWastagePage() {
           <label className="label-text">Date</label>
           <input type="date" className="input-field" required value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label-text">Size</label>
-            <select className="input-field" value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })}>
-              {ICE_BAR_SIZES.map((s) => <option key={s} value={s}>{s} bar</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="label-text">Quantity</label>
-            <input type="number" min={1} required className="input-field" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-          </div>
+        <div>
+          <label className="label-text">Bar Used</label>
+          <input
+            type="number"
+            min={0.25}
+            step={0.25}
+            required
+            placeholder="Bar Used e.g. 0.25, 1.25"
+            className="input-field"
+            value={form.quantity}
+            onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+          />
         </div>
         <div>
           <label className="label-text">Reason</label>

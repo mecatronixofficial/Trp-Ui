@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { FiPlus, FiEdit2, FiTrash2, FiPrinter, FiFilter, FiDollarSign } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { PAYMENT_MODES, formatCurrency, formatDate, todayISO } from '../../../lib/api';
+import { PAYMENT_MODES, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
 
@@ -118,7 +118,7 @@ export default function AdminSalesPage() {
                 <th>Truck</th>
                 <th>Customer</th>
                 <th>Type</th>
-                <th>Bars</th>
+                <th>Bar Used</th>
                 <th>Total</th>
                 <th>Paid</th>
                 <th>Balance</th>
@@ -132,7 +132,7 @@ export default function AdminSalesPage() {
                   <td>{s.truck?.truckName}</td>
                   <td>{s.customer?.name}</td>
                   <td className="capitalize">{s.saleType}</td>
-                  <td>{s.items.reduce((a: number, i: any) => a + i.quantity, 0)}</td>
+                  <td>{formatBarQuantity(s.items.reduce((a: number, i: any) => a + getItemBarUsed(i), 0))}</td>
                   <td className="font-semibold">{formatCurrency(s.totalAmount)}</td>
                   <td>{formatCurrency(s.paidAmount)}</td>
                   <td className={s.balanceAmount > 0 ? 'text-red-500 font-semibold' : ''}>{formatCurrency(s.balanceAmount)}</td>
@@ -255,10 +255,10 @@ function PrintBill({ sale, onClose }: { sale: any; onClose: () => void }) {
         </div>
         <p className="text-xs">Customer: <strong>{sale.customer?.name}</strong></p>
         <table className="table-base">
-          <thead><tr><th>Size</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+          <thead><tr><th>Bar Used</th><th>Total</th></tr></thead>
           <tbody>
             {sale.items.map((i: any, idx: number) => (
-              <tr key={idx}><td>{i.size} bar</td><td>{i.quantity}</td><td>{formatCurrency(i.pricePerBar)}</td><td>{formatCurrency(i.total)}</td></tr>
+              <tr key={idx}><td>{formatBarQuantity(getItemBarUsed(i))}</td><td>{formatCurrency(i.total)}</td></tr>
             ))}
           </tbody>
         </table>
