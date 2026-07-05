@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { FiPlus, FiTrash2 } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { ICE_BAR_SIZES, WASTAGE_REASONS, formatDate, todayISO } from '../../../lib/api';
+import { WASTAGE_REASONS, formatBarQuantity, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 
 export default function WastagePage() {
@@ -27,7 +27,7 @@ export default function WastagePage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await api.post('/wastage', { ...form, truck: form.truck || undefined, quantity: Number(form.quantity) });
+    await api.post('/wastage', { ...form, truck: form.truck || undefined, size: '1', quantity: Number(form.quantity) });
     setModalOpen(false);
     setForm({ date: todayISO(), truck: '', size: '1', quantity: '', reason: 'broken', notes: '' });
     load();
@@ -57,8 +57,7 @@ export default function WastagePage() {
               <tr>
                 <th>Date</th>
                 <th>Truck</th>
-                <th>Size</th>
-                <th>Qty</th>
+                <th>Bar Used</th>
                 <th>Reason</th>
                 <th>Notes</th>
                 <th></th>
@@ -69,8 +68,7 @@ export default function WastagePage() {
                 <tr key={r._id}>
                   <td>{formatDate(r.date)}</td>
                   <td>{r.truck?.truckName || 'Factory'}</td>
-                  <td>{r.size} bar</td>
-                  <td>{r.quantity}</td>
+                  <td>{formatBarQuantity(getItemBarUsed(r))}</td>
                   <td className="capitalize">{r.reason}</td>
                   <td className="text-xs text-navy-800/60">{r.notes}</td>
                   <td><button onClick={() => remove(r._id)} className="text-red-500"><FiTrash2 /></button></td>
@@ -95,17 +93,18 @@ export default function WastagePage() {
                 {trucks.map((t) => <option key={t._id} value={t._id}>{t.truckName}</option>)}
               </select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="label-text">Size</label>
-                <select className="input-field" value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })}>
-                  {ICE_BAR_SIZES.map((s) => <option key={s} value={s}>{s} bar</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="label-text">Quantity</label>
-                <input type="number" min={1} required className="input-field" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
-              </div>
+            <div>
+              <label className="label-text">Bar Used</label>
+              <input
+                type="number"
+                min={0.25}
+                step={0.25}
+                required
+                placeholder="Bar Used e.g. 0.25, 1.25"
+                className="input-field"
+                value={form.quantity}
+                onChange={(e) => setForm({ ...form, quantity: e.target.value })}
+              />
             </div>
             <div>
               <label className="label-text">Reason</label>

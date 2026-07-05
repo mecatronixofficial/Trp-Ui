@@ -58,6 +58,25 @@ export function formatCurrency(amount: number) {
   );
 }
 
+export function parseBarQuantity(value: string | number) {
+  const text = String(value).trim();
+  if (text.includes('/')) {
+    const [top, bottom] = text.split('/').map(Number);
+    return bottom ? top / bottom : 0;
+  }
+  return Number(text) || 0;
+}
+
+export function formatBarQuantity(value: string | number) {
+  const quantity = parseBarQuantity(value);
+  if (!quantity) return '';
+  return Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(2);
+}
+
+export function getItemBarUsed(item: { size?: string | number; quantity?: string | number }) {
+  return (Number(item.quantity) || 0) * (parseBarQuantity(item.size || '1') || 1);
+}
+
 export function formatDate(date: string | Date) {
   return new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }

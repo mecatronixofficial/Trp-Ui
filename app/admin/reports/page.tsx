@@ -144,7 +144,7 @@ export default function ReportsPage() {
         <div className="card">
           <p className="font-display font-semibold mb-3">Top Customers</p>
           <table className="table-base">
-            <thead><tr><th>Customer</th><th>Bars</th><th>Amount</th></tr></thead>
+            <thead><tr><th>Customer</th><th>Bar Used</th><th>Amount</th></tr></thead>
             <tbody>
               {topCustomers.map((c) => (
                 <tr key={c.customerId}><td>{c.customerName}</td><td>{c.quantity}</td><td>{formatCurrency(c.totalAmount)}</td></tr>
@@ -192,7 +192,7 @@ function ReportBody({ tab, data }: { tab: string; data: any }) {
     const rows = Object.entries(data);
     return (
       <table className="table-base">
-        <thead><tr><th>Name</th><th>Bars</th><th>Amount</th></tr></thead>
+        <thead><tr><th>Name</th><th>Bar Used</th><th>Amount</th></tr></thead>
         <tbody>
           {rows.map(([id, v]: any) => (
             <tr key={id}><td>{v.truckName || v.customerName}</td><td>{v.quantity}</td><td>{formatCurrency(v.totalAmount)}</td></tr>

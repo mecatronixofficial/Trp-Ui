@@ -15,7 +15,7 @@ import {
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
 import { useAuth } from '../../../context/AuthContext';
-import api, { ICE_BAR_SIZES, PAYMENT_MODES, WASTAGE_REASONS, formatCurrency, formatDate, todayISO } from '../../../lib/api';
+import api, { PAYMENT_MODES, WASTAGE_REASONS, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 
 type ViewMode = 'sale' | 'wastage' | 'return';
 
@@ -29,7 +29,7 @@ const tomorrowISO = () => {
 
 const getCustomerId = (sale: any) => sale.customer?._id || sale.customer || 'unknown';
 const getCustomerName = (sale: any) => sale.customer?.name || 'Customer';
-const getQuantity = (sale: any) => sale.items?.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0) || 0;
+const getQuantity = (sale: any) => sale.items?.reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0) || 0;
 
 export default function TruckDashboardPage() {
   const { user } = useAuth();
@@ -126,6 +126,7 @@ export default function TruckDashboardPage() {
     try {
       await api.post('/wastage', {
         ...wastageForm,
+        size: '1',
         reason: mode === 'return' ? 'unsold' : wastageForm.reason,
         quantity: Number(wastageForm.quantity),
       });
@@ -193,7 +194,7 @@ export default function TruckDashboardPage() {
 
         <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:gap-4">
           <HeroStat icon={FiShoppingCart} label="Sales" value={formatCurrency(data?.todaySales)} />
-          <HeroStat icon={FiPackage} label="Bars Sold" value={data?.todayQuantitySold || 0} suffix="bars" />
+          <HeroStat icon={FiPackage} label="Bar Used" value={data?.todayQuantitySold || 0} suffix="bar used" />
           <HeroStat icon={FiDollarSign} label="Collection" value={formatCurrency(data?.todayCollection)} />
           <HeroStat icon={FiTrash2} label="Wastage" value={data?.todayWastage || 0} suffix="bars" />
         </div>
@@ -253,29 +254,21 @@ export default function TruckDashboardPage() {
                     />
                   </div>
                   <div>
-                    <label className="label-text">Size</label>
-                    <select
-                      className="input-field h-12"
-                      value={wastageForm.size}
-                      onChange={(e) => setWastageForm({ ...wastageForm, size: e.target.value })}
-                    >
-                      {ICE_BAR_SIZES.map((size) => <option key={size} value={size}>{size} bar</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
-                  <div>
-                    <label className="label-text">Quantity</label>
+                    <label className="label-text">Bar Used</label>
                     <input
                       type="number"
-                      min={1}
-                      required
+                      min={0.25}
+                      step={0.25}
                       className="input-field h-12"
+                      required
+                      placeholder="Bar Used e.g. 0.25, 1.25"
                       value={wastageForm.quantity}
                       onChange={(e) => setWastageForm({ ...wastageForm, quantity: e.target.value })}
                     />
                   </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
                   <div>
                     <label className="label-text">{mode === 'return' ? 'Return Type' : 'Reason'}</label>
                     <select
@@ -326,7 +319,7 @@ export default function TruckDashboardPage() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-semibold text-navy-900">{row.name}</p>
-                    <p className="mt-1 text-xs text-navy-800/55">{row.quantity} bars · {formatCurrency(row.amount)}</p>
+                    <p className="mt-1 text-xs text-navy-800/55">{formatBarQuantity(row.quantity)} bar used · {formatCurrency(row.amount)}</p>
                   </div>
                   <span className={`pill shrink-0 ${row.balance > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                     {row.balance > 0 ? 'Not Paid' : 'Paid'}
@@ -499,14 +492,14 @@ function Details({ title, empty, children }: { title: string; empty: string; chi
 
 function SaleRow({ sale, onPay }: { sale: any; onPay: (sale: any) => void }) {
   const balance = Number(sale.balanceAmount || 0);
-  const items = sale.items?.map((item: any) => `${item.quantity} x ${item.size}`).join(', ');
+  const items = sale.items?.map((item: any) => `${formatBarQuantity(getItemBarUsed(item))} bar used`).join(', ');
 
   return (
     <div className="min-w-0 rounded-2xl border border-iceblue-100 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate font-semibold text-navy-900">{getCustomerName(sale)}</p>
-          <p className="mt-1 text-xs text-navy-800/55">{items || `${getQuantity(sale)} bars`}</p>
+          <p className="mt-1 text-xs text-navy-800/55">{items || `${formatBarQuantity(getQuantity(sale))} bar used`}</p>
         </div>
         <span className={`pill shrink-0 ${balance > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
           {balance > 0 ? 'Due' : 'Paid'}
@@ -585,13 +578,14 @@ function PaymentRow({ sale, onPay, compact = false }: { sale: any; onPay: (sale:
 
 function WastageRow({ row }: { row: any }) {
   const reason = WASTAGE_REASONS.find((item) => item.value === row.reason)?.label || row.reason;
+  const barUsed = formatBarQuantity(getItemBarUsed(row));
 
   return (
     <div className="min-w-0 rounded-2xl border border-iceblue-100 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="font-semibold text-navy-900">{row.quantity} bars</p>
-          <p className="mt-1 text-xs text-navy-800/55">{row.size} bar · {reason}</p>
+          <p className="font-semibold text-navy-900">{barUsed} bar used</p>
+          <p className="mt-1 text-xs text-navy-800/55">{reason}</p>
         </div>
         <span className="pill bg-iceblue-50 text-iceblue-700">{formatDate(row.date)}</span>
       </div>

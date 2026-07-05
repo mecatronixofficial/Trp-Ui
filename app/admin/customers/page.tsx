@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { ICE_BAR_SIZES, formatCurrency } from '../../../lib/api';
+import { formatBarQuantity, formatCurrency } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 
 interface Customer {
@@ -83,7 +83,7 @@ export default function CustomersPage() {
   const savePrice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!priceTarget) return;
-    await api.post('/price-list', { customer: priceTarget._id, ...priceForm, price: Number(priceForm.price) });
+    await api.post('/price-list', { customer: priceTarget._id, ...priceForm, size: formatBarQuantity(priceForm.size), price: Number(priceForm.price) });
     const { data } = await api.get(`/price-list/customer/${priceTarget._id}`);
     setPrices(data);
     setPriceForm({ size: '1', saleType: 'retail', price: '' });
@@ -204,11 +204,16 @@ export default function CustomersPage() {
       {priceTarget && (
         <Modal title={`Price List: ${priceTarget.name}`} onClose={() => setPriceTarget(null)} wide>
           <form onSubmit={savePrice} className="grid grid-cols-3 gap-3 mb-4">
-            <select className="input-field" value={priceForm.size} onChange={(e) => setPriceForm({ ...priceForm, size: e.target.value })}>
-              {ICE_BAR_SIZES.map((s) => (
-                <option key={s} value={s}>{s} bar</option>
-              ))}
-            </select>
+            <input
+              type="number"
+              min={0.25}
+              step={0.25}
+              required
+              className="input-field"
+              placeholder="Bar Used e.g. 0.25, 1.25"
+              value={priceForm.size}
+              onChange={(e) => setPriceForm({ ...priceForm, size: e.target.value })}
+            />
             <select className="input-field" value={priceForm.saleType} onChange={(e) => setPriceForm({ ...priceForm, saleType: e.target.value })}>
               <option value="retail">Retail</option>
               <option value="wholesale">Wholesale</option>
@@ -231,7 +236,7 @@ export default function CustomersPage() {
           <table className="table-base">
             <thead>
               <tr>
-                <th>Size</th>
+                <th>Bar Used</th>
                 <th>Type</th>
                 <th>Price</th>
                 <th></th>
@@ -240,7 +245,7 @@ export default function CustomersPage() {
             <tbody>
               {prices.map((p) => (
                 <tr key={p._id}>
-                  <td>{p.size} bar</td>
+                  <td>{formatBarQuantity(p.size)} bar used</td>
                   <td className="capitalize">{p.saleType}</td>
                   <td>{formatCurrency(p.price)}</td>
                   <td>

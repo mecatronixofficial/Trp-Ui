@@ -24,6 +24,7 @@ import {
   FiShoppingCart,
   FiTrendingUp,
   FiTrash2,
+  FiUserCheck,
   FiUsers,
 } from 'react-icons/fi';
 import api from '../../../lib/api';
@@ -109,6 +110,7 @@ export default function AdminDashboardPage() {
   const stockTotal = Number(data.pendingStock?.totalClosingStock || 0);
   const pendingAmount = Number(data.payments?.pendingAmount || 0);
   const todayProfit = Number(data.today.profit || 0);
+  const workerBuying = Number(data.today.workerBuying || 0);
 
   return (
     <div className="space-y-5 pb-8 xl:space-y-6">
@@ -123,7 +125,7 @@ export default function AdminDashboardPage() {
 
             <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
               <HeroMetric label="Production" value={data.today.production} suffix="bars" />
-              <HeroMetric label="Sold" value={dashboard.soldBars} suffix="bars" />
+              <HeroMetric label="Bar Used" value={dashboard.soldBars} suffix="bar used" />
               <HeroMetric label="Collection" value={formatCurrency(data.today.collection)} />
               <HeroMetric label="Profit" value={formatCurrency(todayProfit)} tone={todayProfit >= 0 ? 'good' : 'bad'} />
             </div>
@@ -138,8 +140,9 @@ export default function AdminDashboardPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <KpiCard icon={FiDollarSign} label="Making Cost" value={formatCurrency(data.today.makingCost)} tone="amber" />
+        <KpiCard icon={FiUserCheck} label="Worker Buying" value={formatCurrency(workerBuying)} tone="red" />
         <KpiCard icon={FiTrendingUp} label="Monthly Sales" value={formatCurrency(data.monthlySales)} tone="green" />
         <KpiCard icon={FiShoppingCart} label="Yearly Sales" value={formatCurrency(data.yearlySales)} tone="blue" />
         <KpiCard icon={FiDollarSign} label="Old Payments Today" value={formatCurrency(data.payments?.todayCollectedLater || 0)} tone="navy" />
@@ -211,7 +214,7 @@ export default function AdminDashboardPage() {
                 <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
                 <Tooltip formatter={(v: any, name: any) => (name === 'Sales' ? formatCurrency(Number(v)) : v)} />
                 <Legend />
-                <Bar yAxisId="left" dataKey="quantity" name="Bars" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                <Bar yAxisId="left" dataKey="quantity" name="Bar Used" fill="#6366f1" radius={[6, 6, 0, 0]} />
                 <Bar yAxisId="right" dataKey="totalAmount" name="Sales" fill="#14b8a6" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
