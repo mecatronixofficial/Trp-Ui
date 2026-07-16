@@ -8,7 +8,8 @@ import api from '../lib/api';
 export interface AuthUser {
   id: string;
   username: string;
-  role: 'admin' | 'truck';
+  role: 'super_admin' | 'admin' | 'truck';
+  branch?: string | null;
   truck?: string | null;
   displayName?: string;
 }
@@ -40,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: data.role,
           truck: data.truck,
           displayName: data.displayName,
+          branch: data.branch,
         };
         setUser(currentUser);
         Cookies.set('tii_user', JSON.stringify(currentUser), { expires: 1, sameSite: 'lax' });
@@ -62,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data } = await api.post('/auth/login', { username, password });
     Cookies.set('tii_user', JSON.stringify(data.user), { expires: 1, sameSite: 'lax' });
     setUser(data.user);
-    router.push(data.user.role === 'admin' ? '/admin/dashboard' : '/truck/dashboard');
+    router.push(data.user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
   };
 
   const logout = async () => {

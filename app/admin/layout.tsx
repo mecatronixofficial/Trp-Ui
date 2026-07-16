@@ -7,6 +7,8 @@ import { usePathname } from 'next/navigation';
 
 const titles: Record<string, string> = {
   '/admin/dashboard': 'Dashboard',
+  '/admin/branches': 'Branch Management',
+  '/admin/admins': 'Branch Admin Management',
   '/admin/trucks': 'Truck Management',
   '/admin/customers': 'Customer Management',
   '/admin/workers': 'Worker Management',
@@ -23,12 +25,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const title = Object.entries(titles).find(([p]) => pathname?.startsWith(p))?.[1] || 'Admin';
 
   return (
-    <RequireRole role="admin">
-      <div className="flex min-h-screen">
+    <RequireRole role={['super_admin', 'admin']}>
+      <div className="flex min-h-screen w-full max-w-full overflow-x-hidden">
         <Sidebar />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1 overflow-x-hidden">
           <Topbar title={title} />
-          <main className="p-4 md:p-8 max-w-7xl mx-auto">{children}</main>
+          <main className="mx-auto w-full min-w-0 max-w-7xl px-3 py-4 sm:px-4 md:p-8">{children}</main>
         </div>
       </div>
     </RequireRole>

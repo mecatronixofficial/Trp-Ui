@@ -19,6 +19,7 @@ import {
   FiUserCheck,
   FiUsers,
   FiX,
+  FiGitBranch,
 } from 'react-icons/fi';
 import { TbSnowflake } from 'react-icons/tb';
 import { useAuth } from '../context/AuthContext';
@@ -40,12 +41,23 @@ const truckLinks = [
   ['/truck/dashboard', 'Dashboard', FiTruck],
 ];
 
+const superAdminLinks = [
+  ['/admin/dashboard', 'Dashboard', FiGrid],
+  ['/admin/branches', 'Branches', FiGitBranch],
+  ['/admin/admins', 'Branch Admins', FiUserCheck],
+  ...adminLinks.filter(([href]) => href !== '/admin/dashboard'),
+];
+
 export default function Topbar({ title }: { title: string }) {
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState<Date | null>(null);
+  const [branches, setBranches] = useState<any[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState('');
   const pathname = usePathname();
   const { logout, user } = useAuth();
-  const links = pathname?.startsWith('/admin') ? adminLinks : truckLinks;
+  const links = pathname?.startsWith('/admin')
+    ? (user?.role === 'super_admin' ? superAdminLinks : adminLinks)
+    : truckLinks;
   const activeArea = pathname?.startsWith('/admin') ? 'Admin Desk' : 'Driver App';
   const userName = user?.displayName || user?.username || 'User';
   const initial = userName.charAt(0).toUpperCase();
@@ -60,6 +72,19 @@ export default function Topbar({ title }: { title: string }) {
     const timer = window.setInterval(() => setNow(new Date()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (user?.role !== 'super_admin') return;
+    setSelectedBranch(window.localStorage.getItem('tii_selected_branch') || '');
+    import('../lib/api').then(({ default: api }) => api.get('/branches').then(({ data }) => setBranches(data)));
+  }, [user?.role]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem('tii_selected_branch', branch);
+    else window.localStorage.removeItem('tii_selected_branch');
+    setSelectedBranch(branch);
+    window.location.reload();
+  };
 
   return (
     <header className="sticky top-0 z-30 bg-iceblue-50/80 px-3 py-3 backdrop-blur-xl sm:px-4 md:px-8">
@@ -87,6 +112,17 @@ export default function Topbar({ title }: { title: string }) {
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          {user?.role === 'super_admin' && (
+            <select
+              aria-label="Select dashboard branch"
+              className="hidden h-11 max-w-48 rounded-2xl border border-iceblue-100 bg-iceblue-50 px-3 text-sm font-semibold text-navy-900 outline-none lg:block"
+              value={selectedBranch}
+              onChange={(event) => changeBranch(event.target.value)}
+            >
+              <option value="">Overall — all branches</option>
+              {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+            </select>
+          )}
           <div className="hidden items-center gap-2 rounded-2xl bg-iceblue-50 px-3 py-1.5 text-navy-900 sm:flex">
             <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-iceblue-700 shadow-sm">
               <TimeIcon />
@@ -138,6 +174,16 @@ export default function Topbar({ title }: { title: string }) {
               </div>
             </div>
           </div>
+
+          {user?.role === 'super_admin' && (
+            <div className="mb-3 rounded-2xl border border-iceblue-100 bg-iceblue-50 p-3">
+              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-navy-800/50">View Branch</label>
+              <select className="input-field h-11 bg-white" value={selectedBranch} onChange={(event) => changeBranch(event.target.value)}>
+                <option value="">Overall — all branches</option>
+                {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+              </select>
+            </div>
+          )}
 
           <div className="space-y-1">
             {links.map(([href, label, Icon]) => {

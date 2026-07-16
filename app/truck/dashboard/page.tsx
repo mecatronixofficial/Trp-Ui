@@ -17,7 +17,7 @@ import SaleForm from '../../../components/SaleForm';
 import { useAuth } from '../../../context/AuthContext';
 import api, { PAYMENT_MODES, WASTAGE_REASONS, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 
-type ViewMode = 'sale' | 'wastage' | 'return';
+type ViewMode = 'take' | 'sale' | 'wastage' | 'return' | 'amount';
 
 const emptyPaymentForm = { date: todayISO(), amount: '', paymentMode: 'cash', notes: '' };
 
@@ -38,6 +38,9 @@ export default function TruckDashboardPage() {
   const [allSales, setAllSales] = useState<any[]>([]);
   const [wastage, setWastage] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [expenses, setExpenses] = useState<any[]>([]);
+  const [tripClosing, setTripClosing] = useState<any>(null);
+  const [closePreviewOpen, setClosePreviewOpen] = useState(false);
   const [mode, setMode] = useState<ViewMode>('sale');
   const [loading, setLoading] = useState(true);
   const [savingWastage, setSavingWastage] = useState(false);
@@ -53,17 +56,21 @@ export default function TruckDashboardPage() {
     reason: 'broken',
     notes: '',
   });
+  const [expenseForm, setExpenseForm] = useState({ date: todayISO(), amount: '', purpose: '', notes: '' });
+  const [takeForm, setTakeForm] = useState({ date: todayISO(), quantity: '', notes: '' });
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const params = { from: todayISO(), to: tomorrowISO() };
-      const [dash, saleRows, wastageRows, customerRows] = await Promise.all([
+      const [dash, saleRows, wastageRows, customerRows, expenseRows, tripRows] = await Promise.all([
         api.get('/dashboard/truck'),
         api.get('/sales', { params }),
         api.get('/wastage', { params }),
         api.get('/customers'),
+        api.get('/driver-expenses', { params }),
+        api.get('/truck-loads/reconciliation', { params: { date: todayISO() } }),
       ]);
       const allSaleRows = await api.get('/sales');
       setData(dash.data);
@@ -71,6 +78,8 @@ export default function TruckDashboardPage() {
       setAllSales(allSaleRows.data);
       setWastage(wastageRows.data);
       setCustomers(customerRows.data);
+      setExpenses(expenseRows.data);
+      setTripClosing(tripRows.data[0] || null);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Could not load driver dashboard.');
     } finally {
@@ -164,6 +173,29 @@ export default function TruckDashboardPage() {
     }
   };
 
+  const saveExpense = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    try {
+      await api.post('/driver-expenses', { ...expenseForm, amount: Number(expenseForm.amount) });
+      setExpenseForm({ date: todayISO(), amount: '', purpose: '', notes: '' }); await load();
+    } catch (err: any) { setError(err?.response?.data?.message || 'Could not save driver amount'); }
+  };
+
+  const saveTakenBars = async (e: React.FormEvent) => {
+    e.preventDefault(); setError('');
+    try {
+      await api.post('/truck-loads', { date: takeForm.date, size: '1', quantity: Number(takeForm.quantity), notes: takeForm.notes });
+      setTakeForm({ date: todayISO(), quantity: '', notes: '' }); await load();
+    } catch (err: any) { setError(err?.response?.data?.message || 'Could not save bars taken'); }
+  };
+
+  const closeTruckDay = async () => {
+    if (!tripClosing) return;
+    setError('');
+    try { await api.post('/truck-loads/reconciliation/driver-close', { date: todayISO() }); setClosePreviewOpen(false); await load(); }
+    catch (err: any) { setError(err?.response?.data?.message || 'Could not close truck day'); }
+  };
+
   if (loading) {
     return (
       <div className="grid min-h-[55vh] place-items-center">
@@ -192,16 +224,57 @@ export default function TruckDashboardPage() {
           </button>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4 xl:gap-4">
+        <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6 xl:gap-4">
+          <HeroStat icon={FiPackage} label="Bars Taken" value={data?.todayPicked || 0} suffix="bars" />
           <HeroStat icon={FiShoppingCart} label="Sales" value={formatCurrency(data?.todaySales)} />
-          <HeroStat icon={FiPackage} label="Bar Used" value={data?.todayQuantitySold || 0} suffix="bar used" />
-          <HeroStat icon={FiDollarSign} label="Collection" value={formatCurrency(data?.todayCollection)} />
+          <HeroStat icon={FiPackage} label="Bars Sold" value={data?.todayQuantitySold || 0} suffix="bars" />
+          <HeroStat icon={FiRefreshCcw} label="Returned" value={data?.todayReturned || 0} suffix="bars" />
           <HeroStat icon={FiTrash2} label="Wastage" value={data?.todayWastage || 0} suffix="bars" />
+          <HeroStat icon={FiCheckCircle} label="Remaining" value={data?.remainingBars || 0} suffix="bars" />
         </div>
       </section>
 
       {error && <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{error}</p>}
 
+      {tripClosing && <section className={`rounded-3xl border p-4 shadow-sm sm:p-5 ${tripClosing.driverClosed ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-white'}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-display text-lg font-semibold text-navy-900">End-of-Day Truck Closing</h2><p className="mt-1 text-xs text-navy-800/55">Confirm all sold, returned, wasted, pending, and driver amounts.</p></div><span className={`pill ${tripClosing.driverClosed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{tripClosing.driverClosed ? 'Closed' : 'Not Closed'}</span></div>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">{[
+          ['Taken', tripClosing.taken], ['Sold', tripClosing.sold], ['Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Balance', tripClosing.remaining], ['Sales', formatCurrency(tripClosing.salesAmount)], ['Pending', formatCurrency(tripClosing.pendingAmount)], ['Driver Amount', formatCurrency(tripClosing.driverAmount)],
+        ].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-white px-3 py-2"><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className="mt-1 break-words font-bold text-navy-900">{value}</p></div>)}</div>
+        {!tripClosing.driverClosed && Number(tripClosing.remaining || 0) > 0 && <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">{tripClosing.remaining} remaining bar(s) will automatically move to Unsold Returns when you close.</p>}
+        {!tripClosing.driverClosed && Number(tripClosing.remaining || 0) < 0 && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">Balance is negative. Correct the taken, sales, return, or wastage entries before closing.</p>}
+        {tripClosing.driverClosed ? <p className="mt-4 flex items-center gap-2 font-semibold text-emerald-700"><FiCheckCircle /> Truck day closed successfully</p> : <button onClick={() => setClosePreviewOpen(true)} disabled={Number(tripClosing.remaining || 0) < 0} className="btn-primary mt-4 flex w-full items-center justify-center gap-2 disabled:opacity-50"><FiCheckCircle /> Confirm & Close Truck Day</button>}
+      </section>}
+
+      {closePreviewOpen && tripClosing && <Modal title="Confirm Truck Day Closing" onClose={() => setClosePreviewOpen(false)}>
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
+            Check every value carefully. After closing, no more sales, collections, pickups, returns, wastage, or driver amounts can be entered today.
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {[['Bars Taken', tripClosing.taken], ['Bars Sold', tripClosing.sold], ['Already Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Current Balance', tripClosing.remaining], ['Auto Return', Math.max(Number(tripClosing.remaining || 0), 0)]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-iceblue-50 p-3"><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className="mt-1 text-lg font-bold text-navy-900">{value}</p></div>)}
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <AmountBox label="Total Sales" value={tripClosing.salesAmount} />
+            <AmountBox label="Pending" value={tripClosing.pendingAmount} danger={tripClosing.pendingAmount > 0} />
+            <AmountBox label="Driver Amount" value={tripClosing.driverAmount} />
+          </div>
+          {Number(tripClosing.remaining || 0) > 0 && <p className="rounded-xl bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-700">{tripClosing.remaining} remaining bar(s) will automatically move to Unsold Returns.</p>}
+          <div className="grid grid-cols-2 gap-3">
+            <button type="button" onClick={() => setClosePreviewOpen(false)} className="btn-secondary">Cancel</button>
+            <button type="button" onClick={closeTruckDay} className="btn-primary">Yes, Close Day</button>
+          </div>
+        </div>
+      </Modal>}
+
+      {tripClosing?.driverClosed ? (
+        <section className="rounded-[2rem] border border-emerald-200 bg-[linear-gradient(135deg,#ecfdf5,#dff7ff)] px-5 py-10 text-center shadow-sm sm:px-8 sm:py-14">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-emerald-100 text-3xl text-emerald-600"><FiCheckCircle /></div>
+          <h2 className="mt-5 font-display text-2xl font-bold text-navy-900 sm:text-3xl">Today&apos;s truck work is complete</h2>
+          <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-navy-800/65 sm:text-base">All remaining bars were moved to returns and the truck day is closed. Sales, payments, returns, wastage, pickups, and amount entries are now hidden.</p>
+          <p className="mt-5 font-semibold text-emerald-700">See you tomorrow or on the next production day.</p>
+        </section>
+      ) : <>
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:gap-4">
         <MiniStat icon={FiCheckCircle} label="Paid Users" value={paymentStats.paid} tone="green" />
         <MiniStat icon={FiClock} label="Not Paid" value={paymentStats.notPaid} tone="red" />
@@ -211,11 +284,13 @@ export default function TruckDashboardPage() {
 
       <div className="grid gap-5 xl:grid-cols-[minmax(420px,0.95fr)_minmax(0,1.35fr)] xl:items-start">
         <section className="card p-3 sm:p-5 xl:sticky xl:top-24">
-          <div className="grid grid-cols-3 gap-2 rounded-2xl bg-iceblue-50 p-1">
+          <div className="grid grid-cols-2 gap-2 rounded-2xl bg-iceblue-50 p-1 sm:grid-cols-5">
             {[
+              { key: 'take', label: 'Take Bars', icon: FiPackage },
               { key: 'sale', label: 'Sale', icon: FiShoppingCart },
               { key: 'wastage', label: 'Wastage', icon: FiTrash2 },
               { key: 'return', label: 'Return', icon: FiRefreshCcw },
+              { key: 'amount', label: 'Amount', icon: FiDollarSign },
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -231,7 +306,14 @@ export default function TruckDashboardPage() {
           </div>
 
           <div className="mt-5">
-            {mode === 'sale' ? (
+            {mode === 'take' ? (
+              <form onSubmit={saveTakenBars} className="space-y-4">
+                <div><label className="label-text">Pickup Date</label><input type="date" required className="input-field" value={takeForm.date} onChange={(e) => setTakeForm({...takeForm, date: e.target.value})} /></div>
+                <div><label className="label-text">How Many Full Bars Taken</label><input type="number" min="0.01" step="0.01" required className="input-field" placeholder="Enter bars taken" value={takeForm.quantity} onChange={(e) => setTakeForm({...takeForm, quantity: e.target.value})} /></div>
+                <div><label className="label-text">Notes</label><textarea className="input-field" rows={2} value={takeForm.notes} onChange={(e) => setTakeForm({...takeForm, notes: e.target.value})} /></div>
+                <button className="btn-primary flex h-12 w-full items-center justify-center gap-2"><FiPackage /> Save Bars Taken</button>
+              </form>
+            ) : mode === 'sale' ? (
               <SaleForm
                 key={saleFormKey}
                 fixedTruckId={user?.truck || ''}
@@ -240,6 +322,14 @@ export default function TruckDashboardPage() {
                   setSaleFormKey((key) => key + 1);
                 }}
               />
+            ) : mode === 'amount' ? (
+              <form onSubmit={saveExpense} className="space-y-4">
+                <div><label className="label-text">Date</label><input type="date" required className="input-field" value={expenseForm.date} onChange={(e) => setExpenseForm({...expenseForm, date: e.target.value})} /></div>
+                <div><label className="label-text">Amount Needed / Spent</label><input type="number" min="0.01" step="0.01" required className="input-field" value={expenseForm.amount} onChange={(e) => setExpenseForm({...expenseForm, amount: e.target.value})} /></div>
+                <div><label className="label-text">Purpose</label><input required className="input-field" placeholder="Diesel, food, repair..." value={expenseForm.purpose} onChange={(e) => setExpenseForm({...expenseForm, purpose: e.target.value})} /></div>
+                <div><label className="label-text">Notes</label><textarea className="input-field" rows={2} value={expenseForm.notes} onChange={(e) => setExpenseForm({...expenseForm, notes: e.target.value})} /></div>
+                <button className="btn-primary flex h-12 w-full items-center justify-center gap-2"><FiDollarSign /> Save Amount</button>
+              </form>
             ) : (
               <form onSubmit={saveWastage} className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
@@ -347,6 +437,10 @@ export default function TruckDashboardPage() {
         ))}
       </Details>
 
+      <Details title="Driver Amount / Expense" empty="No driver amount entered today.">
+        {expenses.map((row) => <div key={row._id} className="rounded-2xl border border-iceblue-100 bg-white p-4"><div className="flex justify-between gap-3"><div><p className="font-semibold text-navy-900">{row.purpose}</p><p className="mt-1 text-xs text-navy-800/55">{row.notes || formatDate(row.date)}</p></div><strong className="text-amber-600">{formatCurrency(row.amount)}</strong></div></div>)}
+      </Details>
+
       <div className="grid gap-5 lg:grid-cols-2">
         <Details title="Wastage Details" empty="No wastage recorded today.">
           {wastageRows.map((row) => (
@@ -366,8 +460,9 @@ export default function TruckDashboardPage() {
           Showing {activeWastageRows.length} {mode === 'return' ? 'return' : 'wastage'} entries for today.
         </p>
       )}
+      </>}
 
-      {paymentTarget && (
+      {!tripClosing?.driverClosed && paymentTarget && (
         <Modal title={`Update Payment: ${getCustomerName(paymentTarget)}`} onClose={() => setPaymentTarget(null)}>
           <form onSubmit={savePayment} className="space-y-4">
             <div className="rounded-2xl bg-iceblue-50 p-4 text-sm">

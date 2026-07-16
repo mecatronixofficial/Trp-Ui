@@ -33,6 +33,8 @@ export default function WorkersPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [summary, setSummary] = useState<any[]>([]);
   const [buyingRecords, setBuyingRecords] = useState<any[]>([]);
+  const [drivers, setDrivers] = useState<any[]>([]);
+  const [driverExpenses, setDriverExpenses] = useState<any[]>([]);
   const [month, setMonth] = useState(currentMonth());
   const [loading, setLoading] = useState(true);
   const [workerModalOpen, setWorkerModalOpen] = useState(false);
@@ -45,16 +47,26 @@ export default function WorkersPage() {
 
   const load = async () => {
     setLoading(true);
-    const { from, to } = monthRange(month);
-    const [workerRows, summaryRows, buyingRows] = await Promise.all([
+    setError('');
+    try {
+      const { from, to } = monthRange(month);
+    const [workerRows, summaryRows, buyingRows, driverRows, expenseRows] = await Promise.all([
       api.get('/workers'),
       api.get('/workers/summary', { params: { month } }),
       api.get('/workers/buying', { params: { from, to } }),
-    ]);
-    setWorkers(workerRows.data);
-    setSummary(summaryRows.data);
-    setBuyingRecords(buyingRows.data);
-    setLoading(false);
+      api.get('/trucks'),
+      api.get('/driver-expenses', { params: { from, to } }),
+      ]);
+      setWorkers(workerRows.data);
+      setSummary(summaryRows.data);
+      setBuyingRecords(buyingRows.data);
+      setDrivers(driverRows.data);
+      setDriverExpenses(expenseRows.data);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Could not load workers');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -66,6 +78,15 @@ export default function WorkersPage() {
     buying: acc.buying + Number(row.buyingAmount || 0),
     balance: acc.balance + Number(row.balanceAmount || 0),
   }), { salary: 0, buying: 0, balance: 0 }), [summary]);
+
+  const driverSummary = useMemo(() => drivers.map((driver) => {
+    const rows = driverExpenses.filter((expense) => String(expense.truck?._id || expense.truck) === driver._id);
+    const amount = rows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+    const salary = Number(driver.monthlySalary || 0);
+    return { ...driver, amount, salary, balance: salary - amount, entries: rows.length };
+  }), [drivers, driverExpenses]);
+  const totalDriverAmount = useMemo(() => driverExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0), [driverExpenses]);
+  const totalDriverSalary = useMemo(() => drivers.reduce((sum, driver) => sum + Number(driver.monthlySalary || 0), 0), [drivers]);
 
   const openCreateWorker = () => {
     setEditingWorker(null);
@@ -147,29 +168,35 @@ export default function WorkersPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="grid grid-cols-3 gap-2 text-sm sm:min-w-[520px]">
-          <SummaryPill label="Monthly Salary" value={formatCurrency(totals.salary)} />
-          <SummaryPill label="Buying" value={formatCurrency(totals.buying)} />
-          <SummaryPill label="Balance" value={formatCurrency(totals.balance)} danger={totals.balance < 0} />
+    <div className="min-w-0 space-y-4 overflow-x-hidden">
+      <div className="min-w-0 space-y-3">
+        <div className="grid w-full min-w-0 grid-cols-2 gap-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
+          <SummaryPill label="Total Workers" value={String(workers.length + drivers.length)} />
+          <SummaryPill label="Monthly Salary" value={formatCurrency(totals.salary + totalDriverSalary)} />
+          <SummaryPill label="Total Buying" value={formatCurrency(totals.buying + totalDriverAmount)} />
+          <SummaryPill label="Total Drivers" value={String(drivers.length)} />
+          <SummaryPill label="Driver Amount" value={formatCurrency(totalDriverAmount)} danger={totalDriverAmount > 0} />
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <input type="month" className="input-field h-11 sm:w-40" value={month} onChange={(e) => setMonth(e.target.value)} />
-          <button onClick={() => openCreateBuying()} className="btn-secondary flex h-11 items-center justify-center gap-2">
+        <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:w-fit sm:grid-cols-3">
+          <input type="month" className="input-field col-span-2 h-11 sm:col-span-1 sm:w-40" value={month} onChange={(e) => setMonth(e.target.value)} />
+          <button onClick={() => openCreateBuying()} className="btn-secondary flex h-11 min-w-0 items-center justify-center gap-2 whitespace-nowrap px-2 sm:px-4">
             <FiUserCheck /> Daily Buying
           </button>
-          <button onClick={openCreateWorker} className="btn-primary flex h-11 items-center justify-center gap-2">
+          <button onClick={openCreateWorker} className="btn-primary flex h-11 min-w-0 items-center justify-center gap-2 whitespace-nowrap px-2 sm:px-4">
             <FiPlus /> Add Worker
           </button>
         </div>
       </div>
 
-      <div className="card overflow-x-auto">
+      {error && !workerModalOpen && !buyingModalOpen && (
+        <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{error}</p>
+      )}
+
+      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
         {loading ? (
           <p className="text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[900px]">
+          <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[820px]">
             <thead>
               <tr>
                 <th>Worker</th>
@@ -208,16 +235,36 @@ export default function WorkersPage() {
                 <tr><td colSpan={7} className="py-4 text-center text-navy-800/50">No workers added yet.</td></tr>
               )}
             </tbody>
-          </table>
+          </table></div>
         )}
       </div>
 
-      <div className="card overflow-x-auto">
-        <div className="mb-3 flex items-center justify-between">
+      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <p className="font-display font-semibold text-navy-900">Driver Amount Summary</p>
+          <p className="text-xs text-navy-800/50">{month}</p>
+        </div>
+        <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[650px]">
+          <thead><tr><th>Driver</th><th>Truck</th><th>Monthly Salary</th><th>Buying / Advance</th><th>Balance Salary</th></tr></thead>
+          <tbody>
+            {driverSummary.map((driver) => <tr key={driver._id}>
+              <td className="font-semibold">{driver.driverName}</td>
+              <td>{driver.truckName} ({driver.truckNumber})</td>
+              <td>{formatCurrency(driver.salary)}</td>
+              <td className={driver.amount > 0 ? 'font-semibold text-amber-600' : ''}>{formatCurrency(driver.amount)}</td>
+              <td className={driver.balance < 0 ? 'font-semibold text-red-600' : 'font-semibold text-emerald-600'}>{formatCurrency(driver.balance)}</td>
+            </tr>)}
+            {!driverSummary.length && <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No drivers available.</td></tr>}
+          </tbody>
+        </table></div>
+      </div>
+
+      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <p className="font-display font-semibold text-navy-900">Daily Worker Buying</p>
           <p className="text-xs text-navy-800/50">{buyingRecords.length} record(s)</p>
         </div>
-        <table className="table-base min-w-[760px]">
+        <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[700px]">
           <thead>
             <tr>
               <th>Date</th>
@@ -246,7 +293,7 @@ export default function WorkersPage() {
               <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No buying records for this month.</td></tr>
             )}
           </tbody>
-        </table>
+        </table></div>
       </div>
 
       {workerModalOpen && (
@@ -313,9 +360,9 @@ export default function WorkersPage() {
 
 function SummaryPill({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="rounded-2xl border border-iceblue-100 bg-white px-3 py-2 shadow-sm">
+    <div className="min-w-0 rounded-2xl border border-iceblue-100 bg-white px-3 py-2 shadow-sm sm:px-4 sm:py-3">
       <p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p>
-      <p className={`mt-1 truncate text-sm font-bold ${danger ? 'text-red-500' : 'text-navy-900'}`}>{value}</p>
+      <p className={`mt-1 break-words text-sm font-bold sm:text-base ${danger ? 'text-red-500' : 'text-navy-900'}`}>{value}</p>
     </div>
   );
 }
