@@ -1,7 +1,7 @@
 import { FiArrowRight, FiShield, FiTruck } from 'react-icons/fi';
 import { TbSnowflake } from 'react-icons/tb';
 
-type LoadingRole = 'admin' | 'truck' | null;
+type LoadingRole = 'super_admin' | 'admin' | 'truck' | null;
 
 export default function AppLoadingScreen({
   message = 'Checking secure access',
@@ -10,7 +10,7 @@ export default function AppLoadingScreen({
   message?: string;
   role?: LoadingRole;
 }) {
-  const DestinationIcon = role === 'admin' ? FiShield : FiTruck;
+  const DestinationIcon = role === 'truck' ? FiTruck : FiShield;
 
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_20%_15%,#ffffff_0,#dff5fd_28%,#82d9f2_48%,#175872_82%,#071620_100%)] px-4 py-10 text-white">

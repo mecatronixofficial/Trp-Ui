@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency } from '../../../lib/api';
@@ -14,10 +14,11 @@ interface Customer {
   defaultSaleType: string;
   creditBalance: number;
   isActive: boolean;
+  customerType?: 'local' | 'truck';
   truck?: { _id: string; truckName: string; truckNumber: string; driverName?: string } | string | null;
 }
 
-const emptyForm = { name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '' };
+const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '' };
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -30,6 +31,19 @@ export default function CustomersPage() {
   const [priceTarget, setPriceTarget] = useState<Customer | null>(null);
   const [prices, setPrices] = useState<any[]>([]);
   const [priceForm, setPriceForm] = useState({ size: '1', saleType: 'retail', price: '' });
+
+  const customerTotals = useMemo(() => customers.reduce((totals, customer) => {
+    const type = customer.customerType || (customer.truck ? 'truck' : 'local');
+    totals.total += 1;
+    if (type === 'truck') {
+      totals.truck += 1;
+      totals.truckPending += Number(customer.creditBalance || 0);
+    } else {
+      totals.local += 1;
+      totals.localPending += Number(customer.creditBalance || 0);
+    }
+    return totals;
+  }, { total: 0, truck: 0, local: 0, truckPending: 0, localPending: 0 }), [customers]);
 
   const load = async (q?: string) => {
     setLoading(true);
@@ -55,13 +69,13 @@ export default function CustomersPage() {
   const openEdit = (c: Customer) => {
     setEditing(c);
     const truckId = typeof c.truck === 'string' ? c.truck : c.truck?._id || '';
-    setForm({ name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType, truck: truckId });
+    setForm({ customerType: c.customerType || (truckId ? 'truck' : 'local'), name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType, truck: truckId });
     setModalOpen(true);
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = { ...form, truck: form.truck || null };
+    const payload = { ...form, truck: form.customerType === 'truck' ? form.truck : null };
     if (editing) await api.patch(`/customers/${editing._id}`, payload);
     else await api.post('/customers', payload);
     setModalOpen(false);
@@ -96,6 +110,16 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-4">
+      <div>
+        <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Customer Summary</p>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+          <CustomerSummaryCard label="Total Customers" value={customerTotals.total} />
+          <CustomerSummaryCard label="Truck Customers" value={customerTotals.truck} />
+          <CustomerSummaryCard label="Local Customers" value={customerTotals.local} />
+          <CustomerSummaryCard label="Truck Pending" value={formatCurrency(customerTotals.truckPending)} danger={customerTotals.truckPending > 0} />
+          <CustomerSummaryCard label="Local Pending" value={formatCurrency(customerTotals.localPending)} danger={customerTotals.localPending > 0} />
+        </div>
+      </div>
       <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
         <div className="relative w-full sm:w-72">
           <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
@@ -123,8 +147,9 @@ export default function CustomersPage() {
               <tr>
                 <th>Name</th>
                 <th>Phone</th>
-                <th>Truck</th>
-                <th>Type</th>
+                <th>Customer Type</th>
+                <th>Truck / Local</th>
+                <th>Sale Type</th>
                 <th>Credit Balance</th>
                 <th>Actions</th>
               </tr>
@@ -135,10 +160,15 @@ export default function CustomersPage() {
                   <td className="font-medium">{c.name}</td>
                   <td>{c.phoneNumber}</td>
                   <td>
+                    <span className={`pill ${(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'bg-iceblue-50 text-iceblue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                      {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
+                    </span>
+                  </td>
+                  <td>
                     {typeof c.truck === 'object' && c.truck ? (
                       <span>{c.truck.truckName}</span>
                     ) : (
-                      <span className="text-navy-800/40">All trucks</span>
+                      <span className="font-medium text-emerald-600">Local</span>
                     )}
                   </td>
                   <td className="capitalize">{c.defaultSaleType}</td>
@@ -167,6 +197,13 @@ export default function CustomersPage() {
         <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => setModalOpen(false)}>
           <form onSubmit={submit} className="space-y-3">
             <div>
+              <label className="label-text">Customer Type</label>
+              <select className="input-field" value={form.customerType} onChange={(e) => setForm({ ...form, customerType: e.target.value, truck: e.target.value === 'local' ? '' : form.truck })}>
+                <option value="local">Local Customer</option>
+                <option value="truck">Truck Customer</option>
+              </select>
+            </div>
+            <div>
               <label className="label-text">Name</label>
               <input className="input-field" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </div>
@@ -185,17 +222,17 @@ export default function CustomersPage() {
                 <option value="wholesale">Wholesale</option>
               </select>
             </div>
-            <div>
+            {form.customerType === 'truck' && <div>
               <label className="label-text">Assigned Truck</label>
-              <select className="input-field" value={form.truck} onChange={(e) => setForm({ ...form, truck: e.target.value })}>
-                <option value="">All trucks / unassigned</option>
+              <select required className="input-field" value={form.truck} onChange={(e) => setForm({ ...form, truck: e.target.value })}>
+                <option value="">Select truck</option>
                 {trucks.map((truck) => (
                   <option key={truck._id} value={truck._id}>
                     {truck.truckName} ({truck.truckNumber})
                   </option>
                 ))}
               </select>
-            </div>
+            </div>}
             <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Customer'}</button>
           </form>
         </Modal>
@@ -203,7 +240,7 @@ export default function CustomersPage() {
 
       {priceTarget && (
         <Modal title={`Price List: ${priceTarget.name}`} onClose={() => setPriceTarget(null)} wide>
-          <form onSubmit={savePrice} className="grid grid-cols-3 gap-3 mb-4">
+          <form onSubmit={savePrice} className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <input
               type="number"
               min={0.25}
@@ -262,4 +299,11 @@ export default function CustomersPage() {
       )}
     </div>
   );
+}
+
+function CustomerSummaryCard({ label, value, danger = false }: { label: string; value: string | number; danger?: boolean }) {
+  return <div className="rounded-2xl border border-iceblue-100 bg-white p-4 shadow-sm">
+    <p className="text-[11px] font-semibold uppercase text-navy-800/45">{label}</p>
+    <p className={`mt-2 font-display text-xl font-bold ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+  </div>;
 }

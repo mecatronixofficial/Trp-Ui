@@ -18,6 +18,9 @@ import {
 } from 'recharts';
 import {
   FiBox,
+  FiAlertCircle,
+  FiCalendar,
+  FiCheckCircle,
   FiClock,
   FiDollarSign,
   FiPackage,
@@ -28,29 +31,70 @@ import {
   FiUsers,
 } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { formatCurrency, formatDate } from '../../../lib/api';
+import { formatCurrency, formatDate, todayISO } from '../../../lib/api';
 
 const chartColors = ['#1ca6d1', '#16a34a', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6'];
 
 export default function AdminDashboardPage() {
   const [data, setData] = useState<any>(null);
   const [profitChart, setProfitChart] = useState<any[]>([]);
+  const [dailyClosings, setDailyClosings] = useState<any[]>([]);
+  const [todayClosings, setTodayClosings] = useState<any[]>([]);
+  const [reportDate, setReportDate] = useState(todayISO());
+  const [closingLoading, setClosingLoading] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [closingError, setClosingError] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        const [dash, profit] = await Promise.all([
+        setLoadError('');
+        const [dashResult, profitResult, closingResult] = await Promise.allSettled([
           api.get('/dashboard/admin'),
           api.get('/dashboard/monthly-profit'),
+          api.get('/daily-closing', { params: { date: todayISO() } }),
         ]);
-        setData(dash.data);
-        setProfitChart(profit.data);
+        if (dashResult.status === 'rejected') throw dashResult.reason;
+        setData(dashResult.value.data);
+        setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
+        setTodayClosings(closingResult.status === 'fulfilled' ? closingResult.value.data || [] : []);
+      } catch (error: any) {
+        setLoadError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the API at http://localhost:4000. Please start or restart the backend server.' : error?.message) || 'Could not load dashboard data.');
       } finally {
         setLoading(false);
       }
     })();
   }, []);
+
+  useEffect(() => {
+    setClosingLoading(true);
+    setClosingError('');
+    api.get('/daily-closing', { params: { date: reportDate } })
+      .then((response) => setDailyClosings(response.data || []))
+      .catch((error: any) => {
+        setDailyClosings([]);
+        setClosingError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the API.' : error?.message) || 'Could not load the daily closing report.');
+      })
+      .finally(() => setClosingLoading(false));
+  }, [reportDate]);
+
+  const dailyReport = useMemo(() => dailyClosings.reduce((total, row) => ({
+    opening: total.opening + Number(row.openingBalance || 0),
+    made: total.made + Number(row.produced || 0),
+    sold: total.sold + Number(row.sold || 0),
+    returned: total.returned + Number(row.returned || 0),
+    wastage: total.wastage + Number(row.wastage || 0),
+    sales: total.sales + Number(row.sellingAmount || 0),
+    cost: total.cost + Number(row.makingCost || 0),
+    profit: total.profit + Number(row.profit || 0),
+    closed: total.closed + (row.status === 'closed' ? 1 : 0),
+  }), { opening: 0, made: 0, sold: 0, returned: 0, wastage: 0, sales: 0, cost: 0, profit: 0, closed: 0 }), [dailyClosings]);
+
+  const todayClosingTotals = useMemo(() => todayClosings.reduce((total, row) => ({
+    returned: total.returned + Number(row.returned || 0),
+    wastage: total.wastage + Number(row.wastage || 0),
+  }), { returned: 0, wastage: 0 }), [todayClosings]);
 
   const dashboard = useMemo(() => {
     if (!data) return null;
@@ -105,7 +149,7 @@ export default function AdminDashboardPage() {
       </div>
     );
   }
-  if (!data || !dashboard) return <p className="text-red-500">Could not load dashboard data.</p>;
+  if (!data || !dashboard) return <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-red-700"><p className="font-semibold">Dashboard unavailable</p><p className="mt-2 text-sm">{loadError || 'Could not load dashboard data.'}</p><button type="button" onClick={() => window.location.reload()} className="btn-secondary mt-4">Retry</button></div>;
 
   const stockTotal = Number(data.pendingStock?.totalClosingStock || 0);
   const pendingAmount = Number(data.payments?.pendingAmount || 0);
@@ -131,9 +175,10 @@ export default function AdminDashboardPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-2">
             <KpiCard icon={FiShoppingCart} label="Today Sales" value={formatCurrency(data.today.sales)} tone="green" />
-            <KpiCard icon={FiTrash2} label="Wastage" value={data.today.wastage} suffix="bars" tone="red" />
+            <KpiCard icon={FiTrash2} label="Today Wastage" value={todayClosingTotals.wastage} suffix="bars" tone="red" />
+            <KpiCard icon={FiPackage} label="Today Returns" value={todayClosingTotals.returned} suffix="bars" tone="amber" />
             <KpiCard icon={FiPackage} label="Pending Stock" value={stockTotal} suffix="bars" tone="blue" />
             <KpiCard icon={FiClock} label="Pending Bills" value={formatCurrency(pendingAmount)} tone="amber" />
           </div>
@@ -146,6 +191,32 @@ export default function AdminDashboardPage() {
         <KpiCard icon={FiTrendingUp} label="Monthly Sales" value={formatCurrency(data.monthlySales)} tone="green" />
         <KpiCard icon={FiShoppingCart} label="Yearly Sales" value={formatCurrency(data.yearlySales)} tone="blue" />
         <KpiCard icon={FiDollarSign} label="Old Payments Today" value={formatCurrency(data.payments?.todayCollectedLater || 0)} tone="navy" />
+      </section>
+
+      <section className="rounded-[1.25rem] border border-iceblue-100 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><h2 className="font-display text-lg font-semibold text-navy-900">Daily Closing Report</h2><p className="mt-1 text-xs text-navy-800/50">Branch status and final bar tally for the selected day</p></div>
+          <label className="flex items-center gap-2 rounded-xl bg-iceblue-50 px-3 py-2 text-iceblue-700"><FiCalendar /><input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} className="bg-transparent text-sm font-semibold outline-none" /></label>
+        </div>
+        {closingLoading ? <p className="py-8 text-center text-sm text-navy-800/50">Loading daily report...</p> : closingError ? <div className="mt-4 rounded-xl border border-red-100 bg-red-50 p-4 text-sm font-medium text-red-700">{closingError}</div> : <>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
+            <DailyMetric label="Made" value={dailyReport.made} />
+            <DailyMetric label="Sold" value={dailyReport.sold} />
+            <DailyMetric label="Returned" value={dailyReport.returned} />
+            <DailyMetric label="Wastage" value={dailyReport.wastage} danger={dailyReport.wastage > 0} />
+            <DailyMetric label="Sales" value={formatCurrency(dailyReport.sales)} />
+            <DailyMetric label="Making Cost" value={formatCurrency(dailyReport.cost)} />
+            <DailyMetric label={dailyReport.profit >= 0 ? 'Profit' : 'Loss'} value={formatCurrency(dailyReport.profit)} danger={dailyReport.profit < 0} />
+            <DailyMetric label="Branches Closed" value={`${dailyReport.closed}/${dailyClosings.length}`} danger={dailyReport.closed !== dailyClosings.length} />
+          </div>
+          <div className={`mt-4 rounded-xl border px-4 py-3 ${dailyReport.opening + dailyReport.made === dailyReport.sold + dailyReport.returned + dailyReport.wastage ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+            <p className="text-sm font-semibold">Final tally: {dailyReport.opening + dailyReport.made} available = {dailyReport.sold} sold + {dailyReport.returned} returned + {dailyReport.wastage} wastage</p>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {dailyClosings.map((row) => <div key={row._id} className={`rounded-xl border p-3 ${row.status === 'closed' ? 'border-emerald-100 bg-emerald-50/60' : 'border-amber-100 bg-amber-50/60'}`}><div className="flex items-center justify-between gap-3"><div><p className="font-semibold text-navy-900">{row.branch?.name || 'Branch'}</p><p className="mt-1 text-xs text-navy-800/50">Made {row.produced} · Sold {row.sold} · Return {row.returned} · Wastage {row.wastage}</p></div><span className={`flex items-center gap-1 text-xs font-semibold ${row.status === 'closed' ? 'text-emerald-700' : 'text-amber-700'}`}>{row.status === 'closed' ? <FiCheckCircle /> : <FiAlertCircle />}{row.status === 'closed' ? 'Closed' : 'Not Closed'}</span></div></div>)}
+            {dailyClosings.length === 0 && <p className="text-sm text-navy-800/50">No branch report available for this date.</p>}
+          </div>
+        </>}
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
@@ -350,6 +421,10 @@ function HeroMetric({ label, value, suffix, tone = 'normal' }: { label: string; 
       </p>
     </div>
   );
+}
+
+function DailyMetric({ label, value, danger = false }: { label: string; value: string | number; danger?: boolean }) {
+  return <div className={`min-w-0 rounded-xl p-3 ${danger ? 'bg-red-50' : 'bg-iceblue-50'}`}><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className={`mt-1 truncate font-display text-lg font-bold ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p></div>;
 }
 
 function KpiCard({

@@ -6,6 +6,15 @@ const api = axios.create({
   withCredentials: true,
 });
 
+api.interceptors.request.use((config) => {
+  if (typeof window !== 'undefined') {
+    const branch = window.localStorage.getItem('tii_selected_branch');
+    const isAuthRequest = String(config.url || '').startsWith('/auth/');
+    if (branch && !isAuthRequest) config.headers['X-Branch-Id'] = branch;
+  }
+  return config;
+});
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {

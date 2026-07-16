@@ -87,7 +87,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (authLoading || !user) return;
     setRedirecting(true);
-    router.replace(user.role === 'admin' ? '/admin/dashboard' : '/truck/dashboard');
+    router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
   }, [user, authLoading, router]);
 
   const handleSubmit = async (e: React.FormEvent) => {

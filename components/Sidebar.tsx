@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   FiGrid, FiTruck, FiUsers, FiBox, FiDollarSign, FiShoppingCart,
-  FiTrash2, FiBarChart2, FiSettings, FiLogOut, FiUserCheck,
+  FiTrash2, FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch,
 } from 'react-icons/fi';
 import { TbSnowflake } from 'react-icons/tb';
 import { useAuth } from '../context/AuthContext';
@@ -20,6 +20,13 @@ const links = [
   { href: '/admin/wastage', label: 'Wastage', icon: FiTrash2 },
   { href: '/admin/reports', label: 'Reports', icon: FiBarChart2 },
   { href: '/admin/settings', label: 'Settings', icon: FiSettings },
+];
+
+const superAdminLinks = [
+  { href: '/admin/dashboard', label: 'Dashboard', icon: FiGrid },
+  { href: '/admin/branches', label: 'Branches', icon: FiGitBranch },
+  { href: '/admin/admins', label: 'Branch Admins', icon: FiUserCheck },
+  ...links.filter((link) => link.href !== '/admin/dashboard'),
 ];
 
 export default function Sidebar() {
@@ -44,7 +51,7 @@ export default function Sidebar() {
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-5">
         <p className="px-3 pb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-iceblue-200/70">Admin Menu</p>
-        {links.map(({ href, label, icon: Icon }) => {
+        {(user?.role === 'super_admin' ? superAdminLinks : links).map(({ href, label, icon: Icon }) => {
           const active = pathname?.startsWith(href);
           return (
             <Link
