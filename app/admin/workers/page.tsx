@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { FiEdit2, FiPlus, FiTrash2, FiUserCheck } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatCurrency, formatDate, todayISO } from '../../../lib/api';
@@ -11,11 +12,12 @@ type Worker = {
   name: string;
   phoneNumber?: string;
   role?: string;
-  monthlySalary: number;
   notes?: string;
+  truck?: string;
 };
 
-const emptyWorkerForm = { name: '', phoneNumber: '', role: '', monthlySalary: '', notes: '' };
+const emptyWorkerForm = { name: '', phoneNumber: '', role: '', notes: '' };
+const WORKER_ROLE_OPTIONS = ['Driver', 'Cleaner', 'Manager'];
 const emptyBuyingForm = { worker: '', date: todayISO(), buyingAmount: '', notes: '' };
 
 function currentMonth() {
@@ -32,7 +34,6 @@ function monthRange(month: string) {
 export default function WorkersPage() {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [summary, setSummary] = useState<any[]>([]);
-  const [buyingRecords, setBuyingRecords] = useState<any[]>([]);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [driverExpenses, setDriverExpenses] = useState<any[]>([]);
   const [month, setMonth] = useState(currentMonth());
@@ -40,8 +41,13 @@ export default function WorkersPage() {
   const [workerModalOpen, setWorkerModalOpen] = useState(false);
   const [buyingModalOpen, setBuyingModalOpen] = useState(false);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
-  const [editingBuying, setEditingBuying] = useState<any | null>(null);
+  const [driverDetailTarget, setDriverDetailTarget] = useState<any | null>(null);
+  const [workerDetailTarget, setWorkerDetailTarget] = useState<any | null>(null);
+  const [workerDetailRange, setWorkerDetailRange] = useState(monthRange(currentMonth()));
+  const [workerDetailRows, setWorkerDetailRows] = useState<any[]>([]);
+  const [workerDetailLoading, setWorkerDetailLoading] = useState(false);
   const [workerForm, setWorkerForm] = useState<any>(emptyWorkerForm);
+  const [roleMode, setRoleMode] = useState('');
   const [buyingForm, setBuyingForm] = useState<any>(emptyBuyingForm);
   const [error, setError] = useState('');
 
@@ -50,16 +56,14 @@ export default function WorkersPage() {
     setError('');
     try {
       const { from, to } = monthRange(month);
-    const [workerRows, summaryRows, buyingRows, driverRows, expenseRows] = await Promise.all([
-      api.get('/workers'),
-      api.get('/workers/summary', { params: { month } }),
-      api.get('/workers/buying', { params: { from, to } }),
-      api.get('/trucks'),
-      api.get('/driver-expenses', { params: { from, to } }),
+      const [workerRows, summaryRows, driverRows, expenseRows] = await Promise.all([
+        api.get('/workers'),
+        api.get('/workers/summary', { params: { month } }),
+        api.get('/trucks'),
+        api.get('/driver-expenses', { params: { from, to } }),
       ]);
       setWorkers(workerRows.data);
       setSummary(summaryRows.data);
-      setBuyingRecords(buyingRows.data);
       setDrivers(driverRows.data);
       setDriverExpenses(expenseRows.data);
     } catch (err: any) {
@@ -73,24 +77,84 @@ export default function WorkersPage() {
     load();
   }, [month]);
 
-  const totals = useMemo(() => summary.reduce((acc, row) => ({
-    salary: acc.salary + Number(row.monthlySalary || 0),
-    buying: acc.buying + Number(row.buyingAmount || 0),
-    balance: acc.balance + Number(row.balanceAmount || 0),
-  }), { salary: 0, buying: 0, balance: 0 }), [summary]);
+  const loadWorkerDetail = async (worker: Worker, range: { from: string; to: string }) => {
+    setWorkerDetailLoading(true);
+    setError('');
+    try {
+      const res = await api.get('/workers/buying', { params: { from: range.from, to: range.to, worker: worker._id } });
+      setWorkerDetailRows(res.data);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Could not load worker history');
+    } finally {
+      setWorkerDetailLoading(false);
+    }
+  };
 
-  const driverSummary = useMemo(() => drivers.map((driver) => {
-    const rows = driverExpenses.filter((expense) => String(expense.truck?._id || expense.truck) === driver._id);
-    const amount = rows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
-    const salary = Number(driver.monthlySalary || 0);
-    return { ...driver, amount, salary, balance: salary - amount, entries: rows.length };
-  }), [drivers, driverExpenses]);
+  const openWorkerDetail = (row: any) => {
+    if (!row?.worker) return;
+    const range = monthRange(month);
+    setWorkerDetailTarget(row);
+    setWorkerDetailRange(range);
+    setWorkerDetailRows([]);
+    loadWorkerDetail(row.worker, range);
+  };
+
+  const totals = useMemo(() => summary.reduce((acc, row) => ({
+    buying: acc.buying + Number(row.buyingAmount || 0),
+  }), { buying: 0 }), [summary]);
+
   const totalDriverAmount = useMemo(() => driverExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0), [driverExpenses]);
   const totalDriverSalary = useMemo(() => drivers.reduce((sum, driver) => sum + Number(driver.monthlySalary || 0), 0), [drivers]);
+
+  const peopleSummary = useMemo(() => {
+    const workerRows = summary
+      .filter((row) => {
+        const worker = workers.find((item) => item._id === row.workerId);
+        return !worker?.truck;
+      })
+      .map((row) => ({
+        id: row.workerId,
+        name: row.name,
+        role: row.role || '-',
+        buyingAmount: Number(row.buyingAmount || 0),
+        buyingDays: row.buyingDays || 0,
+        isDriver: false,
+        worker: workers.find((item) => item._id === row.workerId) || null,
+        driver: null as any,
+      }));
+    const driverRows = drivers.map((driver) => {
+      const rows = driverExpenses.filter((expense) => String(expense.truck?._id || expense.truck) === driver._id);
+      const amount = rows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+      return {
+        id: driver._id,
+        name: driver.driverName,
+        role: `Driver - ${driver.truckName} (${driver.truckNumber})`,
+        buyingAmount: amount,
+        buyingDays: rows.length,
+        isDriver: true,
+        worker: null,
+        driver,
+      };
+    });
+    return [...workerRows, ...driverRows].sort((a, b) => a.name.localeCompare(b.name));
+  }, [summary, workers, drivers, driverExpenses]);
+
+  const driverDetailRows = useMemo(() => {
+    if (!driverDetailTarget) return [];
+    return driverExpenses
+      .filter((expense) => String(expense.truck?._id || expense.truck) === driverDetailTarget._id)
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  }, [driverDetailTarget, driverExpenses]);
+
+  const driverDetailTotal = useMemo(
+    () => driverDetailRows.reduce((sum, row) => sum + Number(row.amount || 0), 0),
+    [driverDetailRows],
+  );
 
   const openCreateWorker = () => {
     setEditingWorker(null);
     setWorkerForm(emptyWorkerForm);
+    setRoleMode('');
     setError('');
     setWorkerModalOpen(true);
   };
@@ -101,9 +165,9 @@ export default function WorkersPage() {
       name: worker.name,
       phoneNumber: worker.phoneNumber || '',
       role: worker.role || '',
-      monthlySalary: String(worker.monthlySalary || ''),
       notes: worker.notes || '',
     });
+    setRoleMode(worker.role ? (WORKER_ROLE_OPTIONS.includes(worker.role) ? worker.role : 'Others') : '');
     setError('');
     setWorkerModalOpen(true);
   };
@@ -111,7 +175,7 @@ export default function WorkersPage() {
   const saveWorker = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    const payload = { ...workerForm, monthlySalary: Number(workerForm.monthlySalary) || 0 };
+    const payload = { ...workerForm };
     try {
       if (editingWorker) await api.patch(`/workers/${editingWorker._id}`, payload);
       else await api.post('/workers', payload);
@@ -129,20 +193,7 @@ export default function WorkersPage() {
   };
 
   const openCreateBuying = (workerId = '') => {
-    setEditingBuying(null);
-    setBuyingForm({ ...emptyBuyingForm, worker: workerId || workers[0]?._id || '' });
-    setError('');
-    setBuyingModalOpen(true);
-  };
-
-  const openEditBuying = (record: any) => {
-    setEditingBuying(record);
-    setBuyingForm({
-      worker: record.worker?._id || record.worker,
-      date: String(record.date).slice(0, 10),
-      buyingAmount: String(record.buyingAmount || ''),
-      notes: record.notes || '',
-    });
+    setBuyingForm({ ...emptyBuyingForm, worker: workerId || workers.find((worker) => !worker.truck)?._id || '' });
     setError('');
     setBuyingModalOpen(true);
   };
@@ -152,8 +203,7 @@ export default function WorkersPage() {
     setError('');
     const payload = { ...buyingForm, buyingAmount: Number(buyingForm.buyingAmount) || 0 };
     try {
-      if (editingBuying) await api.patch(`/workers/buying/${editingBuying._id}`, payload);
-      else await api.post('/workers/buying', payload);
+      await api.post('/workers/buying', payload);
       setBuyingModalOpen(false);
       await load();
     } catch (err: any) {
@@ -161,21 +211,13 @@ export default function WorkersPage() {
     }
   };
 
-  const removeBuying = async (id: string) => {
-    if (!confirm('Delete this buying record?')) return;
-    await api.delete(`/workers/buying/${id}`);
-    load();
-  };
-
   return (
     <div className="min-w-0 space-y-4 overflow-x-hidden">
       <div className="min-w-0 space-y-3">
         <div className="grid w-full min-w-0 grid-cols-2 gap-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
           <SummaryPill label="Total Workers" value={String(workers.length + drivers.length)} />
-          <SummaryPill label="Monthly Salary" value={formatCurrency(totals.salary + totalDriverSalary)} />
+          <SummaryPill label="Monthly Salary" value={formatCurrency(totalDriverSalary)} />
           <SummaryPill label="Total Buying" value={formatCurrency(totals.buying + totalDriverAmount)} />
-          <SummaryPill label="Total Drivers" value={String(drivers.length)} />
-          <SummaryPill label="Driver Amount" value={formatCurrency(totalDriverAmount)} danger={totalDriverAmount > 0} />
         </div>
         <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:w-fit sm:grid-cols-3">
           <input type="month" className="input-field col-span-2 h-11 sm:col-span-1 sm:w-40" value={month} onChange={(e) => setMonth(e.target.value)} />
@@ -199,101 +241,44 @@ export default function WorkersPage() {
           <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[820px]">
             <thead>
               <tr>
-                <th>Worker</th>
+                <th>Name</th>
                 <th>Role</th>
-                <th>Monthly Salary</th>
                 <th>Buying Amount</th>
-                <th>Balance</th>
                 <th>Buying Days</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {summary.map((row) => {
-                const worker = workers.find((item) => item._id === row.workerId);
-                return (
-                  <tr key={row.workerId}>
-                    <td className="font-semibold">{row.name}</td>
-                    <td>{row.role || '-'}</td>
-                    <td>{formatCurrency(row.monthlySalary)}</td>
-                    <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
-                    <td className={Number(row.balanceAmount) < 0 ? 'font-semibold text-red-500' : 'font-semibold text-emerald-600'}>
-                      {formatCurrency(row.balanceAmount)}
-                    </td>
-                    <td>{row.buyingDays || 0}</td>
-                    <td>
+              {peopleSummary.map((row) => (
+                <tr key={row.id}>
+                  <td className="font-semibold">
+                    <Link
+                      href={`/admin/workers/${row.isDriver ? row.driver._id : row.worker?._id || row.id}`}
+                      className="text-iceblue-700 underline-offset-2 hover:underline"
+                    >
+                      {row.name}
+                    </Link>
+                  </td>
+                  <td>{row.role}</td>
+                  <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
+                  <td>{row.buyingDays}</td>
+                  <td>
+                    {!row.isDriver && (
                       <div className="flex items-center gap-2">
-                        <button title="Add buying" onClick={() => openCreateBuying(row.workerId)} className="text-emerald-600"><FiUserCheck /></button>
-                        {worker && <button title="Edit worker" onClick={() => openEditWorker(worker)} className="text-iceblue-600"><FiEdit2 /></button>}
-                        {worker && <button title="Remove worker" onClick={() => removeWorker(worker)} className="text-red-500"><FiTrash2 /></button>}
+                        <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-emerald-600"><FiUserCheck /></button>
+                        {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-iceblue-600"><FiEdit2 /></button>}
+                        {row.worker && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-red-500"><FiTrash2 /></button>}
                       </div>
-                    </td>
-                  </tr>
-                );
-              })}
-              {summary.length === 0 && (
-                <tr><td colSpan={7} className="py-4 text-center text-navy-800/50">No workers added yet.</td></tr>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {peopleSummary.length === 0 && (
+                <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
               )}
             </tbody>
           </table></div>
         )}
-      </div>
-
-      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p className="font-display font-semibold text-navy-900">Driver Amount Summary</p>
-          <p className="text-xs text-navy-800/50">{month}</p>
-        </div>
-        <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[650px]">
-          <thead><tr><th>Driver</th><th>Truck</th><th>Monthly Salary</th><th>Buying / Advance</th><th>Balance Salary</th></tr></thead>
-          <tbody>
-            {driverSummary.map((driver) => <tr key={driver._id}>
-              <td className="font-semibold">{driver.driverName}</td>
-              <td>{driver.truckName} ({driver.truckNumber})</td>
-              <td>{formatCurrency(driver.salary)}</td>
-              <td className={driver.amount > 0 ? 'font-semibold text-amber-600' : ''}>{formatCurrency(driver.amount)}</td>
-              <td className={driver.balance < 0 ? 'font-semibold text-red-600' : 'font-semibold text-emerald-600'}>{formatCurrency(driver.balance)}</td>
-            </tr>)}
-            {!driverSummary.length && <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No drivers available.</td></tr>}
-          </tbody>
-        </table></div>
-      </div>
-
-      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <p className="font-display font-semibold text-navy-900">Daily Worker Buying</p>
-          <p className="text-xs text-navy-800/50">{buyingRecords.length} record(s)</p>
-        </div>
-        <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[700px]">
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Worker</th>
-              <th>Buying Amount</th>
-              <th>Notes</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {buyingRecords.map((record) => (
-              <tr key={record._id}>
-                <td>{formatDate(record.date)}</td>
-                <td className="font-medium">{record.worker?.name || 'Worker'}</td>
-                <td className="font-semibold">{formatCurrency(record.buyingAmount)}</td>
-                <td className="text-xs text-navy-800/60">{record.notes}</td>
-                <td>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => openEditBuying(record)} className="text-iceblue-600"><FiEdit2 /></button>
-                    <button onClick={() => removeBuying(record._id)} className="text-red-500"><FiTrash2 /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {buyingRecords.length === 0 && (
-              <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No buying records for this month.</td></tr>
-            )}
-          </tbody>
-        </table></div>
       </div>
 
       {workerModalOpen && (
@@ -310,13 +295,34 @@ export default function WorkersPage() {
               </div>
               <div>
                 <label className="label-text">Work Role</label>
-                <input className="input-field" placeholder="Loader, cleaner..." value={workerForm.role} onChange={(e) => setWorkerForm({ ...workerForm, role: e.target.value })} />
+                <select
+                  className="input-field"
+                  value={roleMode}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setRoleMode(value);
+                    setWorkerForm({ ...workerForm, role: value === 'Others' ? '' : value });
+                  }}
+                >
+                  <option value="">Select role</option>
+                  {WORKER_ROLE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                  <option value="Others">Others</option>
+                </select>
               </div>
             </div>
-            <div>
-              <label className="label-text">Monthly Salary</label>
-              <input type="number" min={0} step="0.01" required className="input-field" value={workerForm.monthlySalary} onChange={(e) => setWorkerForm({ ...workerForm, monthlySalary: e.target.value })} />
-            </div>
+            {roleMode === 'Others' && (
+              <div>
+                <label className="label-text">Enter Role</label>
+                <input
+                  className="input-field"
+                  required
+                  autoFocus
+                  placeholder="Enter role"
+                  value={workerForm.role}
+                  onChange={(e) => setWorkerForm({ ...workerForm, role: e.target.value })}
+                />
+              </div>
+            )}
             <div>
               <label className="label-text">Notes</label>
               <textarea className="input-field" rows={2} value={workerForm.notes} onChange={(e) => setWorkerForm({ ...workerForm, notes: e.target.value })} />
@@ -328,13 +334,13 @@ export default function WorkersPage() {
       )}
 
       {buyingModalOpen && (
-        <Modal title={editingBuying ? 'Edit Daily Buying' : 'Daily Worker Buying'} onClose={() => setBuyingModalOpen(false)}>
+        <Modal title="Daily Worker Buying" onClose={() => setBuyingModalOpen(false)}>
           <form onSubmit={saveBuying} className="space-y-3">
             <div>
               <label className="label-text">Worker</label>
               <select required className="input-field" value={buyingForm.worker} onChange={(e) => setBuyingForm({ ...buyingForm, worker: e.target.value })}>
                 <option value="">Select worker</option>
-                {workers.map((worker) => <option key={worker._id} value={worker._id}>{worker.name}</option>)}
+                {workers.filter((worker) => !worker.truck).map((worker) => <option key={worker._id} value={worker._id}>{worker.name}</option>)}
               </select>
             </div>
             <div>
@@ -352,6 +358,118 @@ export default function WorkersPage() {
             {error && <p className="text-sm text-red-500">{error}</p>}
             <button className="btn-primary w-full">Save Daily Buying</button>
           </form>
+        </Modal>
+      )}
+
+      {workerDetailTarget && (
+        <Modal title={`Worker Details: ${workerDetailTarget.name}`} onClose={() => setWorkerDetailTarget(null)} wide>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 rounded-2xl bg-iceblue-50 p-4 sm:grid-cols-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Name</p>
+                <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.name}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Role</p>
+                <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.role || '-'}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Phone</p>
+                <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.worker?.phoneNumber || '-'}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Notes</p>
+                <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.worker?.notes || '-'}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="label-text">From</label>
+                <input type="date" className="input-field" value={workerDetailRange.from} onChange={(e) => setWorkerDetailRange({ ...workerDetailRange, from: e.target.value })} />
+              </div>
+              <div>
+                <label className="label-text">To</label>
+                <input type="date" className="input-field" value={workerDetailRange.to} onChange={(e) => setWorkerDetailRange({ ...workerDetailRange, to: e.target.value })} />
+              </div>
+              <button type="button" onClick={() => loadWorkerDetail(workerDetailTarget.worker, workerDetailRange)} className="btn-secondary">Apply</button>
+            </div>
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="overflow-x-auto">
+              {workerDetailLoading ? (
+                <p className="text-navy-800/50">Loading...</p>
+              ) : (
+                <table className="table-base min-w-[500px]">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Buying Amount</th>
+                      <th>Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workerDetailRows.map((row) => (
+                      <tr key={row._id}>
+                        <td>{formatDate(row.date)}</td>
+                        <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
+                        <td className="text-xs text-navy-800/60">{row.notes}</td>
+                      </tr>
+                    ))}
+                    {workerDetailRows.length === 0 && (
+                      <tr><td colSpan={3} className="py-4 text-center text-navy-800/50">No buying entries for the selected range.</td></tr>
+                    )}
+                  </tbody>
+                  {workerDetailRows.length > 0 && (
+                    <tfoot>
+                      <tr className="font-semibold">
+                        <td>Total</td>
+                        <td className="text-red-500">{formatCurrency(workerDetailRows.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {driverDetailTarget && (
+        <Modal title={`Driver Buying: ${driverDetailTarget.driverName}`} onClose={() => setDriverDetailTarget(null)} wide>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <SummaryPill label="Driver" value={driverDetailTarget.driverName} />
+              <SummaryPill label="Truck" value={`${driverDetailTarget.truckName} (${driverDetailTarget.truckNumber})`} />
+              <SummaryPill label="Phone" value={driverDetailTarget.phoneNumber || '-'} />
+              <SummaryPill label="Monthly Salary" value={formatCurrency(driverDetailTarget.monthlySalary || 0)} />
+              <SummaryPill label={`Total Buying (${month})`} value={formatCurrency(driverDetailTotal)} danger={driverDetailTotal > 0} />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="table-base min-w-[500px]">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Amount</th>
+                    <th>Purpose</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {driverDetailRows.map((row) => (
+                    <tr key={row._id}>
+                      <td>{formatDate(row.date)}</td>
+                      <td className="font-semibold text-red-500">{formatCurrency(row.amount)}</td>
+                      <td>{row.purpose || '-'}</td>
+                      <td className="text-xs text-navy-800/60">{row.notes}</td>
+                    </tr>
+                  ))}
+                  {driverDetailRows.length === 0 && (
+                    <tr><td colSpan={4} className="py-4 text-center text-navy-800/50">No buying entries for this month.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </Modal>
       )}
     </div>

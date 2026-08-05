@@ -13,16 +13,21 @@ const titles: Record<string, string> = {
   '/admin/customers': 'Customer Management',
   '/admin/workers': 'Worker Management',
   '/admin/production': 'Ice Production',
-  '/admin/making-cost': 'Making Cost',
   '/admin/sales': 'Sales',
-  '/admin/wastage': 'Wastage',
+  '/admin/expenses': 'Expenses',
   '/admin/reports': 'Reports',
   '/admin/settings': 'Settings',
 };
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const title = Object.entries(titles).find(([p]) => pathname?.startsWith(p))?.[1] || 'Admin';
+  const title = pathname?.startsWith('/admin/customers/')
+    ? 'Customer Profile'
+    : pathname?.startsWith('/admin/trucks/')
+      ? 'Truck Profile'
+    : pathname?.startsWith('/admin/workers/')
+      ? 'Worker Profile'
+    : Object.entries(titles).find(([p]) => pathname?.startsWith(p))?.[1] || 'Admin';
 
   return (
     <RequireRole role={['super_admin', 'admin']}>

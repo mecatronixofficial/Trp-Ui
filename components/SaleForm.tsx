@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { FiCheckCircle, FiPlus, FiSearch, FiTrash2, FiUser, FiUserPlus } from 'react-icons/fi';
 import api from '../lib/api';
 import { PAYMENT_MODES, formatBarQuantity, formatCurrency, getItemBarUsed, todayISO } from '../lib/api';
@@ -18,36 +19,17 @@ interface Item {
   pricePerBar: string;
 }
 
-type CustomerType = 'retail' | 'wholesale' | 'truck';
-
-const CUSTOMER_TYPES: { value: CustomerType; label: string }[] = [
-  { value: 'retail', label: 'Local / Retail' },
-  { value: 'wholesale', label: 'Wholesale' },
-  { value: 'truck', label: 'Truck Customer' },
-];
-
 const getCustomerTruckId = (customer: any) => (
   typeof customer?.truck === 'string' ? customer.truck : customer?.truck?._id || ''
 );
 
-const typeToSaleType = (type: CustomerType) => (type === 'wholesale' ? 'wholesale' : 'retail');
-
 export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: SaleFormProps) {
+  const router = useRouter();
   const [customers, setCustomers] = useState<any[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
-  const [date, setDate] = useState(initial?.date?.slice(0, 10) || todayISO());
   const [truck, setTruck] = useState(fixedTruckId || initial?.truck?._id || initial?.truck || '');
   const [customer, setCustomer] = useState(initial?.customer?._id || initial?.customer || '');
   const [saleType, setSaleType] = useState(initial?.saleType || 'retail');
-  const [customerType, setCustomerType] = useState<CustomerType>(
-    initial?.customer?.truck ? 'truck' : initial?.saleType === 'wholesale' ? 'wholesale' : 'retail',
-  );
-  const [creatingCustomer, setCreatingCustomer] = useState(false);
-  const [customerForm, setCustomerForm] = useState({
-    name: '',
-    phoneNumber: '',
-    address: '',
-  });
   const [items, setItems] = useState<Item[]>(
     initial?.items?.map((i: any) => {
       const totalBars = getItemBarUsed(i);
@@ -64,8 +46,8 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const [paidAmount, setPaidAmount] = useState(initial?.paidAmount?.toString() || '');
   const [notes, setNotes] = useState(initial?.notes || '');
   const [priceList, setPriceList] = useState<any[]>([]);
+  const [availableStock, setAvailableStock] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const [savingCustomer, setSavingCustomer] = useState(false);
   const [error, setError] = useState('');
 
   const loadCustomers = async () => {
@@ -111,87 +93,40 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
 
   useEffect(() => {
     if (!selectedCustomer || initial?._id) return;
-    const nextType = getCustomerTruckId(selectedCustomer)
-      ? 'truck'
-      : selectedCustomer.defaultSaleType === 'wholesale'
-        ? 'wholesale'
-        : 'retail';
-    setCustomerType(nextType);
-    setSaleType(typeToSaleType(nextType));
+    setSaleType(selectedCustomer.defaultSaleType === 'wholesale' ? 'wholesale' : 'retail');
   }, [initial?._id, selectedCustomer]);
 
   useEffect(() => {
     if (!selectedCustomer) return;
     setCustomerSearch(`${selectedCustomer.name}${selectedCustomer.phoneNumber ? ` - ${selectedCustomer.phoneNumber}` : ''}`);
-    setCreatingCustomer(false);
   }, [selectedCustomer]);
 
-  useEffect(() => {
-    if (selectedCustomer || initial?._id) return;
-    setSaleType(typeToSaleType(customerType));
-  }, [customerType, initial?._id, selectedCustomer]);
+  // Flat price for a single bar, set by admin per customer per sale type.
+  const barPrice = useMemo(() => {
+    const match = priceList.find((p) => p.saleType === saleType);
+    return match ? Number(match.price) : null;
+  }, [priceList, saleType]);
 
-  const prepareNewCustomer = () => {
-    const raw = customerSearch.trim();
-    const digits = raw.replace(/\D/g, '');
-    const looksLikePhone = digits.length >= 6 && digits.length >= raw.replace(/\s/g, '').length - 2;
-
-    setCustomerForm({
-      name: looksLikePhone ? '' : raw,
-      phoneNumber: looksLikePhone ? raw : '',
-      address: '',
-    });
-    setCreatingCustomer(true);
-  };
-
-  const saveCustomer = async () => {
-    setError('');
-    if (!customerForm.name.trim()) {
-      setError('Enter customer name');
-      return;
-    }
-
-    setSavingCustomer(true);
-    try {
-      const customerTruck = customerType === 'truck' ? fixedTruckId || truck || undefined : undefined;
-      const { data } = await api.post('/customers', {
-        ...customerForm,
-        defaultSaleType: typeToSaleType(customerType),
-        truck: customerTruck,
-      });
-      const rows = await loadCustomers();
-      const created = data?._id ? data : rows.find((row: any) => row.phoneNumber === customerForm.phoneNumber && row.name === customerForm.name);
-      if (created?._id) setCustomer(created._id);
-      setCustomerSearch(`${customerForm.name}${customerForm.phoneNumber ? ` - ${customerForm.phoneNumber}` : ''}`);
-      setCreatingCustomer(false);
-    } catch (err: any) {
-      setError(err?.response?.data?.message || 'Could not create customer');
-    } finally {
-      setSavingCustomer(false);
-    }
-  };
-
-  const lookupPrice = (quantity: string) => {
-    const normalizedQuantity = formatBarQuantity(quantity);
-    const match = priceList.find((p) => formatBarQuantity(p.size) === normalizedQuantity && p.saleType === saleType);
-    return match ? String(match.price) : '';
+  const computeTotal = (quantity: string) => {
+    const qty = Number(quantity) || 0;
+    if (!qty || barPrice == null) return '';
+    return String(Math.round(qty * barPrice * 100) / 100);
   };
 
   useEffect(() => {
-    if (!priceList.length) return;
+    if (barPrice == null) return;
     setItems((prev) => prev.map((item) => {
-      if (item.pricePerBar) return item;
-      const suggested = lookupPrice(item.quantity);
+      const suggested = computeTotal(item.quantity);
       return suggested ? { ...item, pricePerBar: suggested } : item;
     }));
-  }, [priceList, saleType]);
+  }, [barPrice]);
 
   const updateItem = (idx: number, field: keyof Item, value: string) => {
     setItems((prev) => {
       const next = [...prev];
       next[idx] = { ...next[idx], [field]: value };
       if (field === 'quantity') {
-        const suggested = lookupPrice(value);
+        const suggested = computeTotal(value);
         if (suggested) next[idx].pricePerBar = suggested;
       }
       return next;
@@ -201,9 +136,38 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const addItem = () => setItems([...items, { size: '1', quantity: '', pricePerBar: '' }]);
   const removeItem = (idx: number) => setItems(items.filter((_, i) => i !== idx));
 
+  // Drivers only pick the customer and bar quantity — the price always comes from what admin set.
+  const isDriver = !!fixedTruckId;
+  const priceLocked = isDriver && barPrice == null;
+
   const totalAmount = items.reduce((sum, i) => sum + (Number(i.pricePerBar) || 0), 0);
   const balance = totalAmount - (Number(paidAmount) || 0);
-  const derivedTruck = fixedTruckId || getCustomerTruckId(selectedCustomer) || truck || trucks?.[0]?._id || '';
+  const customerTruckId = getCustomerTruckId(selectedCustomer);
+  const derivedTruck = fixedTruckId || customerTruckId || truck;
+
+  // Admin sales use the stock remaining in the shop. Driver sales use only the
+  // stock assigned to that driver's truck.
+  useEffect(() => {
+    let active = true;
+    setAvailableStock(null);
+    const request = fixedTruckId
+      ? api.get(`/stock/truck/${fixedTruckId}`)
+      : api.get('/stock');
+
+    request
+      .then((res) => {
+        if (!active) return;
+        setAvailableStock(Number(fixedTruckId ? res.data?.totalStock : res.data?.totalClosingStock) || 0);
+      })
+      .catch(() => { if (active) setAvailableStock(0); });
+
+    return () => { active = false; };
+  }, [fixedTruckId]);
+
+  // No blank placeholder in the truck select, so default to the first truck once trucks load.
+  useEffect(() => {
+    if (!truck && !fixedTruckId && !customerTruckId && trucks && trucks.length > 0) setTruck(trucks[0]._id);
+  }, [trucks, fixedTruckId, customerTruckId]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -216,10 +180,14 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       setError('No truck is available for this sale');
       return;
     }
+    if (priceLocked) {
+      setError('No price is set for this customer. Ask admin to set the bar price first.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
-        date,
+        date: initial?._id ? initial.date : new Date().toISOString(),
         truck: derivedTruck,
         customer,
         saleType,
@@ -246,28 +214,12 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="label-text">Date</label>
-          <input type="date" className="input-field" required value={date} onChange={(e) => setDate(e.target.value)} />
+      {availableStock !== null && (
+        <div className={`flex items-center justify-between rounded-2xl border px-4 py-3 text-sm font-semibold ${availableStock > 0 ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : 'border-red-100 bg-red-50 text-red-600'}`}>
+          <span>{fixedTruckId ? 'Available Ice Bars in Truck' : 'Available Ice Bars in Shop'}</span>
+          <span className="text-lg">{formatBarQuantity(availableStock) || 0}</span>
         </div>
-        <div>
-          <label className="label-text">Customer Type</label>
-          <select
-            className="input-field"
-            value={customerType}
-            onChange={(e) => {
-              const nextType = e.target.value as CustomerType;
-              setCustomerType(nextType);
-              setSaleType(typeToSaleType(nextType));
-            }}
-          >
-            {CUSTOMER_TYPES.map((type) => (
-              <option key={type.value} value={type.value}>{type.label}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+      )}
 
       <div>
         <label className="label-text">Customer Name / Phone</label>
@@ -280,7 +232,6 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
             onChange={(e) => {
               setCustomerSearch(e.target.value);
               setCustomer('');
-              setCreatingCustomer(false);
             }}
           />
         </div>
@@ -289,18 +240,19 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           <div className="mt-2 max-h-56 overflow-y-auto rounded-2xl border border-iceblue-100 bg-white shadow-lg shadow-iceblue-900/10">
             {visibleCustomers.length === 0 ? (
               <div className="px-4 py-3">
-                <p className="text-sm text-navy-800/50">No customer found.</p>
-                <button
-                  type="button"
-                  onClick={prepareNewCustomer}
-                  className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-navy-900 px-3 text-sm font-semibold text-white transition hover:bg-iceblue-700"
-                >
-                  <FiUserPlus /> Create customer
-                </button>
+                <p className="text-sm text-navy-800/50">{fixedTruckId ? 'No customer found. Ask admin to add this customer.' : 'No customer found.'}</p>
+                {!fixedTruckId && (
+                  <button
+                    type="button"
+                    onClick={() => router.push('/admin/customers')}
+                    className="mt-3 inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-navy-900 px-3 text-sm font-semibold text-white transition hover:bg-iceblue-700"
+                  >
+                    <FiUserPlus /> Create Customer
+                  </button>
+                )}
               </div>
             ) : (
-              <>
-                {visibleCustomers.slice(0, 8).map((c) => {
+              visibleCustomers.slice(0, 8).map((c) => {
                   const customerTruck = typeof c.truck === 'object' && c.truck ? `${c.truck.truckName} (${c.truck.truckNumber})` : 'Local';
                   const isNew = String(c.createdAt || '').slice(0, 10) === todayISO();
 
@@ -327,60 +279,8 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
                       </span>
                     </button>
                   );
-                })}
-                <div className="border-t border-iceblue-50 px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={prepareNewCustomer}
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-white px-3 text-sm font-semibold text-iceblue-700 ring-1 ring-iceblue-100 transition hover:bg-iceblue-50"
-                  >
-                    <FiUserPlus /> Create new customer
-                  </button>
-                </div>
-              </>
+                })
             )}
-          </div>
-        )}
-
-        {creatingCustomer && (
-          <div className="mt-3 rounded-2xl border border-iceblue-100 bg-white p-4 shadow-sm">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label className="label-text">Name</label>
-                <input
-                  className="input-field h-11"
-                  required
-                  value={customerForm.name}
-                  onChange={(e) => setCustomerForm({ ...customerForm, name: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="label-text">Mobile Number</label>
-                <input
-                  className="input-field h-11"
-                  inputMode="tel"
-                  value={customerForm.phoneNumber}
-                  onChange={(e) => setCustomerForm({ ...customerForm, phoneNumber: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="mt-3">
-              <label className="label-text">Address</label>
-              <textarea
-                className="input-field"
-                rows={2}
-                value={customerForm.address}
-                onChange={(e) => setCustomerForm({ ...customerForm, address: e.target.value })}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={saveCustomer}
-              disabled={savingCustomer}
-              className="mt-3 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-navy-900 px-4 text-sm font-semibold text-white transition hover:bg-iceblue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-            >
-              <FiUserPlus /> {savingCustomer ? 'Creating...' : 'Create and Select'}
-            </button>
           </div>
         )}
 
@@ -407,7 +307,10 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
               </span>
             </div>
             <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-              <InfoPill label="Type" value={customerType === 'truck' ? 'Truck Customer' : customerType} />
+              <InfoPill
+                label="Type"
+                value={getCustomerTruckId(selectedCustomer) ? 'Truck Customer' : selectedCustomer.defaultSaleType === 'wholesale' ? 'Wholesale' : 'Local / Retail'}
+              />
               <InfoPill label="Truck" value={typeof selectedCustomer.truck === 'object' && selectedCustomer.truck ? selectedCustomer.truck.truckName : 'Local'} />
               <InfoPill label="Balance" value={formatCurrency(selectedCustomer.creditBalance || 0)} danger={Number(selectedCustomer.creditBalance || 0) > 0} />
             </div>
@@ -416,23 +319,33 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       </div>
 
       <div>
-        <label className="label-text">Items</label>
+        <div className="flex items-center justify-between">
+          <label className="label-text">Items</label>
+          {selectedCustomer && (
+            <span className={`text-xs font-medium ${priceLocked ? 'text-red-500' : 'text-navy-800/50'}`}>
+              {barPrice != null ? `${formatCurrency(barPrice)} / bar` : 'No price set for this customer — ask admin'}
+            </span>
+          )}
+        </div>
         <div className="space-y-2">
           {items.map((item, idx) => (
             <div key={idx} className="rounded-2xl border border-iceblue-100 bg-iceblue-50/60 p-3">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-12 sm:items-center">
                 <input
                   type="number" min={0.25} step={0.25} placeholder="Bar Used e.g. 0.25, 1.25" required
-                  className="input-field h-11 sm:col-span-4"
+                  disabled={priceLocked}
+                  className={`input-field h-11 disabled:cursor-not-allowed disabled:opacity-50 ${isDriver ? 'sm:col-span-8' : 'sm:col-span-4'}`}
                   value={item.quantity}
                   onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
                 />
-                <input
-                  type="number" min={0} step="0.01" placeholder="Price" required
-                  className="input-field h-11 sm:col-span-4"
-                  value={item.pricePerBar}
-                  onChange={(e) => updateItem(idx, 'pricePerBar', e.target.value)}
-                />
+                {!isDriver && (
+                  <input
+                    type="number" min={0} step="0.01" placeholder="Total" required
+                    className="input-field h-11 sm:col-span-4"
+                    value={item.pricePerBar}
+                    onChange={(e) => updateItem(idx, 'pricePerBar', e.target.value)}
+                  />
+                )}
                 <div className="flex h-11 items-center justify-between rounded-xl bg-white px-3 text-sm font-semibold text-navy-800 sm:col-span-3 sm:justify-end">
                   <span className="text-xs font-medium text-navy-800/45 sm:hidden">Total</span>
                   {formatCurrency(Number(item.pricePerBar) || 0)}
@@ -450,7 +363,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
             </div>
           ))}
         </div>
-        <button type="button" onClick={addItem} className="mt-2 text-iceblue-600 text-sm font-medium flex items-center gap-1">
+        <button type="button" onClick={addItem} disabled={priceLocked} className="mt-2 text-iceblue-600 text-sm font-medium flex items-center gap-1 disabled:cursor-not-allowed disabled:opacity-50">
           <FiPlus /> Add another item
         </button>
       </div>

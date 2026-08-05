@@ -23,6 +23,15 @@ canvas {
   max-width: 100%;
 }
 
+.scrollbar-hidden {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hidden::-webkit-scrollbar {
+  display: none;
+}
+
 @layer components {
   .card {
     @apply bg-white rounded-2xl shadow-ice border border-iceblue-100 p-5;
@@ -82,5 +91,28 @@ canvas {
   textarea,
   button {
     font-size: 16px;
+  }
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #bill-print,
+  #bill-print * {
+    visibility: visible;
+  }
+
+  #bill-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    background: white;
+    color: black;
+  }
+
+  #bill-print .print-hide {
+    display: none;
   }
 }

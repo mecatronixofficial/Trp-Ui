@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { FiPlus, FiEdit2, FiTrash2, FiKey, FiPower, FiBox } from 'react-icons/fi';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { FiPlus, FiEdit2, FiTrash2, FiKey, FiPower, FiBox, FiCheck } from 'react-icons/fi';
 import api from '../../../lib/api';
 import Modal from '../../../components/Modal';
 import { useAuth } from '../../../context/AuthContext';
-import { formatCurrency } from '../../../lib/api';
+import { formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 
 interface Truck {
   _id: string;
@@ -13,18 +14,32 @@ interface Truck {
   truckNumber: string;
   driverName: string;
   phoneNumber: string;
-  monthlySalary?: number;
   loginId: string;
   status: boolean;
   branch?: { _id: string; name: string; code: string } | string;
 }
 
-const emptyForm = { branch: '', truckName: '', truckNumber: '', driverName: '', phoneNumber: '', monthlySalary: '', loginId: '', password: '' };
+interface Worker {
+  _id: string;
+  name: string;
+  phoneNumber?: string;
+  role?: string;
+  truck?: { _id: string } | string;
+}
+
+const emptyForm = { branch: '', truckName: '', truckNumber: '', driverName: '', phoneNumber: '', loginId: '', password: '' };
+
+function last30Days() {
+  const date = new Date();
+  date.setDate(date.getDate() - 29);
+  return date.toISOString().slice(0, 10);
+}
 
 export default function TrucksPage() {
   const { user } = useAuth();
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Truck | null>(null);
@@ -37,19 +52,30 @@ export default function TrucksPage() {
   const [loadForm, setLoadForm] = useState({ date: new Date().toISOString().slice(0, 10), quantity: '', notes: '' });
   const [tripCheck, setTripCheck] = useState<any>(null);
   const [dailyTotals, setDailyTotals] = useState({ taken: 0, sold: 0, remaining: 0, salesAmount: 0, pendingAmount: 0 });
+  const [assignments, setAssignments] = useState<Record<string, number>>({});
+  const [assignInputs, setAssignInputs] = useState<Record<string, string>>({});
+  const [totalInputs, setTotalInputs] = useState<Record<string, string>>({});
+  const [savingAssign, setSavingAssign] = useState<string>('');
+  const [assignTarget, setAssignTarget] = useState<Truck | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<Truck | null>(null);
+  const [historyRange, setHistoryRange] = useState({ from: last30Days(), to: todayISO() });
+  const [historyRows, setHistoryRows] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const load = async () => {
     setLoading(true);
     const { data } = await api.get('/trucks');
     setTrucks(data);
+    api.get('/workers').then(({ data: workerRows }) => setWorkers(workerRows)).catch(() => setWorkers([]));
     const stockRows = await Promise.all(data.map((truck: Truck) => api.get(`/stock/truck/${truck._id}`).catch(() => ({ data: { totalStock: 0 } }))));
     setTruckStock(Object.fromEntries(data.map((truck: Truck, index: number) => [truck._id, Number(stockRows[index].data.totalStock || 0)])));
     const today = new Date().toISOString().slice(0, 10);
     const tomorrowDate = new Date(); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
     const tomorrow = tomorrowDate.toISOString().slice(0, 10);
-    const [dailyRows, todaySales] = await Promise.all([
+    const [dailyRows, todaySales, assignRows] = await Promise.all([
       api.get('/truck-loads/reconciliation', { params: { date: today } }).catch(() => ({ data: [] })),
       api.get('/sales', { params: { from: today, to: tomorrow } }).catch(() => ({ data: [] })),
+      api.get('/truck-assignments', { params: { date: today } }).catch(() => ({ data: [] })),
     ]);
     const barTotals = dailyRows.data.reduce((totals: any, row: any) => ({
       taken: totals.taken + Number(row.taken || 0),
@@ -61,6 +87,7 @@ export default function TrucksPage() {
       pendingAmount: totals.pendingAmount + Number(sale.balanceAmount || 0),
     }), { salesAmount: 0, pendingAmount: 0 });
     setDailyTotals({ ...barTotals, ...moneyTotals });
+    setAssignments(Object.fromEntries(assignRows.data.map((row: any) => [String(row.truck?._id || row.truck), Number(row.quantity || 0)])));
     setLoading(false);
   };
 
@@ -68,6 +95,8 @@ export default function TrucksPage() {
     load();
     if (user?.role === 'super_admin') api.get('/branches').then(({ data }) => setBranches(data.filter((branch: any) => branch.isActive)));
   }, [user?.role]);
+
+  const driverWorkers = useMemo(() => workers.filter((w) => w.role === 'Driver').sort((a, b) => a.name.localeCompare(b.name)), [workers]);
 
   const openCreate = () => {
     setEditing(null);
@@ -78,7 +107,12 @@ export default function TrucksPage() {
 
   const openEdit = (t: Truck) => {
     setEditing(t);
-    setForm({ truckName: t.truckName, truckNumber: t.truckNumber, driverName: t.driverName, phoneNumber: t.phoneNumber, monthlySalary: String(t.monthlySalary || '') });
+    setForm({
+      truckName: t.truckName,
+      truckNumber: t.truckNumber,
+      driverName: t.driverName,
+      phoneNumber: t.phoneNumber,
+    });
     setError('');
     setModalOpen(true);
   };
@@ -88,9 +122,9 @@ export default function TrucksPage() {
     setError('');
     try {
       if (editing) {
-        await api.patch(`/trucks/${editing._id}`, { ...form, monthlySalary: Number(form.monthlySalary) || 0 });
+        await api.patch(`/trucks/${editing._id}`, form);
       } else {
-        await api.post('/trucks', { ...form, monthlySalary: Number(form.monthlySalary) || 0 });
+        await api.post('/trucks', form);
       }
       setModalOpen(false);
       load();
@@ -119,6 +153,56 @@ export default function TrucksPage() {
     alert('Password reset successfully.');
   };
 
+  const saveAssignment = async (t: Truck) => {
+    const raw = assignInputs[t._id];
+    const addQty = Number(raw || 0);
+    if (!addQty || addQty <= 0) return;
+    const quantity = Number(assignments[t._id] || 0) + addQty;
+    setSavingAssign(t._id);
+    try {
+      await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity });
+      setAssignments({ ...assignments, [t._id]: quantity });
+      setAssignInputs({ ...assignInputs, [t._id]: '' });
+    } finally {
+      setSavingAssign('');
+    }
+  };
+
+  const saveTotalEdit = async (t: Truck) => {
+    const raw = totalInputs[t._id];
+    const current = Number(assignments[t._id] || 0);
+    const quantity = raw === undefined ? current : Number(raw) || 0;
+    if (quantity !== current) {
+      setSavingAssign(t._id);
+      try {
+        await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity });
+        setAssignments({ ...assignments, [t._id]: quantity });
+      } finally {
+        setSavingAssign('');
+      }
+    }
+    closeAssignModal(t._id);
+  };
+
+  const clearAssignment = async (t: Truck) => {
+    if (!Number(assignments[t._id] || 0)) return;
+    if (!confirm(`Clear today's assigned bars for "${t.truckName}"?`)) return;
+    setSavingAssign(t._id);
+    try {
+      await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity: 0 });
+      setAssignments({ ...assignments, [t._id]: 0 });
+      setTotalInputs((prev) => { const next = { ...prev }; delete next[t._id]; return next; });
+    } finally {
+      setSavingAssign('');
+    }
+  };
+
+  const closeAssignModal = (truckId: string) => {
+    setAssignTarget(null);
+    setAssignInputs((prev) => { const next = { ...prev }; delete next[truckId]; return next; });
+    setTotalInputs((prev) => { const next = { ...prev }; delete next[truckId]; return next; });
+  };
+
   const openTripCheck = async (truck: Truck) => {
     setLoadTarget(truck); setTripCheck(null); setError('');
     try { const { data } = await api.get('/truck-loads/reconciliation', { params: { truck: truck._id, date: loadForm.date } }); setTripCheck(data[0] || { truckId: truck._id, date: loadForm.date, taken: 0, sold: 0, returned: 0, wastage: 0, remaining: 0, checked: false }); }
@@ -128,6 +212,38 @@ export default function TrucksPage() {
     if (!loadTarget || !tripCheck) return;
     await api.post('/truck-loads/reconciliation/check', { truck: loadTarget._id, date: loadForm.date });
     setTripCheck({ ...tripCheck, checked: true, checkedAt: new Date().toISOString() });
+  };
+
+  const loadHistory = async (truck: Truck, range: { from: string; to: string }) => {
+    setHistoryLoading(true);
+    setError('');
+    try {
+      const params = { truck: truck._id, from: range.from, to: range.to };
+      const [loadRows, saleRows] = await Promise.all([
+        api.get('/truck-loads', { params }),
+        api.get('/sales', { params }),
+      ]);
+      const byDate: Record<string, { date: string; taken: number; sold: number; salesAmount: number; pendingAmount: number }> = {};
+      const ensure = (date: string) => byDate[date] ||= { date, taken: 0, sold: 0, salesAmount: 0, pendingAmount: 0 };
+      for (const row of loadRows.data) ensure(String(row.date).slice(0, 10)).taken += Number(row.quantity || 0);
+      for (const sale of saleRows.data) {
+        const row = ensure(String(sale.date).slice(0, 10));
+        row.sold += (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0);
+        row.salesAmount += Number(sale.totalAmount || 0);
+        row.pendingAmount += Number(sale.balanceAmount || 0);
+      }
+      setHistoryRows(Object.values(byDate).sort((a, b) => b.date.localeCompare(a.date)));
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Could not load truck history');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openHistory = (truck: Truck) => {
+    setHistoryTarget(truck);
+    setHistoryRows([]);
+    loadHistory(truck, historyRange);
   };
 
   return (
@@ -156,15 +272,12 @@ export default function TrucksPage() {
         {loading ? (
           <p className="text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[700px]">
+          <table className="table-base min-w-[600px]">
             <thead>
               <tr>
                 {user?.role === 'super_admin' && <th>Branch</th>}
                 <th>Truck</th>
                 <th>Number</th>
-                <th>Driver</th>
-                <th>Phone</th>
-                <th>Login ID</th>
                 <th>Ice Bars In Truck</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -174,11 +287,12 @@ export default function TrucksPage() {
               {trucks.map((t) => (
                 <tr key={t._id}>
                   {user?.role === 'super_admin' && <td>{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
-                  <td className="font-medium">{t.truckName}</td>
+                  <td>
+                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-iceblue-700 underline-offset-2 hover:underline">
+                      {t.truckName}
+                    </Link>
+                  </td>
                   <td>{t.truckNumber}</td>
-                  <td>{t.driverName}</td>
-                  <td>{t.phoneNumber}</td>
-                  <td>{t.loginId}</td>
                   <td><span className={`font-bold ${truckStock[t._id] < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{truckStock[t._id] || 0}</span></td>
                   <td>
                     <span className={`pill ${t.status ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
@@ -227,18 +341,6 @@ export default function TrucksPage() {
               <label className="label-text">Truck Number</label>
               <input className="input-field" required value={form.truckNumber} onChange={(e) => setForm({ ...form, truckNumber: e.target.value })} />
             </div>
-            <div>
-              <label className="label-text">Driver Name</label>
-              <input className="input-field" required value={form.driverName} onChange={(e) => setForm({ ...form, driverName: e.target.value })} />
-            </div>
-            <div>
-              <label className="label-text">Phone Number</label>
-              <input className="input-field" required value={form.phoneNumber} onChange={(e) => setForm({ ...form, phoneNumber: e.target.value })} />
-            </div>
-            <div>
-              <label className="label-text">Driver Monthly Salary</label>
-              <input type="number" min={0} step="0.01" className="input-field" required value={form.monthlySalary} onChange={(e) => setForm({ ...form, monthlySalary: e.target.value })} />
-            </div>
             {!editing && (
               <>
                 <div>
@@ -251,6 +353,30 @@ export default function TrucksPage() {
                 </div>
               </>
             )}
+            <div>
+              <label className="label-text">Driver</label>
+              <select
+                className="input-field"
+                value=""
+                onChange={(e) => {
+                  const selected = driverWorkers.find((w) => w._id === e.target.value);
+                  if (selected) setForm({ ...form, driverName: selected.name, phoneNumber: selected.phoneNumber || '' });
+                }}
+              >
+                <option value="">Select driver</option>
+                {driverWorkers.map((w) => (
+                  <option key={w._id} value={w._id}>{w.name}{w.phoneNumber ? ` (${w.phoneNumber})` : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="label-text">Driver Name</label>
+              <input className="input-field" required value={form.driverName} onChange={(e) => setForm({ ...form, driverName: e.target.value })} />
+            </div>
+            <div>
+              <label className="label-text">Phone Number</label>
+              <input className="input-field" required value={form.phoneNumber} onChange={(e) => setForm({ ...form, phoneNumber: e.target.value })} />
+            </div>
             {error && <p className="text-red-500 text-sm">{error}</p>}
             <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Truck'}</button>
           </form>
@@ -269,6 +395,85 @@ export default function TrucksPage() {
         </Modal>
       )}
 
+      {assignTarget && (
+        <Modal title={`Today's Bars: ${assignTarget.truckName}`} onClose={() => closeAssignModal(assignTarget._id)}>
+          <div className="space-y-5">
+            <div className="rounded-2xl bg-iceblue-50 p-4 text-center">
+              <p className="text-xs font-semibold uppercase text-navy-800/45">Assigned Today</p>
+              <p className="mt-1 font-display text-3xl font-bold text-navy-900">{assignments[assignTarget._id] || 0} bars</p>
+            </div>
+
+            <div>
+              <label className="label-text">Add Bars</label>
+              <div className="flex flex-wrap gap-2">
+                {['0.25', '0.50', '0.75', '1'].map((val) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setAssignInputs({ ...assignInputs, [assignTarget._id]: val })}
+                    className={`pill ${assignInputs[assignTarget._id] === val ? 'bg-iceblue-600 text-white' : 'bg-iceblue-50 text-iceblue-700 hover:bg-iceblue-100'}`}
+                  >
+                    {val}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <input
+                  type="number"
+                  min={0.25}
+                  step={0.25}
+                  placeholder="Quantity"
+                  className="input-field h-11 flex-1"
+                  value={assignInputs[assignTarget._id] ?? ''}
+                  onChange={(e) => setAssignInputs({ ...assignInputs, [assignTarget._id]: e.target.value })}
+                />
+                <button
+                  type="button"
+                  onClick={() => saveAssignment(assignTarget)}
+                  disabled={savingAssign === assignTarget._id}
+                  className="btn-primary flex shrink-0 items-center gap-2 px-5 disabled:opacity-50"
+                >
+                  <FiCheck /> Add
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="label-text">Set Exact Total</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  step={0.25}
+                  className="input-field h-11 flex-1"
+                  value={totalInputs[assignTarget._id] ?? String(assignments[assignTarget._id] || 0)}
+                  onChange={(e) => setTotalInputs({ ...totalInputs, [assignTarget._id]: e.target.value })}
+                />
+                <button
+                  type="button"
+                  onClick={() => saveTotalEdit(assignTarget)}
+                  disabled={savingAssign === assignTarget._id}
+                  className="btn-secondary shrink-0 px-5 disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+
+            {error && <p className="text-sm text-red-500">{error}</p>}
+
+            <button
+              type="button"
+              onClick={() => clearAssignment(assignTarget)}
+              disabled={savingAssign === assignTarget._id || !assignments[assignTarget._id]}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50"
+            >
+              <FiTrash2 /> Clear Today&apos;s Assignment
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {loadTarget && (
         <Modal title={`Daily Check: ${loadTarget.truckName}`} onClose={() => setLoadTarget(null)}>
           <div className="space-y-4">
@@ -278,6 +483,93 @@ export default function TrucksPage() {
             </div>}
             {error && <p className="text-sm text-red-500">{error}</p>}
             {tripCheck?.checked ? <p className="rounded-2xl bg-emerald-50 px-4 py-3 text-center font-semibold text-emerald-700">Checked by admin</p> : <button onClick={approveTrip} disabled={!tripCheck || !tripCheck.taken} className="btn-primary w-full disabled:opacity-50">Check & Approve Daily Account</button>}
+          </div>
+        </Modal>
+      )}
+
+      {historyTarget && (
+        <Modal title={`Daily History: ${historyTarget.truckName}`} onClose={() => setHistoryTarget(null)} wide>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 rounded-2xl bg-iceblue-50 p-4 sm:grid-cols-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Truck</p>
+                <p className="mt-1 font-bold text-navy-900">{historyTarget.truckName}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Truck Number</p>
+                <p className="mt-1 font-bold text-navy-900">{historyTarget.truckNumber}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Driver</p>
+                <p className="mt-1 font-bold text-navy-900">{historyTarget.driverName}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Phone</p>
+                <p className="mt-1 font-bold text-navy-900">{historyTarget.phoneNumber}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Login ID</p>
+                <p className="mt-1 font-bold text-navy-900">{historyTarget.loginId}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Ice Bars In Truck</p>
+                <p className={`mt-1 font-bold ${(truckStock[historyTarget._id] || 0) < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{truckStock[historyTarget._id] || 0}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label className="label-text">From</label>
+                <input type="date" className="input-field" value={historyRange.from} onChange={(e) => setHistoryRange({ ...historyRange, from: e.target.value })} />
+              </div>
+              <div>
+                <label className="label-text">To</label>
+                <input type="date" className="input-field" value={historyRange.to} onChange={(e) => setHistoryRange({ ...historyRange, to: e.target.value })} />
+              </div>
+              <button type="button" onClick={() => loadHistory(historyTarget, historyRange)} className="btn-secondary">Apply</button>
+            </div>
+            {error && <p className="text-sm text-red-500">{error}</p>}
+            <div className="overflow-x-auto">
+              {historyLoading ? (
+                <p className="text-navy-800/50">Loading...</p>
+              ) : (
+                <table className="table-base min-w-[600px]">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Bars Taken</th>
+                      <th>Bars Sold</th>
+                      <th>Selling Amount</th>
+                      <th>Pending Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {historyRows.map((row) => (
+                      <tr key={row.date}>
+                        <td>{formatDate(row.date)}</td>
+                        <td>{row.taken}</td>
+                        <td>{row.sold}</td>
+                        <td className="font-semibold">{formatCurrency(row.salesAmount)}</td>
+                        <td className={row.pendingAmount > 0 ? 'font-semibold text-red-500' : ''}>{formatCurrency(row.pendingAmount)}</td>
+                      </tr>
+                    ))}
+                    {historyRows.length === 0 && (
+                      <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No records for the selected range.</td></tr>
+                    )}
+                  </tbody>
+                  {historyRows.length > 0 && (
+                    <tfoot>
+                      <tr className="font-semibold">
+                        <td>Total</td>
+                        <td>{historyRows.reduce((sum, row) => sum + row.taken, 0)}</td>
+                        <td>{historyRows.reduce((sum, row) => sum + row.sold, 0)}</td>
+                        <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.salesAmount, 0))}</td>
+                        <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.pendingAmount, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              )}
+            </div>
           </div>
         </Modal>
       )}
