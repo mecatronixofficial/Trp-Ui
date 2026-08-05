@@ -7,15 +7,17 @@ export default function Modal({
   onClose,
   children,
   wide,
+  full,
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   wide?: boolean;
+  full?: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-navy-900/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
-      <div className={`max-h-[94dvh] w-full overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-2xl ${wide ? 'sm:max-w-2xl' : 'sm:max-w-md'}`}>
+      <div className={`scrollbar-hidden max-h-[94dvh] w-full overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[90vh] sm:rounded-2xl ${full ? 'sm:max-w-[calc(100vw-2rem)] xl:max-w-6xl' : wide ? 'sm:max-w-2xl' : 'sm:max-w-md'}`}>
         <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:px-6 sm:py-4">
           <h2 className="min-w-0 truncate font-display text-base font-semibold sm:text-lg">{title}</h2>
           <button onClick={onClose} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-navy-800/50 hover:bg-iceblue-50 hover:text-navy-900">

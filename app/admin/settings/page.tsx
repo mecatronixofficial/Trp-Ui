@@ -64,6 +64,24 @@ export default function SettingsPage() {
         <label className="label-text">Low Stock Alert Threshold (bars)</label>
         <input type="number" min={0} className="input-field" value={form.lowStockThreshold || 0} onChange={(e) => updateField('lowStockThreshold', Number(e.target.value))} />
       </div>
+      <div>
+        <p className="text-xs font-semibold uppercase text-iceblue-600">Production boxes</p>
+        <h3 className="mt-1 font-display text-lg font-bold text-navy-900">Box counter setup</h3>
+        <p className="mt-1 text-sm text-navy-800/60">
+          Boxes are numbered 1 to Total Boxes and wrap back to 1. Each day&apos;s production is logged as an
+          opening and closing box reading, and bars produced = boxes made &times; bars per box.
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label-text">Total Boxes</label>
+          <input type="number" min={1} className="input-field" value={form.totalBoxes ?? 200} onChange={(e) => updateField('totalBoxes', Number(e.target.value))} />
+        </div>
+        <div>
+          <label className="label-text">Bars per Box</label>
+          <input type="number" min={1} className="input-field" value={form.barsPerBox ?? 2} onChange={(e) => updateField('barsPerBox', Number(e.target.value))} />
+        </div>
+      </div>
       {saved && <p className="text-emerald-600 text-sm">Settings saved.</p>}
       <button className="btn-primary w-full" disabled={saving}>{saving ? 'Saving...' : 'Save Settings'}</button>
     </form>

@@ -3,8 +3,8 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  FiGrid, FiTruck, FiUsers, FiBox, FiDollarSign, FiShoppingCart,
-  FiTrash2, FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch,
+  FiGrid, FiTruck, FiUsers, FiBox, FiShoppingCart,
+  FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign,
 } from 'react-icons/fi';
 import { TbSnowflake } from 'react-icons/tb';
 import { useAuth } from '../context/AuthContext';
@@ -15,9 +15,8 @@ const links = [
   { href: '/admin/customers', label: 'Customers', icon: FiUsers },
   { href: '/admin/workers', label: 'Workers', icon: FiUserCheck },
   { href: '/admin/production', label: 'Production', icon: FiBox },
-  { href: '/admin/making-cost', label: 'Making Cost', icon: FiDollarSign },
   { href: '/admin/sales', label: 'Sales', icon: FiShoppingCart },
-  { href: '/admin/wastage', label: 'Wastage', icon: FiTrash2 },
+  { href: '/admin/expenses', label: 'Expenses', icon: FiDollarSign },
   { href: '/admin/reports', label: 'Reports', icon: FiBarChart2 },
   { href: '/admin/settings', label: 'Settings', icon: FiSettings },
 ];

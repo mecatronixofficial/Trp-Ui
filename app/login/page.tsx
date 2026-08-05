@@ -90,6 +90,20 @@ export default function LoginPage() {
     router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
   }, [user, authLoading, router]);
 
+  useEffect(() => {
+    if (!forgotOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !resetLoading) closeForgotPassword();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [forgotOpen, resetLoading]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -267,6 +281,7 @@ export default function LoginPage() {
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       autoComplete="username"
+                      autoFocus
                       required
                     />
                   </div>
@@ -310,7 +325,7 @@ export default function LoginPage() {
               </div>
 
               {error && (
-                <p className="mt-5 flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                <p role="alert" className="mt-5 flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
                   <FiAlertCircle className="mt-0.5 shrink-0" />
                   {error}
                 </p>
@@ -345,15 +360,25 @@ export default function LoginPage() {
       </div>
 
       {forgotOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/60 px-4 py-6 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-[2rem] border border-white/30 bg-white p-5 text-navy-900 shadow-2xl shadow-cyan-950/40 sm:p-6">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/60 px-4 py-6 backdrop-blur-sm"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !resetLoading) closeForgotPassword();
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-password-heading"
+            className="w-full max-w-lg rounded-[2rem] border border-white/30 bg-white p-5 text-navy-900 shadow-2xl shadow-cyan-950/40 sm:p-6"
+          >
             <div className="mb-5 flex items-start justify-between gap-4">
               <div>
                 <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-iceblue-50 text-iceblue-700">
                   <FiShield className="text-2xl" />
                 </div>
                 <p className="text-xs font-semibold uppercase text-iceblue-600">Admin only</p>
-                <h3 className="mt-1 font-display text-2xl font-bold">Reset password</h3>
+                <h3 id="reset-password-heading" className="mt-1 font-display text-2xl font-bold">Reset password</h3>
                 <p className="mt-1 text-sm leading-6 text-navy-800/60">
                   Receive an OTP by mail, mobile SMS, or WhatsApp and set a new admin password.
                 </p>
@@ -362,7 +387,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={closeForgotPassword}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-iceblue-100 text-navy-800/60 transition hover:bg-iceblue-50 hover:text-navy-900"
+                disabled={resetLoading}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-iceblue-100 text-navy-800/60 transition hover:bg-iceblue-50 hover:text-navy-900 disabled:cursor-not-allowed disabled:opacity-50"
                 aria-label="Close forgot password"
               >
                 <FiArrowLeft />
@@ -412,14 +438,14 @@ export default function LoginPage() {
                 </div>
 
                 {resetError && (
-                  <p className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                  <p role="alert" className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
                     <FiAlertCircle className="mt-0.5 shrink-0" />
                     {resetError}
                   </p>
                 )}
 
                 {resetSuccess && (
-                  <p className="flex items-start gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                  <p role="status" className="flex items-start gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
                     <FiCheckCircle className="mt-0.5 shrink-0" />
                     {resetSuccess}
                   </p>
@@ -491,14 +517,14 @@ export default function LoginPage() {
                 </div>
 
                 {resetError && (
-                  <p className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                  <p role="alert" className="flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
                     <FiAlertCircle className="mt-0.5 shrink-0" />
                     {resetError}
                   </p>
                 )}
 
                 {resetSuccess && (
-                  <p className="flex items-start gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
+                  <p role="status" className="flex items-start gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700">
                     <FiCheckCircle className="mt-0.5 shrink-0" />
                     {resetSuccess}
                   </p>

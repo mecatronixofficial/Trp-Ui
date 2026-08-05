@@ -13,7 +13,7 @@ export default function Home() {
   useEffect(() => {
     if (loading) return;
     if (!user) router.replace('/login');
-    else router.replace(user.role === 'admin' ? '/admin/dashboard' : '/truck/dashboard');
+    else router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
   }, [user, loading, router]);
 
   return <AppLoadingScreen message={message} role={user?.role || null} />;

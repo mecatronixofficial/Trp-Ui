@@ -6,8 +6,6 @@ import { usePathname } from 'next/navigation';
 
 const titles: Record<string, string> = {
   '/truck/dashboard': 'Driver Dashboard',
-  '/truck/sales': 'Add Sale',
-  '/truck/wastage': 'Add Wastage',
 };
 
 export default function TruckLayout({ children }: { children: React.ReactNode }) {

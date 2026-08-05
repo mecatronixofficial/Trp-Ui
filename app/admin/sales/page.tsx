@@ -1,68 +1,166 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { FiPlus, FiEdit2, FiTrash2, FiPrinter, FiFilter, FiDollarSign } from 'react-icons/fi';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { FiAlertCircle, FiDollarSign, FiEdit2, FiFilter, FiPlus, FiPrinter, FiRefreshCcw, FiTrash2 } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { PAYMENT_MODES, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
+import { PAYMENT_MODES, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
 
+interface TruckOption { _id: string; truckName: string }
+interface SaleItem { size?: string; quantity?: number; pricePerBar?: number; total?: number }
+interface Sale {
+  _id: string;
+  date: string;
+  truck?: { _id: string; truckName: string } | null;
+  customer?: { _id: string; name: string; phoneNumber?: string } | null;
+  saleType: string;
+  items?: SaleItem[];
+  totalAmount: number;
+  paidAmount: number;
+  balanceAmount: number;
+  paymentMode: string;
+}
+interface Filters { from: string; to: string; saleType: string }
+
+const emptyFilters: Filters = { from: '', to: '', saleType: '' };
+const indiaDateISO = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+const startOfIndiaDay = (date: string) => `${date}T00:00:00.000+05:30`;
+const endOfIndiaDay = (date: string) => `${date}T23:59:59.999+05:30`;
+const errorMessage = (error: any, fallback: string) => error?.response?.data?.message || error?.message || fallback;
+
+const formatDateTime = (date: string | Date) => new Date(date).toLocaleString('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const formatTime = (date: string | Date) => new Date(date).toLocaleTimeString('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 export default function AdminSalesPage() {
-  const [sales, setSales] = useState<any[]>([]);
-  const [trucks, setTrucks] = useState<any[]>([]);
-  const [customers, setCustomers] = useState<any[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [trucks, setTrucks] = useState<TruckOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<any>(null);
-  const [printSale, setPrintSale] = useState<any>(null);
-  const [paymentTarget, setPaymentTarget] = useState<any>(null);
+  const [editing, setEditing] = useState<Sale | null>(null);
+  const [printSale, setPrintSale] = useState<Sale | null>(null);
+  const [paymentTarget, setPaymentTarget] = useState<Sale | null>(null);
   const [savingPayment, setSavingPayment] = useState(false);
-  const [paymentForm, setPaymentForm] = useState({ date: todayISO(), amount: '', paymentMode: 'cash', notes: '' });
+  const [deletingId, setDeletingId] = useState('');
+  const [paymentForm, setPaymentForm] = useState({ date: indiaDateISO(), amount: '', paymentMode: 'cash', notes: '' });
+  const [paymentError, setPaymentError] = useState('');
+  const [pageError, setPageError] = useState('');
 
-  const [filters, setFilters] = useState({ from: '', to: '', truck: '', customer: '', saleType: '' });
+  const [filters, setFilters] = useState<Filters>(emptyFilters);
 
-  const load = async () => {
+  const load = async (activeFilters: Filters = filters) => {
     setLoading(true);
-    const params: any = {};
-    Object.entries(filters).forEach(([k, v]) => { if (v) params[k] = v; });
-    const { data } = await api.get('/sales', { params });
-    setSales(data);
-    setLoading(false);
+    setPageError('');
+    try {
+      const params: Record<string, string> = {};
+      const day = indiaDateISO();
+      if (activeFilters.from) params.from = startOfIndiaDay(activeFilters.from);
+      if (activeFilters.to) params.to = endOfIndiaDay(activeFilters.to);
+      if (!activeFilters.from && !activeFilters.to) {
+        params.from = startOfIndiaDay(day);
+        params.to = endOfIndiaDay(day);
+      }
+      if (activeFilters.saleType) params.saleType = activeFilters.saleType;
+      const { data } = await api.get('/sales', { params });
+      setSales(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setSales([]);
+      setPageError(errorMessage(error, 'Could not load sales.'));
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    api.get('/trucks').then((r) => setTrucks(r.data));
-    api.get('/customers').then((r) => setCustomers(r.data));
-    load();
+    api.get('/trucks')
+      .then((truckRows) => setTrucks(Array.isArray(truckRows.data) ? truckRows.data : []))
+      .catch((error) => setPageError(errorMessage(error, 'Could not load sales filters.')));
+    void load(emptyFilters);
   }, []);
+
+  const summary = useMemo(() => sales.reduce((total, sale) => ({
+    bars: total.bars + (sale.items || []).reduce((sum, item) => sum + getItemBarUsed(item), 0),
+    amount: total.amount + Number(sale.totalAmount || 0),
+    paid: total.paid + Number(sale.paidAmount || 0),
+    balance: total.balance + Number(sale.balanceAmount || 0),
+  }), { bars: 0, amount: 0, paid: 0, balance: 0 }), [sales]);
 
   const applyFilters = (e: React.FormEvent) => {
     e.preventDefault();
-    load();
+    if (filters.from && filters.to && filters.from > filters.to) {
+      setPageError('From date cannot be after To date.');
+      return;
+    }
+    void load(filters);
+  };
+
+  const resetFilters = () => {
+    setFilters(emptyFilters);
+    void load(emptyFilters);
+  };
+
+  const closeSaleModal = () => {
+    setModalOpen(false);
+    setEditing(null);
   };
 
   const remove = async (id: string) => {
     if (!confirm('Delete this sale entry?')) return;
-    await api.delete(`/sales/${id}`);
-    load();
+    setDeletingId(id);
+    setPageError('');
+    try {
+      await api.delete(`/sales/${id}`);
+      await load(filters);
+    } catch (error: any) {
+      setPageError(errorMessage(error, 'Could not delete the sale.'));
+    } finally {
+      setDeletingId('');
+    }
   };
 
-  const openPayment = (sale: any) => {
+  const openPayment = (sale: Sale) => {
     setPaymentTarget(sale);
-    setPaymentForm({ date: todayISO(), amount: String(sale.balanceAmount || ''), paymentMode: 'cash', notes: '' });
+    setPaymentForm({ date: indiaDateISO(), amount: String(sale.balanceAmount || ''), paymentMode: 'cash', notes: '' });
+    setPaymentError('');
   };
 
   const savePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentTarget) return;
+    setPaymentError('');
+    const amount = Number(paymentForm.amount);
+    if (!amount || amount <= 0) {
+      setPaymentError('Enter a valid amount');
+      return;
+    }
+    if (amount > paymentTarget.balanceAmount) {
+      setPaymentError('Amount cannot exceed the balance due');
+      return;
+    }
     setSavingPayment(true);
     try {
       await api.post(`/sales/${paymentTarget._id}/payments`, {
         ...paymentForm,
-        amount: Number(paymentForm.amount),
+        amount,
       });
       setPaymentTarget(null);
-      load();
+      await load(filters);
+    } catch (err: any) {
+      setPaymentError(err?.response?.data?.message || 'Could not update payment');
     } finally {
       setSavingPayment(false);
     }
@@ -80,20 +178,6 @@ export default function AdminSalesPage() {
           <input type="date" className="input-field" value={filters.to} onChange={(e) => setFilters({ ...filters, to: e.target.value })} />
         </div>
         <div>
-          <label className="label-text">Truck</label>
-          <select className="input-field" value={filters.truck} onChange={(e) => setFilters({ ...filters, truck: e.target.value })}>
-            <option value="">All</option>
-            {trucks.map((t) => <option key={t._id} value={t._id}>{t.truckName}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="label-text">Customer</label>
-          <select className="input-field" value={filters.customer} onChange={(e) => setFilters({ ...filters, customer: e.target.value })}>
-            <option value="">All</option>
-            {customers.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
-          </select>
-        </div>
-        <div>
           <label className="label-text">Sale Type</label>
           <select className="input-field" value={filters.saleType} onChange={(e) => setFilters({ ...filters, saleType: e.target.value })}>
             <option value="">All</option>
@@ -101,23 +185,44 @@ export default function AdminSalesPage() {
             <option value="wholesale">Wholesale</option>
           </select>
         </div>
-        <button className="btn-secondary flex items-center gap-2"><FiFilter /> Apply</button>
+        <button type="submit" className="btn-secondary flex items-center gap-2"><FiFilter /> Apply</button>
+        <button type="button" onClick={resetFilters} className="btn-secondary flex items-center gap-2">
+          <FiRefreshCcw /> Today
+        </button>
         <button type="button" onClick={() => { setEditing(null); setModalOpen(true); }} className="btn-primary flex items-center gap-2 ml-auto">
           <FiPlus /> Add Sale
         </button>
       </form>
 
+      {pageError && (
+        <div className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700" role="alert">
+          <FiAlertCircle className="mt-0.5 shrink-0" />
+          <span>{pageError}</span>
+        </div>
+      )}
+
+      {!loading && !pageError && (
+        <div>
+          <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Sales Summary</p>
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <SalesSummary label="Ice Bars Sold" value={formatBarQuantity(summary.bars) || '0'} />
+            <SalesSummary label="Sales Amount" value={formatCurrency(summary.amount)} />
+            <SalesSummary label="Amount Paid" value={formatCurrency(summary.paid)} />
+            <SalesSummary label="Balance Due" value={formatCurrency(summary.balance)} danger={summary.balance > 0} />
+          </div>
+        </div>
+      )}
+
       <div className="card overflow-x-auto">
         {loading ? (
           <p className="text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[900px]">
+          <table className="table-base min-w-[880px]">
             <thead>
               <tr>
                 <th>Date</th>
-                <th>Truck</th>
                 <th>Customer</th>
-                <th>Type</th>
+                <th>Sale Type</th>
                 <th>Bar Used</th>
                 <th>Total</th>
                 <th>Paid</th>
@@ -128,44 +233,62 @@ export default function AdminSalesPage() {
             <tbody>
               {sales.map((s) => (
                 <tr key={s._id}>
-                  <td>{formatDate(s.date)}</td>
-                  <td>{s.truck?.truckName}</td>
-                  <td>{s.customer?.name}</td>
-                  <td className="capitalize">{s.saleType}</td>
-                  <td>{formatBarQuantity(s.items.reduce((a: number, i: any) => a + getItemBarUsed(i), 0))}</td>
+                  <td>
+                    <p className="whitespace-nowrap font-medium text-navy-900">{formatDate(s.date)}</p>
+                    <p className="mt-0.5 text-xs text-navy-800/45">{formatTime(s.date)}</p>
+                  </td>
+                  <td>
+                    {s.customer?._id ? (
+                      <Link
+                        href={`/admin/customers/${s.customer._id}`}
+                        className="font-medium text-iceblue-700 underline-offset-2 hover:underline"
+                      >
+                        {s.customer.name}
+                      </Link>
+                    ) : (
+                      <p className="font-medium text-navy-800/60">Unknown customer</p>
+                    )}
+                    <p className="mt-0.5 text-xs text-navy-800/45">{s.customer?.phoneNumber || 'No phone'}</p>
+                  </td>
+                  <td>
+                    <span className={`pill capitalize ${s.saleType === 'wholesale' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                      {s.saleType}
+                    </span>
+                  </td>
+                  <td>{formatBarQuantity((s.items || []).reduce((sum, item) => sum + getItemBarUsed(item), 0)) || '0'}</td>
                   <td className="font-semibold">{formatCurrency(s.totalAmount)}</td>
                   <td>{formatCurrency(s.paidAmount)}</td>
                   <td className={s.balanceAmount > 0 ? 'text-red-500 font-semibold' : ''}>{formatCurrency(s.balanceAmount)}</td>
                   <td>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => setPrintSale(s)} className="text-navy-700"><FiPrinter /></button>
+                      <button type="button" onClick={() => setPrintSale(s)} className="text-navy-700 hover:text-navy-900" title="Print sale" aria-label="Print sale"><FiPrinter /></button>
                       {s.balanceAmount > 0 && (
-                        <button onClick={() => openPayment(s)} className="text-emerald-600" title="Collect payment">
+                        <button type="button" onClick={() => openPayment(s)} className="text-emerald-600 hover:text-emerald-700" title="Collect payment" aria-label="Collect payment">
                           <FiDollarSign />
                         </button>
                       )}
-                      <button onClick={() => { setEditing(s); setModalOpen(true); }} className="text-iceblue-600"><FiEdit2 /></button>
-                      <button onClick={() => remove(s._id)} className="text-red-500"><FiTrash2 /></button>
+                      <button type="button" onClick={() => { setEditing(s); setModalOpen(true); }} className="text-iceblue-600 hover:text-iceblue-700" title="Edit sale" aria-label="Edit sale"><FiEdit2 /></button>
+                      <button type="button" onClick={() => remove(s._id)} disabled={deletingId === s._id} className="text-red-500 hover:text-red-600 disabled:opacity-40" title="Delete sale" aria-label="Delete sale"><FiTrash2 /></button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {sales.length === 0 && <tr><td colSpan={9} className="text-center py-6 text-navy-800/50">No sales found for the selected filters.</td></tr>}
+              {sales.length === 0 && <tr><td colSpan={8} className="text-center py-6 text-navy-800/50">No sales found for the selected filters.</td></tr>}
             </tbody>
           </table>
         )}
       </div>
 
       {modalOpen && (
-        <Modal title={editing ? 'Edit Sale' : 'Add Sale'} onClose={() => setModalOpen(false)} wide>
-          <SaleForm trucks={trucks} initial={editing} onSaved={() => { setModalOpen(false); load(); }} />
+        <Modal title={editing ? 'Edit Sale' : 'Add Sale'} onClose={closeSaleModal} wide>
+          <SaleForm trucks={trucks} initial={editing} onSaved={() => { closeSaleModal(); void load(filters); }} />
         </Modal>
       )}
 
       {printSale && <PrintBill sale={printSale} onClose={() => setPrintSale(null)} />}
 
       {paymentTarget && (
-        <Modal title={`Collect Payment: ${paymentTarget.customer?.name || 'Customer'}`} onClose={() => setPaymentTarget(null)}>
+        <Modal title={`Collect Payment: ${paymentTarget.customer?.name || 'Customer'}`} onClose={() => { setPaymentTarget(null); setPaymentError(''); }}>
           <form onSubmit={savePayment} className="space-y-4">
             <div className="rounded-2xl bg-iceblue-50 p-4 text-sm">
               <div className="flex justify-between gap-3">
@@ -174,7 +297,11 @@ export default function AdminSalesPage() {
               </div>
               <div className="mt-2 flex justify-between gap-3">
                 <span className="text-navy-800/60">Customer</span>
-                <strong>{paymentTarget.customer?.name}</strong>
+                {paymentTarget.customer?._id ? (
+                  <Link href={`/admin/customers/${paymentTarget.customer._id}`} className="font-bold text-iceblue-700 underline-offset-2 hover:underline">
+                    {paymentTarget.customer.name}
+                  </Link>
+                ) : <strong>Unknown customer</strong>}
               </div>
               <div className="mt-2 flex justify-between gap-3">
                 <span className="text-navy-800/60">Balance</span>
@@ -231,6 +358,8 @@ export default function AdminSalesPage() {
               />
             </div>
 
+            {paymentError && <p className="text-red-500 text-sm">{paymentError}</p>}
+
             <button className="btn-primary flex h-12 w-full items-center justify-center gap-2" disabled={savingPayment}>
               <FiDollarSign /> {savingPayment ? 'Updating...' : 'Update Payment'}
             </button>
@@ -241,7 +370,16 @@ export default function AdminSalesPage() {
   );
 }
 
-function PrintBill({ sale, onClose }: { sale: any; onClose: () => void }) {
+function SalesSummary({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <div className="card">
+      <p className="text-xs font-semibold uppercase tracking-wide text-navy-800/50">{label}</p>
+      <p className={`mt-2 text-xl font-bold ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+    </div>
+  );
+}
+
+function PrintBill({ sale, onClose }: { sale: Sale; onClose: () => void }) {
   return (
     <Modal title="Bill" onClose={onClose}>
       <div id="bill-print" className="text-sm space-y-3">
@@ -250,22 +388,24 @@ function PrintBill({ sale, onClose }: { sale: any; onClose: () => void }) {
           <p className="text-navy-800/60">Ice Bar Sales Receipt</p>
         </div>
         <div className="flex justify-between text-xs text-navy-800/70">
-          <span>Date: {formatDate(sale.date)}</span>
-          <span>Truck: {sale.truck?.truckName}</span>
+          <span>Date: {formatDateTime(sale.date)}</span>
         </div>
-        <p className="text-xs">Customer: <strong>{sale.customer?.name}</strong></p>
+        <p className="text-xs">Customer: <strong>{sale.customer?.name || 'Unknown customer'}</strong></p>
         <table className="table-base">
           <thead><tr><th>Bar Used</th><th>Total</th></tr></thead>
           <tbody>
-            {sale.items.map((i: any, idx: number) => (
-              <tr key={idx}><td>{formatBarQuantity(getItemBarUsed(i))}</td><td>{formatCurrency(i.total)}</td></tr>
+            {(sale.items || []).map((item, index) => (
+              <tr key={index}>
+                <td>{formatBarQuantity(getItemBarUsed(item)) || '0'}</td>
+                <td>{formatCurrency(Number(item.total ?? (Number(item.quantity || 0) * Number(item.pricePerBar || 0))))}</td>
+              </tr>
             ))}
           </tbody>
         </table>
         <div className="flex justify-between font-semibold"><span>Total</span><span>{formatCurrency(sale.totalAmount)}</span></div>
         <div className="flex justify-between"><span>Paid ({sale.paymentMode})</span><span>{formatCurrency(sale.paidAmount)}</span></div>
         <div className="flex justify-between text-red-500 font-semibold"><span>Balance</span><span>{formatCurrency(sale.balanceAmount)}</span></div>
-        <button onClick={() => window.print()} className="btn-primary w-full">Print</button>
+        <button type="button" onClick={() => window.print()} className="btn-primary print-hide w-full">Print</button>
       </div>
     </Modal>
   );
