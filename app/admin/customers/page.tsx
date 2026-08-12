@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
@@ -79,6 +79,8 @@ export default function CustomersPage() {
   const [historyRows, setHistoryRows] = useState<HistoryDay[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [pageError, setPageError] = useState('');
+  const [formError, setFormError] = useState('');
 
   const customerTotals = useMemo(() => customers.reduce((totals, customer) => {
     const type = customer.customerType || (customer.truck ? 'truck' : 'local');
@@ -95,22 +97,33 @@ export default function CustomersPage() {
 
   const load = async (q?: string) => {
     setLoading(true);
-    const [{ data }, truckRows] = await Promise.all([
-      api.get('/customers', { params: { search: q } }),
-      api.get('/trucks'),
-    ]);
-    setCustomers(data);
-    setTrucks(truckRows.data);
-    setLoading(false);
+    setPageError('');
+    try {
+      const { data } = await api.get('/customers', { params: q ? { search: q } : {} });
+      setCustomers(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setCustomers([]);
+      setPageError(error?.response?.data?.message || error?.message || 'Could not load customers.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    load();
+    api.get('/trucks')
+      .then(({ data }) => setTrucks(Array.isArray(data) ? data : []))
+      .catch(() => setTrucks([]));
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => void load(search), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   const openCreate = () => {
     setEditing(null);
     setForm(emptyForm);
+    setFormError('');
     setModalOpen(true);
   };
 
@@ -118,16 +131,29 @@ export default function CustomersPage() {
     setEditing(c);
     const truckId = typeof c.truck === 'string' ? c.truck : c.truck?._id || '';
     setForm({ customerType: c.customerType || (truckId ? 'truck' : 'local'), name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType, truck: truckId });
+    setFormError('');
     setModalOpen(true);
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
+    const normalizedName = String(form.name || '').trim().toLocaleLowerCase();
+    const normalizedPhone = String(form.phoneNumber || '').replace(/\D/g, '');
+    const duplicate = customers.find((customer) => customer._id !== editing?._id && (customer.name.trim().toLocaleLowerCase() === normalizedName || (normalizedPhone && String(customer.phoneNumber || '').replace(/\D/g, '') === normalizedPhone)));
+    if (duplicate) {
+      setFormError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'A customer with this name already exists.' : 'A customer with this phone number already exists.');
+      return;
+    }
     const payload = { ...form, truck: form.customerType === 'truck' ? form.truck : null };
-    if (editing) await api.patch(`/customers/${editing._id}`, payload);
-    else await api.post('/customers', payload);
-    setModalOpen(false);
-    load(search);
+    try {
+      if (editing) await api.patch(`/customers/${editing._id}`, payload);
+      else await api.post('/customers', payload);
+      setModalOpen(false);
+      void load(search);
+    } catch (error: any) {
+      setFormError(error?.response?.data?.message || 'Could not save customer. A duplicate value may already exist.');
+    }
   };
 
   const remove = async (c: Customer) => {
@@ -208,93 +234,106 @@ export default function CustomersPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Customer Summary</p>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <CustomerSummaryCard label="Total Customers" value={customerTotals.total} />
-          <CustomerSummaryCard label="Truck Customers" value={customerTotals.truck} />
-          <CustomerSummaryCard label="Local Customers" value={customerTotals.local} />
-          <CustomerSummaryCard label="Truck Pending" value={formatCurrency(customerTotals.truckPending)} danger={customerTotals.truckPending > 0} />
-          <CustomerSummaryCard label="Local Pending" value={formatCurrency(customerTotals.localPending)} danger={customerTotals.localPending > 0} />
-        </div>
-      </div>
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div className="relative w-full sm:w-72">
-          <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
-          <input
-            className="input-field pl-9"
-            placeholder="Search customers..."
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              load(e.target.value);
-            }}
-          />
-        </div>
-        <button onClick={openCreate} className="btn-primary flex items-center gap-2 w-full sm:w-auto justify-center">
-          <FiPlus /> Add Customer
-        </button>
-      </div>
+    <div className="-mt-4 space-y-1 sm:-mt-5">
+      <section className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        <CustomerSummaryCard
+          icon={FiUsers}
+          label="Total Customers"
+          value={customerTotals.total}
+          helper={`Total Pending: ${formatCurrency(customerTotals.truckPending + customerTotals.localPending)}`}
+          danger={(customerTotals.truckPending + customerTotals.localPending) > 0}
+          tone="blue"
+        />
+        <CustomerSummaryCard
+          icon={FiTruck}
+          label="Truck Customers"
+          value={customerTotals.truck}
+          helper={`Truck Pending: ${formatCurrency(customerTotals.truckPending)}`}
+          danger={customerTotals.truckPending > 0}
+          tone="cyan"
+        />
+        <CustomerSummaryCard
+          icon={FiHome}
+          label="Local Customers"
+          value={customerTotals.local}
+          helper={`Local Pending: ${formatCurrency(customerTotals.localPending)}`}
+          danger={customerTotals.localPending > 0}
+          tone="violet"
+        />
+      </section>
 
-      <div className="card overflow-x-auto">
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
+          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">All Customers</h1>
+          <div className="relative min-w-0 flex-1">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
+            <input className="input-field h-10 pl-9" placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <button onClick={openCreate} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
+            <FiPlus /> Add Customer
+          </button>
+        </div>
+        {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
+        <div className="overflow-x-auto">
         {loading ? (
-          <p className="text-navy-800/50">Loading...</p>
+          <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[820px]">
-            <thead>
+          <table className="w-full min-w-[920px] table-fixed border-collapse text-left text-xs sm:text-sm">
+            <thead className="bg-slate-100 text-navy-900">
               <tr>
-                <th>Name</th>
-                <th>Phone</th>
-                <th>Customer Type</th>
-                <th>Truck / Local</th>
-                <th>Sale Type</th>
-                <th>Credit Balance</th>
-                <th>Actions</th>
+                <th className="w-[6%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Name</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Address</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Type</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Credit Balance</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {customers.map((c) => (
-                <tr key={c._id}>
-                  <td>
-                    <Link href={`/admin/customers/${c._id}`} className="font-medium text-iceblue-700 underline-offset-2 hover:underline">
+              {customers.map((c, index) => (
+                <tr key={c._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                  <td className="break-words border border-slate-300 px-2 py-3">
+                    <Link href={`/admin/customers/${c._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
                       {c.name}
                     </Link>
                   </td>
-                  <td>{c.phoneNumber}</td>
-                  <td>
-                    <span className={`pill ${(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'bg-iceblue-50 text-iceblue-700' : 'bg-emerald-50 text-emerald-700'}`}>
+                  <td className="break-all border border-slate-300 px-2 py-3">{c.phoneNumber || '-'}</td>
+                  <td className="break-words border border-slate-300 px-2 py-3">{c.address || '-'}</td>
+                  <td className="border border-slate-300 px-2 py-3 text-center">
+                    <span className="pill bg-slate-100 text-navy-900">
                       {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
                     </span>
                   </td>
-                  <td>
-                    {typeof c.truck === 'object' && c.truck ? (
-                      <span>{c.truck.truckName}</span>
-                    ) : (
-                      <span className="font-medium text-emerald-600">Local</span>
-                    )}
+                  <td className={`break-words border border-slate-300 px-2 py-3 text-center text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</td>
+                  <td className="border border-slate-300 px-2 py-3 text-center">
+                    <span className="pill bg-slate-100 text-navy-900">{c.isActive ? 'Active' : 'Inactive'}</span>
                   </td>
-                  <td className="capitalize">{c.defaultSaleType}</td>
-                  <td className={c.creditBalance > 0 ? 'text-red-500 font-semibold' : ''}>{formatCurrency(c.creditBalance)}</td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <button title="Price list" onClick={() => openPrices(c)} className="text-iceblue-600 hover:text-iceblue-700">
+                  <td className="border border-slate-300 px-2 py-3">
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button title="Price list" onClick={() => openPrices(c)} className="text-navy-900 hover:text-black">
                         <FiTag />
                       </button>
-                      <button title="Edit" onClick={() => openEdit(c)} className="text-navy-700 hover:text-navy-900">
+                      <button title="Edit" onClick={() => openEdit(c)} className="text-navy-900 hover:text-black">
                         <FiEdit2 />
                       </button>
-                      <button title="Delete" onClick={() => remove(c)} className="text-red-500 hover:text-red-600">
+                      <button title="Delete" onClick={() => remove(c)} className="text-navy-900 hover:text-black">
                         <FiTrash2 />
                       </button>
                     </div>
                   </td>
                 </tr>
               ))}
+              {customers.length === 0 && (
+                <tr><td colSpan={8} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No customers found.</td></tr>
+              )}
             </tbody>
           </table>
         )}
-      </div>
+        </div>
+      </section>
 
       {modalOpen && (
         <Modal title={editing ? 'Edit Customer' : 'Add Customer'} onClose={() => setModalOpen(false)}>
@@ -336,6 +375,7 @@ export default function CustomersPage() {
                 ))}
               </select>
             </div>}
+            {formError && <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-600">{formError}</p>}
             <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Customer'}</button>
           </form>
         </Modal>
@@ -589,11 +629,31 @@ export default function CustomersPage() {
   );
 }
 
-function CustomerSummaryCard({ label, value, danger = false }: { label: string; value: string | number; danger?: boolean }) {
-  return <div className="rounded-2xl border border-iceblue-100 bg-white p-4 shadow-sm">
-    <p className="text-[11px] font-semibold uppercase text-navy-800/45">{label}</p>
-    <p className={`mt-2 font-display text-xl font-bold ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
-  </div>;
+function CustomerSummaryCard({ icon: Icon, label, value, helper, danger = false, tone = 'blue' }: { icon: any; label: string; value: string | number; helper?: string; danger?: boolean; tone?: 'blue' | 'cyan' | 'violet' | 'amber' }) {
+  const styles = {
+    blue: { card: 'from-blue-50 to-white', icon: 'bg-blue-600', accent: 'bg-blue-500' },
+    cyan: { card: 'from-cyan-50 to-white', icon: 'bg-cyan-600', accent: 'bg-cyan-500' },
+    violet: { card: 'from-violet-50 to-white', icon: 'bg-violet-600', accent: 'bg-violet-500' },
+    amber: { card: 'from-amber-50 to-white', icon: 'bg-amber-500', accent: 'bg-amber-500' },
+  }[tone];
+  return (
+    <div className={`relative flex min-h-[108px] min-w-0 items-center gap-3 overflow-hidden rounded-2xl border bg-gradient-to-br px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
+      <span className={`absolute inset-y-0 left-0 w-1 ${danger ? 'bg-red-500' : styles.accent}`} />
+      <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-lg text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}>
+        <Icon />
+      </span>
+
+      <div className="min-w-0">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">{label}</p>
+        <p className={`mt-1 break-words font-display text-lg font-bold leading-tight ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+        {helper && (
+          <p className={`mt-0.5 text-xs font-semibold ${danger ? 'text-red-600' : 'text-navy-800/55'}`}>
+            {helper}
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function HistoryAmount({ label, value, tone }: { label: string; value: number; tone?: 'paid' | 'unpaid' }) {

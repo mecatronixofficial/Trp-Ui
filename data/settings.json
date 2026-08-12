@@ -1,0 +1,19 @@
+{
+  "businessName": "",
+  "businessLogo": "",
+  "address": "",
+  "phoneNumber": "",
+  "whatsappNumber": "",
+  "email": "",
+  "gstNumber": "",
+  "lowStockThreshold": 20,
+  "totalBoxes": 200,
+  "barsPerBox": 2,
+  "notificationEmail": true,
+  "notificationWhatsApp": true,
+  "invoicePrefix": "INV",
+  "currencySymbol": "₹",
+  "themeMode": "auto",
+  "defaultExpenseCategory": "Other Expenses",
+  "companyTagline": "Ice production and expense management made easy"
+}

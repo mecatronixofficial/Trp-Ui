@@ -17,6 +17,7 @@ import {
 } from 'react-icons/fi';
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
+import IceBlockSpinner from '../../../components/IceBlockSpinner';
 import { useAuth } from '../../../context/AuthContext';
 import api, { PAYMENT_MODES, WASTAGE_REASONS, formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 
@@ -43,7 +44,7 @@ const getErrorMessage = (error: unknown, fallback: string) => {
   return typeof response?.data?.message === 'string' ? response.data.message : fallback;
 };
 
-const getCustomerName = (sale: any) => sale.customer?.name || 'Customer';
+const getCustomerName = (sale: any) => sale.customer?.name || sale.customerName || 'Customer';
 const getQuantity = (sale: any) => sale.items?.reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0) || 0;
 
 type AssignmentAction = 'accept' | 'reject';
@@ -241,10 +242,7 @@ export default function TruckDashboardPage() {
   if (loading) {
     return (
       <div className="grid min-h-[55vh] place-items-center">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-2xl border-4 border-iceblue-100 border-t-iceblue-500" />
-          <p className="font-medium text-navy-800/70">Loading driver dashboard...</p>
-        </div>
+        <IceBlockSpinner label="Loading driver dashboard..." />
       </div>
     );
   }
@@ -649,7 +647,7 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
       <table className="table-base">
         <thead>
           <tr>
-            <th>User</th>
+            <th>Customer Name</th>
             <th>Bar</th>
             <th>Amount</th>
             <th></th>

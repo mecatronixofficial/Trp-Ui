@@ -27,6 +27,11 @@ export default function BranchAdminsPage() {
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault(); setError('');
+    const text = (value: unknown) => String(value || '').trim().toLocaleLowerCase();
+    if (admins.some((admin) => text(admin.username) === text(form.username) || text(admin.displayName) === text(form.displayName))) {
+      setError('Admin display name and username must be unique.');
+      return;
+    }
     try {
       await api.post(`/branches/${form.branch}/admins`, { displayName: form.displayName, username: form.username, password: form.password });
       setOpen(false); setForm({ branch: '', displayName: '', username: '', password: '' }); await load();

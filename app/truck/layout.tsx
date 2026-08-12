@@ -16,7 +16,7 @@ export default function TruckLayout({ children }: { children: React.ReactNode })
     <RequireRole role="truck">
       <div className="min-h-screen w-full max-w-full overflow-x-hidden">
         <Topbar title={title} />
-        <main className="mx-auto w-full min-w-0 max-w-7xl p-3 sm:p-4 md:p-6 xl:p-8">{children}</main>
+        <main className="mx-auto w-full min-w-0 max-w-7xl p-3 pb-8 sm:p-4 md:p-6 xl:p-8">{children}</main>
       </div>
     </RequireRole>
   );

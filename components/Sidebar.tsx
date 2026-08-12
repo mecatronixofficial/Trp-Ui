@@ -6,8 +6,8 @@ import {
   FiGrid, FiTruck, FiUsers, FiBox, FiShoppingCart,
   FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign,
 } from 'react-icons/fi';
-import { TbSnowflake } from 'react-icons/tb';
 import { useAuth } from '../context/AuthContext';
+import BrandLogo from './BrandLogo';
 
 const links = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: FiGrid },
@@ -38,8 +38,8 @@ export default function Sidebar() {
     <aside className="hidden min-h-screen w-[17rem] shrink-0 bg-[#071824] text-white shadow-2xl shadow-navy-900/20 md:flex md:flex-col">
       <div className="border-b border-white/10 px-5 py-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-iceblue-700 shadow-lg shadow-black/20">
-            <TbSnowflake className="text-2xl" />
+          <div className="h-12 w-12 overflow-hidden rounded-2xl bg-white shadow-lg shadow-black/20">
+            <BrandLogo className="h-full w-full object-cover" />
           </div>
           <div className="min-w-0">
             <p className="truncate font-display font-semibold leading-tight">Tiruppur Ice</p>

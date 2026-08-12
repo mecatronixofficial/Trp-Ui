@@ -1,10 +1,6 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Poppins } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '../context/AuthContext';
-
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
-const poppins = Poppins({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-poppins', display: 'swap' });
 
 export const metadata: Metadata = {
   title: {
@@ -13,6 +9,7 @@ export const metadata: Metadata = {
   },
   description: 'Ice bar production, sales & profit management',
   applicationName: 'Tiruppur Ice',
+  icons: { icon: '/tiruppur-ice-logo.png', apple: '/tiruppur-ice-logo.png' },
   formatDetection: { telephone: false },
 };
 
@@ -25,7 +22,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} ${poppins.variable} font-sans bg-iceblue-50 text-navy-900 antialiased`}>
+      <body className="font-sans bg-iceblue-50 text-navy-900 antialiased">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

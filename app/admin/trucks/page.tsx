@@ -105,6 +105,12 @@ export default function TrucksPage() {
     setModalOpen(true);
   };
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('add') !== 'truck') return;
+    openCreate();
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [branches]);
+
   const openEdit = (t: Truck) => {
     setEditing(t);
     setForm({
@@ -120,6 +126,14 @@ export default function TrucksPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    const text = (value: unknown) => String(value || '').trim().toLocaleLowerCase();
+    const phone = (value: unknown) => String(value || '').replace(/\D/g, '');
+    const duplicate = trucks.find((truck) => truck._id !== editing?._id && (
+      text(truck.truckName) === text(form.truckName) || text(truck.truckNumber) === text(form.truckNumber) ||
+      (form.phoneNumber && phone(truck.phoneNumber) === phone(form.phoneNumber)) ||
+      (form.loginId && text(truck.loginId) === text(form.loginId))
+    ));
+    if (duplicate) { setError('Truck name, vehicle number, phone number, and login ID must be unique.'); return; }
     try {
       if (editing) {
         await api.patch(`/trucks/${editing._id}`, form);
@@ -261,63 +275,77 @@ export default function TrucksPage() {
           <DailyCard label="Pending Amount" value={formatCurrency(dailyTotals.pendingAmount)} danger={dailyTotals.pendingAmount > 0} />
         </div>
       </div>
-      <div className="flex items-center justify-between">
-        <p className="text-navy-800/60 text-sm">{trucks.length} truck(s) registered</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display text-lg font-bold text-navy-900">Registered Trucks</h2>
+          <p className="mt-0.5 text-sm text-navy-800/55">{trucks.length} truck(s) registered</p>
+        </div>
         <button onClick={openCreate} className="btn-primary flex items-center gap-2">
           <FiPlus /> Add Truck
         </button>
       </div>
 
-      <div className="card overflow-x-auto">
+      <div className="overflow-x-auto border border-black bg-white">
         {loading ? (
-          <p className="text-navy-800/50">Loading...</p>
+          <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className="table-base min-w-[600px]">
-            <thead>
+          <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-xs text-black sm:text-sm">
+            <thead className="bg-slate-100 text-black">
               <tr>
-                {user?.role === 'super_admin' && <th>Branch</th>}
-                <th>Truck</th>
-                <th>Number</th>
-                <th>Ice Bars In Truck</th>
-                <th>Status</th>
-                <th>Actions</th>
+                <th className="w-[5%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                {user?.role === 'super_admin' && <th className="w-[10%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Branch</th>}
+                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Truck Name</th>
+                <th className="w-[12%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Truck Number</th>
+                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Driver Name</th>
+                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Phone Number</th>
+                <th className="w-[11%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Login ID</th>
+                <th className="w-[8%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Ice Bars</th>
+                <th className="w-[8%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+                <th className="w-[17%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {trucks.map((t) => (
-                <tr key={t._id}>
-                  {user?.role === 'super_admin' && <td>{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
-                  <td>
-                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-iceblue-700 underline-offset-2 hover:underline">
+              {trucks.map((t, index) => (
+                <tr key={t._id} className="bg-white text-black hover:bg-slate-100">
+                  <td className="border border-black px-3 py-2 text-center font-medium text-black">{index + 1}</td>
+                  {user?.role === 'super_admin' && <td className="break-words border border-black px-2 py-2 text-black">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
+                  <td className="break-words border border-black px-2 py-2 text-black">
+                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-black underline-offset-2 hover:underline">
                       {t.truckName}
                     </Link>
                   </td>
-                  <td>{t.truckNumber}</td>
-                  <td><span className={`font-bold ${truckStock[t._id] < 0 ? 'text-red-500' : 'text-emerald-600'}`}>{truckStock[t._id] || 0}</span></td>
-                  <td>
-                    <span className={`pill ${t.status ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-500'}`}>
+                  <td className="break-words border border-black px-2 py-2 font-medium text-black">{t.truckNumber}</td>
+                  <td className="break-words border border-black px-2 py-2 text-black">{t.driverName || '-'}</td>
+                  <td className="break-all border border-black px-2 py-2 text-black">{t.phoneNumber || '-'}</td>
+                  <td className="break-all border border-black px-2 py-2 font-mono text-xs text-black">{t.loginId || '-'}</td>
+                  <td className="border border-black px-1 py-2 text-center font-bold text-black">{truckStock[t._id] || 0}</td>
+                  <td className="border border-black px-1 py-2 text-center">
+                    <span className="font-medium text-black">
                       {t.status ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td>
-                    <div className="flex items-center gap-2">
-                      <button title="Check daily truck account" onClick={() => openTripCheck(t)} className="text-emerald-600 hover:text-emerald-700"><FiBox /></button>
-                      <button title="Edit" onClick={() => openEdit(t)} className="text-iceblue-600 hover:text-iceblue-700">
+                  <td className="border border-black px-1 py-2 text-black">
+                    <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button title="Check daily truck account" onClick={() => openTripCheck(t)} className="text-black hover:text-slate-600"><FiBox /></button>
+                      <button title="Edit" onClick={() => openEdit(t)} className="text-black hover:text-slate-600">
                         <FiEdit2 />
                       </button>
-                      <button title="Reset password" onClick={() => setResetTarget(t)} className="text-amber-600 hover:text-amber-700">
+                      <button title="Reset password" onClick={() => setResetTarget(t)} className="text-black hover:text-slate-600">
                         <FiKey />
                       </button>
-                      <button title="Toggle status" onClick={() => toggleStatus(t)} className="text-navy-700 hover:text-navy-900">
+                      <button title="Toggle status" onClick={() => toggleStatus(t)} className="text-black hover:text-slate-600">
                         <FiPower />
                       </button>
-                      <button title="Delete" onClick={() => remove(t)} className="text-red-500 hover:text-red-600">
+                      <button title="Delete" onClick={() => remove(t)} className="text-black hover:text-slate-600">
                         <FiTrash2 />
                       </button>
                     </div>
                   </td>
                 </tr>
               ))}
+              {trucks.length === 0 && (
+                <tr><td colSpan={user?.role === 'super_admin' ? 10 : 9} className="border border-black px-4 py-10 text-center text-black">No trucks registered.</td></tr>
+              )}
             </tbody>
           </table>
         )}

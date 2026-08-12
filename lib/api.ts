@@ -1,4 +1,5 @@
 import axios from 'axios';
+import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import Cookies from 'js-cookie';
 
 const api = axios.create({
@@ -30,6 +31,21 @@ api.interceptors.response.use(
 
 export default api;
 
+// Reuse identical GET requests that are already in flight. This prevents React
+// development remounts and quick navigation from sending duplicate bursts to
+// rate-limited backend endpoints.
+const pendingGets = new Map<string, Promise<AxiosResponse<any>>>();
+
+export function dedupedGet<T = any>(url: string, config?: AxiosRequestConfig) {
+  const key = `${url}:${JSON.stringify(config?.params || {})}`;
+  const existing = pendingGets.get(key);
+  if (existing) return existing as Promise<AxiosResponse<T>>;
+
+  const request = api.get<T>(url, config).finally(() => pendingGets.delete(key));
+  pendingGets.set(key, request);
+  return request;
+}
+
 // A full ice bar is size 1. Smaller sizes are split from full bars when selling.
 export const ICE_BAR_SIZES = ['1/4', '1/2', '3/4', '1'] as const;
 export const PRODUCTION_ICE_BAR_SIZES = ['1'] as const;
@@ -38,11 +54,15 @@ export const COST_TYPES = [
   { value: 'electricity', label: 'Electricity' },
   { value: 'water', label: 'Water' },
   { value: 'labour', label: 'Labour' },
-  { value: 'diesel', label: 'Diesel' },
+  { value: 'petrol_diesel', label: 'Petrol / Diesel' },
   { value: 'machine_maintenance', label: 'Machine Maintenance' },
   { value: 'salt_chemical', label: 'Salt / Chemical' },
   { value: 'packing', label: 'Packing' },
   { value: 'truck_expense', label: 'Truck Expense' },
+  { value: 'snacks_expenses', label: 'Snacks Expenses' },
+  { value: 'advance_for_employee', label: 'Advance for Employee' },
+  { value: 'chat_expenses', label: 'Other Expenses' },
+  { value: 'other_expenses', label: 'Other Expenses' },
   { value: 'other', label: 'Other' },
 ];
 

@@ -1,0 +1,240 @@
+[
+  {
+    "_id": "1786500065525-2344eeefab01d",
+    "date": "2026-08-12",
+    "costType": "petrol_diesel",
+    "amount": 300,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "description": "",
+    "createdAt": "2026-08-12T02:01:05.525Z",
+    "updatedAt": "2026-08-12T02:01:05.525Z"
+  },
+  {
+    "_id": "1786499378546-f753a07a6081f8",
+    "date": "2026-08-12",
+    "costType": "snacks",
+    "amount": 200,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "description": "",
+    "createdAt": "2026-08-12T01:49:38.545Z",
+    "updatedAt": "2026-08-12T01:49:38.545Z"
+  },
+  {
+    "_id": "1786463185309-cc26fa9723f4a8",
+    "date": "2026-08-11",
+    "costType": "advance_for_employee",
+    "amount": 10000,
+    "notes": "",
+    "worker": "6a77238a31cc107ba2ad61c3",
+    "workerName": "Sivakumar",
+    "description": "",
+    "createdAt": "2026-08-11T15:46:25.309Z",
+    "updatedAt": "2026-08-11T15:46:25.309Z"
+  },
+  {
+    "_id": "1786434691885-86e5252863a1d",
+    "date": "2026-08-11",
+    "costType": "other_expenses",
+    "amount": 5000,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "description": "",
+    "createdAt": "2026-08-11T07:51:31.885Z",
+    "updatedAt": "2026-08-11T07:51:31.885Z"
+  },
+  {
+    "_id": "1786434681174-767828ba2276c8",
+    "date": "2026-08-11",
+    "costType": "advance_for_employee",
+    "amount": 1000,
+    "notes": "",
+    "worker": "6a64f8d0c520ad8f1d30520b",
+    "workerName": "mk",
+    "description": "",
+    "createdAt": "2026-08-11T07:51:21.173Z",
+    "updatedAt": "2026-08-11T07:51:21.173Z"
+  },
+  {
+    "_id": "1786434661031-64acd40c663de",
+    "date": "2026-08-11",
+    "costType": "salary",
+    "amount": 10000,
+    "notes": "",
+    "worker": "6a77238a31cc107ba2ad61c3",
+    "workerName": "Sivakumar",
+    "description": "",
+    "createdAt": "2026-08-11T07:51:01.031Z",
+    "updatedAt": "2026-08-11T07:51:01.031Z"
+  },
+  {
+    "_id": "1786434638143-4fc5d27d451068",
+    "date": "2026-08-11",
+    "costType": "snacks",
+    "amount": 1000,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "description": "",
+    "createdAt": "2026-08-11T07:50:38.143Z",
+    "updatedAt": "2026-08-11T07:50:38.143Z"
+  },
+  {
+    "_id": "1786200783573-63818052abb66",
+    "date": "2026-08-08",
+    "costType": "salary",
+    "amount": 15000,
+    "notes": "",
+    "worker": "6a64f8d0c520ad8f1d30520b",
+    "workerName": "mk",
+    "description": "",
+    "createdAt": "2026-08-08T14:53:03.573Z",
+    "updatedAt": "2026-08-08T14:53:03.573Z"
+  },
+  {
+    "_id": "1786200682777-65dc1a48bba928",
+    "date": "2026-08-08",
+    "costType": "advance_for_employee",
+    "amount": 1000,
+    "notes": "",
+    "worker": "6a77238a31cc107ba2ad61c3",
+    "workerName": "Sivakumar",
+    "description": "",
+    "createdAt": "2026-08-08T14:51:22.777Z",
+    "updatedAt": "2026-08-08T14:51:22.777Z"
+  },
+  {
+    "_id": "1786199376032-ef1f2857671088",
+    "date": "2026-08-08",
+    "costType": "other_expenses",
+    "amount": 1000,
+    "notes": "Auto",
+    "description": "Auto",
+    "createdAt": "2026-08-08T14:29:36.032Z",
+    "updatedAt": "2026-08-08T14:29:36.032Z"
+  },
+  {
+    "_id": "1786198984130-99e705e19f7668",
+    "date": "2026-08-08",
+    "costType": "advance_for_employee",
+    "amount": 1000,
+    "notes": "SIvakumar",
+    "description": "SIvakumar",
+    "createdAt": "2026-08-08T14:23:04.130Z",
+    "updatedAt": "2026-08-08T14:23:04.130Z"
+  },
+  {
+    "_id": "1786194291131-58e60940c087d8",
+    "date": "2026-08-08",
+    "costType": "advance_for_employee",
+    "amount": 12000,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-08T13:04:51.131Z",
+    "updatedAt": "2026-08-08T13:04:51.131Z"
+  },
+  {
+    "_id": "1786194264162-a420daa17de5b8",
+    "date": "2026-08-08",
+    "costType": "snacks",
+    "amount": 1000,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-08T13:04:24.162Z",
+    "updatedAt": "2026-08-08T13:04:24.162Z"
+  },
+  {
+    "_id": "1786115684579-c18a3a7afcc5a",
+    "date": "2026-08-07",
+    "costType": "snacks",
+    "amount": 1000,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T15:14:44.579Z",
+    "updatedAt": "2026-08-07T15:14:44.579Z"
+  },
+  {
+    "_id": "1786100116761-5dd3ec0edc6a48",
+    "date": "2026-08-07",
+    "costType": "advance_for_employee",
+    "amount": 1000,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T10:55:16.760Z",
+    "updatedAt": "2026-08-07T10:55:16.760Z"
+  },
+  {
+    "_id": "1786098055996-49c3c5ae76b5f8",
+    "date": "2026-08-07",
+    "costType": "snacks",
+    "amount": 200,
+    "notes": "food",
+    "description": "food",
+    "createdAt": "2026-08-07T10:20:55.996Z",
+    "updatedAt": "2026-08-07T10:20:55.996Z"
+  },
+  {
+    "_id": "1786095868350-f934a7ab155d58",
+    "date": "2026-08-07",
+    "costType": "snacks",
+    "amount": 100,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T09:44:28.350Z",
+    "updatedAt": "2026-08-07T09:44:28.350Z"
+  },
+  {
+    "_id": "1786092077139-ddc8d70197adf",
+    "date": "2026-08-07",
+    "costType": "other",
+    "amount": 100,
+    "notes": "[[expense-category:salary]]",
+    "description": "[[expense-category:salary]]",
+    "createdAt": "2026-08-07T08:41:17.139Z",
+    "updatedAt": "2026-08-07T08:41:17.139Z"
+  },
+  {
+    "_id": "1786092031444-a2154aa7ec0628",
+    "date": "2026-08-07",
+    "costType": "chat_expenses",
+    "amount": 300,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T08:40:31.444Z",
+    "updatedAt": "2026-08-07T08:40:31.444Z"
+  },
+  {
+    "_id": "1786091000096-ed95920ee64ca8",
+    "date": "2026-07-07",
+    "costType": "advance_for_employee",
+    "amount": 1000,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T08:23:20.096Z",
+    "updatedAt": "2026-08-07T08:23:20.096Z"
+  },
+  {
+    "_id": "1786090923329-8e08b27dd9725",
+    "date": "2026-08-07",
+    "costType": "other",
+    "amount": 100,
+    "notes": "[[expense-category:other_expenses]]",
+    "description": "[[expense-category:other_expenses]]",
+    "createdAt": "2026-08-07T08:22:03.329Z",
+    "updatedAt": "2026-08-07T08:22:03.329Z"
+  },
+  {
+    "_id": "1786090885898-64ee73748fbea",
+    "date": "2026-08-07",
+    "costType": "advance_for_employee",
+    "amount": 100,
+    "notes": "",
+    "description": "",
+    "createdAt": "2026-08-07T08:21:25.898Z",
+    "updatedAt": "2026-08-07T08:21:25.898Z"
+  }
+]

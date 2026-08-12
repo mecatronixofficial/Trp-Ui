@@ -29,11 +29,30 @@ module.exports = {
         },
       },
       fontFamily: {
-        sans: ['var(--font-inter)', 'sans-serif'],
-        display: ['var(--font-poppins)', 'sans-serif'],
+        // Single sans-serif family across the app. `display` is kept as an
+        // alias (rather than removed) so the ~50 existing `font-display`
+        // heading classes don't need to be touched one by one.
+        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        display: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
       },
       boxShadow: {
         ice: '0 4px 24px -4px rgba(28, 166, 209, 0.25)',
+      },
+      keyframes: {
+        frostFall: {
+          '0%': { transform: 'translateY(-8%)', opacity: '0' },
+          '12%': { opacity: '1' },
+          '88%': { opacity: '1' },
+          '100%': { transform: 'translateY(112vh)', opacity: '0' },
+        },
+        iceFloat: {
+          '0%, 100%': { transform: 'translateY(0px) rotate(var(--ice-rotate, 0deg))' },
+          '50%': { transform: 'translateY(-16px) rotate(var(--ice-rotate, 0deg))' },
+        },
+      },
+      animation: {
+        'frost-fall': 'frostFall 9s linear infinite',
+        'ice-float': 'iceFloat 5s ease-in-out infinite',
       },
     },
   },
