@@ -47,6 +47,15 @@ export default function BranchesPage() {
   };
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); setError('');
+    const text = (value: unknown) => String(value || '').trim().toLocaleLowerCase();
+    const phone = (value: unknown) => String(value || '').replace(/\D/g, '');
+    const duplicate = branches.find((branch) => branch._id !== editing?._id && (
+      text(branch.name) === text(form.name) ||
+      (form.code && text(branch.code) === text(form.code)) ||
+      (form.phoneNumber && phone(branch.phoneNumber) === phone(form.phoneNumber)) ||
+      (form.adminUsername && text(branch.admin?.username) === text(form.adminUsername))
+    ));
+    if (duplicate) { setError('Branch name, code, phone number, and admin username must be unique.'); return; }
     try {
       if (editing) await api.patch(`/branches/${editing._id}`, form);
       else await api.post('/branches', form);

@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { FiEdit2, FiPlus, FiTrash2, FiUserCheck } from 'react-icons/fi';
+import { FiDollarSign, FiEdit2, FiPlus, FiTrash2, FiUserCheck, FiUsers } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatCurrency, formatDate, todayISO } from '../../../lib/api';
 import Modal from '../../../components/Modal';
+import useDismissibleMenu from '../../../hooks/useDismissibleMenu';
 
 type Worker = {
   _id: string;
@@ -14,6 +15,7 @@ type Worker = {
   role?: string;
   notes?: string;
   truck?: string;
+  isActive?: boolean;
 };
 
 const emptyWorkerForm = { name: '', phoneNumber: '', role: '', notes: '' };
@@ -40,6 +42,10 @@ export default function WorkersPage() {
   const [loading, setLoading] = useState(true);
   const [workerModalOpen, setWorkerModalOpen] = useState(false);
   const [buyingModalOpen, setBuyingModalOpen] = useState(false);
+  const [showWorkerActions, setShowWorkerActions] = useState(false);
+  const workerActionsRef = useRef<HTMLDivElement>(null);
+  const closeWorkerActions = useCallback(() => setShowWorkerActions(false), []);
+  useDismissibleMenu(showWorkerActions, workerActionsRef, closeWorkerActions);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [driverDetailTarget, setDriverDetailTarget] = useState<any | null>(null);
   const [workerDetailTarget, setWorkerDetailTarget] = useState<any | null>(null);
@@ -104,7 +110,17 @@ export default function WorkersPage() {
   }), { buying: 0 }), [summary]);
 
   const totalDriverAmount = useMemo(() => driverExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0), [driverExpenses]);
-  const totalDriverSalary = useMemo(() => drivers.reduce((sum, driver) => sum + Number(driver.monthlySalary || 0), 0), [drivers]);
+  const activeWorkforce = useMemo(() => {
+    const activeTrucks = drivers.filter((truck) => truck.isActive !== false);
+    const activeDrivers = activeTrucks.filter((truck) => String(truck.driverName || '').trim()).length;
+    const activeEmployees = workers.filter((worker) => worker.isActive !== false && !worker.truck).length;
+    return {
+      total: activeDrivers + activeEmployees,
+      trucks: activeTrucks.length,
+      drivers: activeDrivers,
+      employees: activeEmployees,
+    };
+  }, [drivers, workers]);
 
   const peopleSummary = useMemo(() => {
     const workerRows = summary
@@ -175,6 +191,10 @@ export default function WorkersPage() {
   const saveWorker = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    const normalizedName = String(workerForm.name || '').trim().toLocaleLowerCase();
+    const normalizedPhone = String(workerForm.phoneNumber || '').replace(/\D/g, '');
+    const duplicate = workers.find((worker) => worker._id !== editingWorker?._id && (worker.name.trim().toLocaleLowerCase() === normalizedName || (normalizedPhone && String(worker.phoneNumber || '').replace(/\D/g, '') === normalizedPhone)));
+    if (duplicate) { setError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'A worker with this name already exists.' : 'A worker with this phone number already exists.'); return; }
     const payload = { ...workerForm };
     try {
       if (editingWorker) await api.patch(`/workers/${editingWorker._id}`, payload);
@@ -212,74 +232,109 @@ export default function WorkersPage() {
   };
 
   return (
-    <div className="min-w-0 space-y-4 overflow-x-hidden">
-      <div className="min-w-0 space-y-3">
-        <div className="grid w-full min-w-0 grid-cols-2 gap-2 text-sm sm:grid-cols-3 lg:grid-cols-5">
-          <SummaryPill label="Total Workers" value={String(workers.length + drivers.length)} />
-          <SummaryPill label="Monthly Salary" value={formatCurrency(totalDriverSalary)} />
-          <SummaryPill label="Total Buying" value={formatCurrency(totals.buying + totalDriverAmount)} />
-        </div>
-        <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:w-fit sm:grid-cols-3">
-          <input type="month" className="input-field col-span-2 h-11 sm:col-span-1 sm:w-40" value={month} onChange={(e) => setMonth(e.target.value)} />
-          <button onClick={() => openCreateBuying()} className="btn-secondary flex h-11 min-w-0 items-center justify-center gap-2 whitespace-nowrap px-2 sm:px-4">
-            <FiUserCheck /> Daily Buying
-          </button>
-          <button onClick={openCreateWorker} className="btn-primary flex h-11 min-w-0 items-center justify-center gap-2 whitespace-nowrap px-2 sm:px-4">
-            <FiPlus /> Add Worker
-          </button>
-        </div>
-      </div>
+    <div className="-mt-4 space-y-1 sm:-mt-5">
+      <section className="grid grid-cols-1 gap-2 md:grid-cols-3">
+        <WorkerSummaryCard
+          icon={FiUsers}
+          label="Total Workers"
+          value={workers.length + drivers.length}
+          helper={`Including ${drivers.length} driver${drivers.length === 1 ? '' : 's'}`}
+          tone="blue"
+        />
+        <ActiveWorkforceCard counts={activeWorkforce} />
+        <WorkerSummaryCard
+          icon={FiUserCheck}
+          label="Total Buying"
+          value={formatCurrency(totals.buying + totalDriverAmount)}
+          helper="Spent this month"
+          tone="violet"
+        />
+      </section>
 
-      {error && !workerModalOpen && !buyingModalOpen && (
-        <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{error}</p>
-      )}
-
-      <div className="card min-w-0 overflow-hidden p-3 sm:p-5">
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
+          <h1 className="flex shrink-0 items-center gap-2 font-display text-lg font-black text-navy-900">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-navy-900 text-white shadow-sm"><FiUserCheck /></span>
+            Worker Management
+          </h1>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:justify-end">
+            <input type="month" className="input-field h-10 w-auto" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <div ref={workerActionsRef} className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-50 sm:bottom-6 sm:right-6">
+              <button
+                type="button"
+                onClick={() => setShowWorkerActions((value) => !value)}
+                aria-label="Worker actions"
+                aria-expanded={showWorkerActions}
+                className="btn-primary grid h-14 w-14 shrink-0 place-items-center rounded-full p-0 text-xl shadow-xl"
+              >
+                <FiPlus className={`transition-transform ${showWorkerActions ? 'rotate-45' : ''}`} />
+              </button>
+              {showWorkerActions && (
+                <div className="absolute bottom-16 right-0 min-w-[180px] space-y-2 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+                  <button type="button" onClick={() => { setShowWorkerActions(false); openCreateBuying(); }} className="btn-secondary flex h-10 w-full items-center justify-center gap-2 px-3">
+                    <FiUserCheck /> Daily Buying
+                  </button>
+                  <button type="button" onClick={() => { setShowWorkerActions(false); openCreateWorker(); }} className="btn-primary flex h-10 w-full items-center justify-center gap-2 px-3">
+                    <FiPlus /> Add Worker
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        {error && !workerModalOpen && !buyingModalOpen && (
+          <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{error}</div>
+        )}
+        <div className="overflow-x-auto">
         {loading ? (
-          <p className="text-navy-800/50">Loading...</p>
+          <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <div className="w-full overflow-x-auto pb-1"><table className="table-base min-w-[820px]">
-            <thead>
+          <table className="w-full min-w-[760px] table-fixed border-collapse text-left text-xs sm:text-sm">
+            <thead className="bg-slate-100 text-navy-900">
               <tr>
-                <th>Name</th>
-                <th>Role</th>
-                <th>Buying Amount</th>
-                <th>Buying Days</th>
-                <th>Actions</th>
+                <th className="w-[7%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker Name</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Role</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Buying Amount</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Buying Days</th>
+                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {peopleSummary.map((row) => (
-                <tr key={row.id}>
-                  <td className="font-semibold">
+              {peopleSummary.map((row, index) => (
+                <tr key={row.id} className="text-navy-900 even:bg-slate-50 hover:bg-iceblue-50/70">
+                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-semibold">
                     <Link
                       href={`/admin/workers/${row.isDriver ? row.driver._id : row.worker?._id || row.id}`}
-                      className="text-iceblue-700 underline-offset-2 hover:underline"
+                      className="text-navy-900 underline-offset-2 hover:underline"
                     >
                       {row.name}
                     </Link>
                   </td>
-                  <td>{row.role}</td>
-                  <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
-                  <td>{row.buyingDays}</td>
-                  <td>
+                  <td className="break-words border border-slate-300 px-2 py-3 text-center">{row.role}</td>
+                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-semibold text-navy-900">{formatCurrency(row.buyingAmount)}</td>
+                  <td className="border border-slate-300 px-2 py-3 text-center">{row.buyingDays}</td>
+                  <td className="border border-slate-300 px-2 py-3">
                     {!row.isDriver && (
-                      <div className="flex items-center gap-2">
-                        <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-emerald-600"><FiUserCheck /></button>
-                        {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-iceblue-600"><FiEdit2 /></button>}
-                        {row.worker && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-red-500"><FiTrash2 /></button>}
+                      <div className="flex flex-wrap items-center justify-center gap-3">
+                        <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
+                        {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
+                        {row.worker && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
                       </div>
                     )}
                   </td>
                 </tr>
               ))}
               {peopleSummary.length === 0 && (
-                <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
+                <tr><td colSpan={6} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
               )}
             </tbody>
-          </table></div>
+            <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={3} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center">{formatCurrency(totals.buying + totalDriverAmount)}</td><td className="border border-slate-300 px-3 py-3 text-center">{peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)}</td><td className="border border-slate-300 px-3 py-3" /></tr></tfoot>
+          </table>
         )}
-      </div>
+        </div>
+      </section>
 
       {workerModalOpen && (
         <Modal title={editingWorker ? 'Edit Worker' : 'Add Worker'} onClose={() => setWorkerModalOpen(false)}>
@@ -476,11 +531,58 @@ export default function WorkersPage() {
   );
 }
 
+function WorkerSummaryCard({ icon: Icon, label, value, helper, danger = false, tone = 'blue' }: { icon: any; label: string; value: string | number; helper?: string; danger?: boolean; tone?: 'blue' | 'cyan' | 'violet' | 'amber' }) {
+  const styles = {
+    blue: { card: 'from-blue-50 to-white', icon: 'bg-blue-600', accent: 'bg-blue-500' },
+    cyan: { card: 'from-cyan-50 to-white', icon: 'bg-cyan-600', accent: 'bg-cyan-500' },
+    violet: { card: 'from-violet-50 to-white', icon: 'bg-violet-600', accent: 'bg-violet-500' },
+    amber: { card: 'from-amber-50 to-white', icon: 'bg-amber-500', accent: 'bg-amber-500' },
+  }[tone];
+  return (
+    <div className={`relative flex min-h-[108px] min-w-0 items-center gap-3 overflow-hidden rounded-2xl border bg-gradient-to-br px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
+      <span className={`absolute inset-y-0 left-0 w-1 ${danger ? 'bg-red-500' : styles.accent}`} />
+      <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-lg text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}>
+        <Icon />
+      </span>
+
+      <div className="min-w-0">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">{label}</p>
+        <p className={`mt-1 break-words font-display text-lg font-bold leading-tight ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+        {helper && (
+          <p className={`mt-0.5 text-xs font-semibold ${danger ? 'text-red-600' : 'text-navy-800/55'}`}>
+            {helper}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ActiveWorkforceCard({ counts }: { counts: { total: number; trucks: number; drivers: number; employees: number } }) {
+  return (
+    <div className="relative flex min-h-[108px] min-w-0 flex-col justify-center overflow-hidden rounded-2xl border border-cyan-100 bg-gradient-to-br from-cyan-50 to-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+      <span className="absolute inset-y-0 left-0 w-1 bg-cyan-500" />
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">Total Active Workforce</p>
+          <p className="font-display text-lg font-bold leading-tight text-navy-900">{counts.total}</p>
+        </div>
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-cyan-600 text-white shadow-sm"><FiUserCheck /></span>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-cyan-200 border-t border-cyan-100 pt-2 text-center">
+        <div><p className="text-[9px] font-bold uppercase text-slate-500">Trucks</p><p className="text-base font-black text-cyan-700">{counts.trucks}</p></div>
+        <div><p className="text-[9px] font-bold uppercase text-slate-500">Drivers</p><p className="text-base font-black text-cyan-700">{counts.drivers}</p></div>
+        <div><p className="text-[9px] font-bold uppercase text-slate-500">Employees</p><p className="text-base font-black text-cyan-700">{counts.employees}</p></div>
+      </div>
+    </div>
+  );
+}
+
 function SummaryPill({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
   return (
-    <div className="min-w-0 rounded-2xl border border-iceblue-100 bg-white px-3 py-2 shadow-sm sm:px-4 sm:py-3">
-      <p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p>
-      <p className={`mt-1 break-words text-sm font-bold sm:text-base ${danger ? 'text-red-500' : 'text-navy-900'}`}>{value}</p>
+    <div className={`flex min-h-[112px] min-w-0 items-center gap-4 rounded-2xl border bg-white px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
+      <div className={`relative grid h-16 w-16 shrink-0 place-items-center rounded-full ${danger ? 'bg-[conic-gradient(#ef4444_0deg,#ef4444_260deg,#fee2e2_260deg)]' : 'bg-[conic-gradient(#1ca6d1_0deg,#175872_265deg,#dff5fd_265deg)]'}`}><span className="grid h-11 w-11 place-items-center rounded-full bg-white"><span className={`h-2.5 w-2.5 rounded-full ${danger ? 'bg-red-500' : 'bg-iceblue-600'}`} /></span></div>
+      <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">{label}</p><p className={`mt-2 break-words text-base font-bold sm:text-lg ${danger ? 'text-red-500' : 'text-navy-900'}`}>{value}</p></div>
     </div>
   );
 }

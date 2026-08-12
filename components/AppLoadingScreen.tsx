@@ -1,7 +1,30 @@
 import { FiArrowRight, FiShield, FiTruck } from 'react-icons/fi';
-import { TbSnowflake } from 'react-icons/tb';
 
 type LoadingRole = 'super_admin' | 'admin' | 'truck' | null;
+
+function IceBlockGraphic({ className = '', gradientId }: { className?: string; gradientId: string }) {
+  return (
+    <svg viewBox="0 0 48 48" className={className} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#f0fbff" />
+          <stop offset="50%" stopColor="#7dd3fc" />
+          <stop offset="100%" stopColor="#0ea5e9" />
+        </linearGradient>
+      </defs>
+      {/* top face (pseudo-3D) */}
+      <path d="M11 8 L18 3 L42 3 L36 8 Z" fill="#f0fbff" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
+      {/* right face (pseudo-3D) */}
+      <path d="M36 8 L42 3 L42 30 L36 36 Z" fill="#0ea5e9" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
+      {/* block body (front face) */}
+      <rect x="6" y="8" width="30" height="30" rx="4" fill={`url(#${gradientId})`} stroke="#0284c7" strokeWidth="1.5" />
+      {/* crack lines */}
+      <path d="M13 8 L19 20 L12 27" stroke="#f0fbff" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />
+      {/* shine */}
+      <rect x="10" y="12" width="5" height="14" rx="2.5" fill="white" opacity="0.55" />
+    </svg>
+  );
+}
 
 export default function AppLoadingScreen({
   message = 'Checking secure access',
@@ -20,10 +43,24 @@ export default function AppLoadingScreen({
       <div className="absolute right-[18%] top-[20%] h-2 w-2 rounded-full bg-white/80 shadow-[0_0_26px_8px_rgba(255,255,255,.32)]" />
       <div className="absolute bottom-[22%] left-[18%] h-2 w-2 rounded-full bg-cyan-50/80 shadow-[0_0_24px_7px_rgba(207,250,254,.28)]" />
 
+      {/* Floating decorative ice blocks */}
+      <IceBlockGraphic
+        gradientId="floatIceA"
+        className="absolute left-[8%] top-[62%] hidden h-10 w-10 -rotate-6 opacity-70 drop-shadow-lg [animation-duration:3.4s] animate-bounce sm:block"
+      />
+      <IceBlockGraphic
+        gradientId="floatIceB"
+        className="absolute right-[10%] top-[10%] hidden h-8 w-8 rotate-12 opacity-60 drop-shadow-lg [animation-delay:.6s] [animation-duration:3s] animate-bounce md:block"
+      />
+      <IceBlockGraphic
+        gradientId="floatIceC"
+        className="absolute bottom-[8%] right-[24%] hidden h-7 w-7 -rotate-12 opacity-50 drop-shadow-lg [animation-delay:1.1s] [animation-duration:3.8s] animate-bounce lg:block"
+      />
+
       <section className="relative w-full max-w-md text-center">
         <div className="mx-auto mb-7 flex h-24 w-24 items-center justify-center rounded-[2rem] border border-white/30 bg-white/15 shadow-2xl shadow-cyan-950/30 backdrop-blur-xl">
-          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-white text-iceblue-600 shadow-lg shadow-cyan-950/20">
-            <TbSnowflake className="animate-spin text-4xl [animation-duration:3s]" />
+          <div className="flex h-16 w-16 items-center justify-center rounded-3xl bg-white shadow-lg shadow-cyan-950/20">
+            <IceBlockGraphic gradientId="mainLoaderIce" className="h-11 w-11 animate-bounce [animation-duration:1.4s]" />
           </div>
         </div>
 

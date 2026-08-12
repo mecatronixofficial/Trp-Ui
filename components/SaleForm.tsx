@@ -23,11 +23,17 @@ const getCustomerTruckId = (customer: any) => (
   typeof customer?.truck === 'string' ? customer.truck : customer?.truck?._id || ''
 );
 
+const indiaDateKey = (date: string | Date) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(new Date(date));
+
 export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: SaleFormProps) {
   const router = useRouter();
   const [customers, setCustomers] = useState<any[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
-  const [truck, setTruck] = useState(fixedTruckId || initial?.truck?._id || initial?.truck || '');
   const [customer, setCustomer] = useState(initial?.customer?._id || initial?.customer || '');
   const [saleType, setSaleType] = useState(initial?.saleType || 'retail');
   const [items, setItems] = useState<Item[]>(
@@ -62,30 +68,39 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
 
   useEffect(() => {
     if (!customer) return setPriceList([]);
-    api.get(`/price-list/customer/${customer}`).then((res) => setPriceList(res.data));
+    api.get(`/price-list/customer/${customer}`)
+      .then((res) => {
+        const rows = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.records)
+            ? res.data.records
+            : res.data
+              ? [res.data]
+              : [];
+        setPriceList(rows);
+      })
+      .catch(() => setPriceList([]));
   }, [customer]);
 
   const selectedCustomer = useMemo(() => customers.find((c) => c._id === customer), [customer, customers]);
-  const activeTruck = fixedTruckId || truck;
+  const activeTruck = fixedTruckId || getCustomerTruckId(selectedCustomer);
   const visibleCustomers = useMemo(() => {
     const term = customerSearch.trim().toLowerCase();
 
     return customers.filter((c) => {
-      const customerTruck = typeof c.truck === 'string' ? c.truck : c.truck?._id;
-      const truckMatch = !activeTruck || !customerTruck || customerTruck === activeTruck;
       const searchMatch =
         !term ||
         c.name?.toLowerCase().includes(term) ||
         c.phoneNumber?.toLowerCase().includes(term);
 
-      return truckMatch && searchMatch;
+      return searchMatch;
     });
   }, [activeTruck, customerSearch, customers]);
 
   useEffect(() => {
     if (!selectedCustomer) return;
     const customerTruck = getCustomerTruckId(selectedCustomer);
-    if (activeTruck && customerTruck && customerTruck !== activeTruck) {
+    if (!fixedTruckId && activeTruck && customerTruck && customerTruck !== activeTruck) {
       setCustomer('');
       setPriceList([]);
     }
@@ -103,9 +118,14 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
 
   // Flat price for a single bar, set by admin per customer per sale type.
   const barPrice = useMemo(() => {
-    const match = priceList.find((p) => p.saleType === saleType);
-    return match ? Number(match.price) : null;
-  }, [priceList, saleType]);
+    const normalizedType = String(saleType || '').toLowerCase();
+    const match = priceList.find((p) => String(p.saleType || p.type || '').toLowerCase() === normalizedType);
+    const customerPrice = normalizedType === 'wholesale'
+      ? selectedCustomer?.wholesalePrice
+      : selectedCustomer?.retailPrice;
+    const resolved = Number(match?.price ?? match?.pricePerBar ?? customerPrice);
+    return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
+  }, [priceList, saleType, selectedCustomer]);
 
   const computeTotal = (quantity: string) => {
     const qty = Number(quantity) || 0;
@@ -114,10 +134,9 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   };
 
   useEffect(() => {
-    if (barPrice == null) return;
     setItems((prev) => prev.map((item) => {
       const suggested = computeTotal(item.quantity);
-      return suggested ? { ...item, pricePerBar: suggested } : item;
+      return { ...item, pricePerBar: suggested };
     }));
   }, [barPrice]);
 
@@ -127,7 +146,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       next[idx] = { ...next[idx], [field]: value };
       if (field === 'quantity') {
         const suggested = computeTotal(value);
-        if (suggested) next[idx].pricePerBar = suggested;
+        next[idx].pricePerBar = suggested;
       }
       return next;
     });
@@ -143,31 +162,59 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const totalAmount = items.reduce((sum, i) => sum + (Number(i.pricePerBar) || 0), 0);
   const balance = totalAmount - (Number(paidAmount) || 0);
   const customerTruckId = getCustomerTruckId(selectedCustomer);
-  const derivedTruck = fixedTruckId || customerTruckId || truck;
+  // Only drivers and customers assigned to a truck use line/truck stock.
+  // All other admin sales are shop sales.
+  const derivedTruck = fixedTruckId || customerTruckId;
 
-  // Admin sales use the stock remaining in the shop. Driver sales use only the
-  // stock assigned to that driver's truck.
+  // Admin sales show the same "Shop Ready" quantity as the production page:
+  // today's production less stock movements and truck assignments, plus
+  // outsourced bars. Driver sales still use their truck's stock.
   useEffect(() => {
     let active = true;
     setAvailableStock(null);
     const request = fixedTruckId
       ? api.get(`/stock/truck/${fixedTruckId}`)
-      : api.get('/stock');
+      : Promise.all([
+        api.get('/production'),
+        api.get('/stock-entries'),
+        api.get('/outsource-entries'),
+        api.get('/truck-assignments', { params: { date: indiaDateKey(new Date()) } }),
+        api.get('/sales'),
+      ]);
 
     request
-      .then((res) => {
+      .then((res: any) => {
         if (!active) return;
-        setAvailableStock(Number(fixedTruckId ? res.data?.totalStock : res.data?.totalClosingStock) || 0);
+        if (fixedTruckId) {
+          setAvailableStock(Number(res.data?.totalStock) || 0);
+          return;
+        }
+
+        const [productionRows, stockRows, outsourceRows, assignmentRows, saleRows] = res;
+        const today = indiaDateKey(new Date());
+        const produced = (Array.isArray(productionRows.data) ? productionRows.data : [])
+          .filter((row: any) => indiaDateKey(row.date) === today)
+          .reduce((sum: number, row: any) => sum + Number(row.totalBars || 0), 0);
+        const stocked = (Array.isArray(stockRows.data) ? stockRows.data : [])
+          .filter((row: any) => indiaDateKey(row.date) === today)
+          .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
+        const outsourced = (Array.isArray(outsourceRows.data) ? outsourceRows.data : [])
+          .filter((row: any) => indiaDateKey(row.date) === today)
+          .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
+        const assigned = (Array.isArray(assignmentRows.data) ? assignmentRows.data : [])
+          .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
+        const shopSold = (Array.isArray(saleRows.data) ? saleRows.data : [])
+          .filter((sale: any) => indiaDateKey(sale.date) === today && !sale.truck)
+          .reduce((sum: number, sale: any) => sum + (sale.items || []).reduce(
+            (itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0,
+          ), 0);
+
+        setAvailableStock(produced - stocked + outsourced - assigned - shopSold);
       })
       .catch(() => { if (active) setAvailableStock(0); });
 
     return () => { active = false; };
   }, [fixedTruckId]);
-
-  // No blank placeholder in the truck select, so default to the first truck once trucks load.
-  useEffect(() => {
-    if (!truck && !fixedTruckId && !customerTruckId && trucks && trucks.length > 0) setTruck(trucks[0]._id);
-  }, [trucks, fixedTruckId, customerTruckId]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,19 +223,19 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       setError('Select or create customer');
       return;
     }
-    if (!derivedTruck) {
-      setError('No truck is available for this sale');
-      return;
-    }
     if (priceLocked) {
       setError('No price is set for this customer. Ask admin to set the bar price first.');
+      return;
+    }
+    if (totalAmount <= 0) {
+      setError('Enter an item quantity and make sure this customer has a valid bar price.');
       return;
     }
     setSaving(true);
     try {
       const payload = {
         date: initial?._id ? initial.date : new Date().toISOString(),
-        truck: derivedTruck,
+        ...(derivedTruck ? { truck: derivedTruck } : {}),
         customer,
         saleType,
         items: items
@@ -200,6 +247,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           }),
         paymentMode,
         paidAmount: Number(paidAmount) || 0,
+        totalAmount,
         notes,
       };
       if (initial?._id) await api.patch(`/sales/${initial._id}`, payload);

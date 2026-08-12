@@ -92,6 +92,22 @@ canvas {
   button {
     font-size: 16px;
   }
+
+  /* Every data grid remains usable on narrow screens, including legacy pages
+     that do not yet provide their own scrolling wrapper. */
+  main table {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  main table thead,
+  main table tbody {
+    white-space: nowrap;
+  }
 }
 
 @media print {

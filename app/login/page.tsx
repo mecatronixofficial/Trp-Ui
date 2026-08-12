@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   FiAlertCircle,
@@ -18,7 +18,7 @@ import {
   FiShield,
   FiUser,
 } from 'react-icons/fi';
-import { TbSnowflake } from 'react-icons/tb';
+import BrandLogo from '../../components/BrandLogo';
 import AppLoadingScreen from '../../components/AppLoadingScreen';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../lib/api';
@@ -58,6 +58,79 @@ const resetMethods: Array<{
 
 function getApiMessage(err: any, fallback: string) {
   return err?.response?.data?.message || err?.message || fallback;
+}
+
+function LoginIceBlock({ className = '', style }: { className?: string; style?: CSSProperties }) {
+  return (
+    <svg viewBox="0 0 48 48" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="loginIceBlock" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#f0fbff" />
+          <stop offset="50%" stopColor="#7dd3fc" />
+          <stop offset="100%" stopColor="#0ea5e9" />
+        </linearGradient>
+      </defs>
+      {/* top face (pseudo-3D) */}
+      <path d="M11 8 L18 3 L42 3 L36 8 Z" fill="#f0fbff" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
+      {/* right face (pseudo-3D) */}
+      <path d="M36 8 L42 3 L42 30 L36 36 Z" fill="#0ea5e9" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
+      {/* block body (front face) */}
+      <rect x="6" y="8" width="30" height="30" rx="4" fill="url(#loginIceBlock)" stroke="#0284c7" strokeWidth="1.5" />
+      {/* crack line */}
+      <path d="M13 8 L19 20 L12 27" stroke="#f0fbff" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />
+      {/* shine */}
+      <rect x="10" y="12" width="5" height="14" rx="2.5" fill="white" opacity="0.55" />
+    </svg>
+  );
+}
+
+function IceCrystal({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} xmlns="http://www.w3.org/2000/svg" fill="none">
+      <path
+        d="M12 1 L15 9 L23 12 L15 15 L12 23 L9 15 L1 12 L9 9 Z"
+        fill="white"
+        fillOpacity="0.85"
+        stroke="#bae6fd"
+        strokeWidth="0.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** A literal stockpile of ice blocks, like the cold-store yard, anchoring the hero panel. */
+function IceBlockStack({ className = '' }: { className?: string }) {
+  const blocks = [
+    { size: 64, bottom: 0, left: '2%', rotate: -8, delay: '0s', opacity: 0.95 },
+    { size: 84, bottom: 0, left: '16%', rotate: 4, delay: '.3s', opacity: 1 },
+    { size: 56, bottom: 6, left: '34%', rotate: -12, delay: '.6s', opacity: 0.9 },
+    { size: 96, bottom: 0, left: '46%', rotate: 6, delay: '.15s', opacity: 1 },
+    { size: 60, bottom: 4, left: '65%', rotate: -6, delay: '.45s', opacity: 0.92 },
+    { size: 72, bottom: 0, left: '78%', rotate: 10, delay: '.75s', opacity: 0.96 },
+  ];
+
+  return (
+    <div className={`relative ${className}`}>
+      <div className="absolute inset-x-0 bottom-0 h-16 rounded-[100%] bg-cyan-950/25 blur-2xl" />
+      {blocks.map((block, index) => (
+        <LoginIceBlock
+          key={index}
+          className="absolute animate-ice-float drop-shadow-xl"
+          style={{
+            width: block.size,
+            height: block.size,
+            left: block.left,
+            bottom: block.bottom,
+            opacity: block.opacity,
+            animationDelay: block.delay,
+            ['--ice-rotate' as any]: `${block.rotate}deg`,
+            transform: `rotate(${block.rotate}deg)`,
+          }}
+        />
+      ))}
+    </div>
+  );
 }
 
 export default function LoginPage() {
@@ -214,11 +287,41 @@ export default function LoginPage() {
       <div className="absolute right-[12%] top-[16%] hidden h-24 w-24 rotate-12 rounded-[28px] border border-white/20 bg-white/10 shadow-2xl shadow-cyan-950/30 backdrop-blur md:block" />
       <div className="absolute bottom-[14%] left-[10%] hidden h-20 w-20 -rotate-12 rounded-[24px] border border-white/20 bg-white/10 shadow-2xl shadow-cyan-950/30 backdrop-blur md:block" />
 
+      {/* Big ice-block watermarks */}
+      <LoginIceBlock className="pointer-events-none absolute -left-14 bottom-[-6%] hidden h-[24rem] w-[24rem] -rotate-12 opacity-[0.16] lg:block" />
+      <LoginIceBlock className="pointer-events-none absolute -right-10 -top-10 hidden h-56 w-56 rotate-[18deg] opacity-[0.12] md:block" />
+
+      {/* Floating ice crystals */}
+      <IceCrystal className="absolute left-[6%] top-[22%] h-6 w-6 animate-[spin_9s_linear_infinite] opacity-70" />
+      <IceCrystal className="absolute right-[8%] top-[38%] hidden h-4 w-4 animate-[spin_7s_linear_infinite] opacity-60 sm:block" />
+      <IceCrystal className="absolute bottom-[18%] left-[22%] hidden h-5 w-5 animate-[spin_11s_linear_infinite] opacity-50 md:block" />
+      <IceCrystal className="absolute bottom-[30%] right-[16%] h-3.5 w-3.5 animate-[spin_6s_linear_infinite] opacity-70" />
+
+      {/* Falling frost specks */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {[
+          { left: '4%', size: 3, duration: '7s', delay: '0s' },
+          { left: '14%', size: 2, duration: '9s', delay: '1.4s' },
+          { left: '27%', size: 4, duration: '8s', delay: '.4s' },
+          { left: '41%', size: 2, duration: '10s', delay: '2.2s' },
+          { left: '55%', size: 3, duration: '7.5s', delay: '.9s' },
+          { left: '68%', size: 2, duration: '9.5s', delay: '3s' },
+          { left: '79%', size: 4, duration: '8.5s', delay: '1.8s' },
+          { left: '90%', size: 3, duration: '11s', delay: '.2s' },
+        ].map((flake, index) => (
+          <span
+            key={index}
+            className="absolute top-0 animate-frost-fall rounded-full bg-white/70"
+            style={{ left: flake.left, width: flake.size, height: flake.size, animationDuration: flake.duration, animationDelay: flake.delay }}
+          />
+        ))}
+      </div>
+
       <div className="relative mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-6xl items-center">
         <section className="grid w-full items-center gap-8 lg:grid-cols-[1.05fr_.95fr]">
           <div className="hidden lg:block">
             <div className="mb-8 inline-flex items-center gap-3 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-cyan-50 backdrop-blur">
-              <TbSnowflake className="text-xl text-cyan-100" />
+              <BrandLogo alt="" className="h-6 w-6 rounded-md object-cover" />
               Since 2000
             </div>
 
@@ -245,8 +348,8 @@ export default function LoginPage() {
 
           <div className="mx-auto w-full max-w-md">
             <div className="mb-6 text-center lg:hidden">
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-3xl border border-white/25 bg-white/15 shadow-xl shadow-cyan-950/20 backdrop-blur">
-                <TbSnowflake className="text-3xl text-white" />
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-white/25 bg-white/15 shadow-xl shadow-cyan-950/20 backdrop-blur">
+                <LoginIceBlock className="h-12 w-12 drop-shadow-md" />
               </div>
               <h1 className="font-display text-3xl font-bold">Tiruppur Ice</h1>
               <p className="mt-1 text-sm text-cyan-50/80">Since 2000 &middot; Admin Desk</p>
@@ -257,8 +360,9 @@ export default function LoginPage() {
               className="rounded-[2rem] border border-white/35 bg-white/95 p-6 text-navy-900 shadow-2xl shadow-cyan-950/35 backdrop-blur-xl sm:p-8"
             >
               <div className="mb-8">
-                <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-iceblue-500 text-white shadow-lg shadow-iceblue-500/30">
-                  <TbSnowflake className="text-3xl" />
+                <div className="relative mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-iceblue-50 to-iceblue-100 shadow-lg shadow-iceblue-500/20">
+                  <LoginIceBlock className="h-14 w-14 drop-shadow-md" />
+                  <IceCrystal className="absolute -right-1.5 -top-1.5 h-4 w-4 animate-[spin_5s_linear_infinite]" />
                 </div>
                 <p className="text-sm font-semibold uppercase text-iceblue-600">Welcome back</p>
                 <h2 className="mt-2 font-display text-3xl font-bold text-navy-900">Sign in securely</h2>

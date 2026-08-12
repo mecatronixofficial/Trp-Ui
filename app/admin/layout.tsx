@@ -1,9 +1,9 @@
 'use client';
 
-import Sidebar from '../../components/Sidebar';
 import Topbar from '../../components/Topbar';
 import RequireRole from '../../components/RequireRole';
 import { usePathname } from 'next/navigation';
+import AdminQuickActions from '../../components/AdminQuickActions';
 
 const titles: Record<string, string> = {
   '/admin/dashboard': 'Dashboard',
@@ -32,10 +32,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <RequireRole role={['super_admin', 'admin']}>
       <div className="flex min-h-screen w-full max-w-full overflow-x-hidden">
-        <Sidebar />
         <div className="min-w-0 flex-1 overflow-x-hidden">
           <Topbar title={title} />
-          <main className="mx-auto w-full min-w-0 max-w-7xl px-3 py-4 sm:px-4 md:p-8">{children}</main>
+          <main className="mx-auto w-full min-w-0 max-w-7xl px-3 py-4 pb-24 sm:px-4 md:p-8 md:pb-24">{children}</main>
+          <AdminQuickActions />
         </div>
       </div>
     </RequireRole>
