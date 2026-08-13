@@ -23,6 +23,40 @@ canvas {
   max-width: 100%;
 }
 
+/* Keep every data-table wrapper inside the viewport and make horizontal
+   scrolling obvious and touch-friendly on compact screens. */
+main .overflow-x-auto {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: #7dd3fc #e0f2fe;
+}
+
+main .overflow-x-auto::-webkit-scrollbar {
+  height: 0.5rem;
+}
+
+main .overflow-x-auto::-webkit-scrollbar-track {
+  background: #e0f2fe;
+  border-radius: 9999px;
+}
+
+main .overflow-x-auto::-webkit-scrollbar-thumb {
+  background: #7dd3fc;
+  border-radius: 9999px;
+}
+
+main table {
+  max-width: none;
+}
+
+main table th,
+main table td {
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
 .scrollbar-hidden {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -68,7 +102,7 @@ canvas {
   }
 }
 
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   .card {
     padding: 0.875rem;
     border-radius: 1rem;
@@ -93,20 +127,64 @@ canvas {
     font-size: 16px;
   }
 
-  /* Every data grid remains usable on narrow screens, including legacy pages
-     that do not yet provide their own scrolling wrapper. */
+  /* Tables retain real table layout. Fixed percentage columns are released on
+     compact screens so headers and values receive a readable minimum width. */
   main table {
     display: block;
     width: 100%;
     max-width: 100%;
     overflow-x: auto;
+    table-layout: auto !important;
     overscroll-behavior-inline: contain;
     -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: #7dd3fc #e0f2fe;
   }
 
-  main table thead,
-  main table tbody {
-    white-space: nowrap;
+  main table th,
+  main table td {
+    width: auto !important;
+    min-width: 7rem;
+    max-width: 16rem;
+    padding: 0.625rem 0.75rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  main table th:first-child,
+  main table td:first-child {
+    min-width: 3.5rem;
+  }
+
+  main table th:last-child,
+  main table td:last-child {
+    min-width: 5rem;
+  }
+
+  main table::-webkit-scrollbar {
+    height: 0.5rem;
+  }
+
+  main table::-webkit-scrollbar-track {
+    background: #e0f2fe;
+    border-radius: 9999px;
+  }
+
+  main table::-webkit-scrollbar-thumb {
+    background: #7dd3fc;
+    border-radius: 9999px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  main table {
+    table-layout: auto !important;
+  }
+
+  main table th,
+  main table td {
+    width: auto !important;
+    min-width: 6.5rem;
   }
 }
 
@@ -126,6 +204,20 @@ canvas {
     width: 100%;
     background: white;
     color: black;
+  }
+
+  #bill-print table {
+    display: table;
+    min-width: 0;
+    overflow: visible;
+    table-layout: auto !important;
+  }
+
+  #bill-print table th,
+  #bill-print table td {
+    min-width: 0;
+    max-width: none;
+    white-space: normal;
   }
 
   #bill-print .print-hide {

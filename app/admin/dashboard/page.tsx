@@ -82,6 +82,7 @@ export default function AdminDashboardPage() {
   const [salesTrendError, setSalesTrendError] = useState('');
   const [selectedPerformanceName, setSelectedPerformanceName] = useState('Today Sales');
   const [todaySalesBars, setTodaySalesBars] = useState<number | null>(null);
+  const [todaySales, setTodaySales] = useState<any[]>([]);
   const [stockRange, setStockRange] = useState<StockRange>('today');
   const [stockUsedBySize, setStockUsedBySize] = useState<Record<string, number>>({});
   const [stockRangeLoading, setStockRangeLoading] = useState(false);
@@ -120,19 +121,10 @@ export default function AdminDashboardPage() {
       try {
         setLoadError('');
         const today = todayISO();
-        const [dashResult, profitResult, closingResult, expenseResult, todayExpenseResult, customerResult, workerResult, truckResult, salesResult] = await Promise.allSettled([
+        const [dashResult, profitResult, closingResult, customerResult, workerResult, truckResult, salesResult] = await Promise.allSettled([
           api.get('/dashboard/admin'),
           api.get('/dashboard/monthly-profit'),
           api.get('/daily-closing', { params: { date: today } }),
-          fetch('/api/expenses', { cache: 'no-store' }).then(async (response) => {
-            const contentType = response.headers.get('content-type') || '';
-            if (!response.ok || !contentType.includes('application/json')) return { records: [] };
-            return response.json();
-          }),
-          fetch('/api/expenses?today=true', { cache: 'no-store' }).then(async (response) => {
-            if (!response.ok) throw new Error('Could not load today expenses');
-            return response.json();
-          }),
           api.get('/customers'),
           api.get('/workers'),
           api.get('/trucks'),
@@ -147,16 +139,11 @@ export default function AdminDashboardPage() {
         setData(dashResult.value.data);
         setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
         setTodayClosings(closingResult.status === 'fulfilled' ? closingResult.value.data || [] : []);
-        if (expenseResult.status === 'fulfilled') {
-          const expenseRows = Array.isArray(expenseResult.value?.records) ? expenseResult.value.records : [];
-          const todayKey = indiaDateKey(new Date());
-          setEmployeeExpenseRows(expenseRows);
-          setTodayExpenses(expenseRows.reduce((sum: number, row: any) => sum + (indiaDateKey(row.date) === todayKey ? Number(row.amount || 0) : 0), 0));
-          setEmployeeExpensesToday(expenseRows.reduce((sum: number, row: any) => sum + (String(row.costType) === 'advance_for_employee' && indiaDateKey(row.date) === todayKey ? Number(row.amount || 0) : 0), 0));
-        }
-        if (todayExpenseResult.status === 'fulfilled') {
-          setTodayExpenses(Number(todayExpenseResult.value?.summary?.totalExpenses || 0));
-        }
+        // Dashboard expense and worker-buying totals must come from the backend
+        // dashboard response because it is scoped by X-Branch-Id for super admins.
+        setTodayExpenses(Number(dashResult.value.data?.today?.makingCost || 0));
+        setEmployeeExpensesToday(0);
+        setEmployeeExpenseRows([]);
         const customers = customerResult.status === 'fulfilled' && Array.isArray(customerResult.value.data) ? customerResult.value.data : [];
         const workers = workerResult.status === 'fulfilled' && Array.isArray(workerResult.value.data) ? workerResult.value.data : [];
         const trucks = truckResult.status === 'fulfilled' && Array.isArray(truckResult.value.data) ? truckResult.value.data : [];
@@ -168,6 +155,7 @@ export default function AdminDashboardPage() {
           totalWorkers: workers.length + trucks.length,
         });
         if (salesResult.status === 'fulfilled' && Array.isArray(salesResult.value.data)) {
+          setTodaySales(salesResult.value.data);
           const bars = salesResult.value.data.reduce((saleTotal: number, sale: any) => (
             saleTotal + (Array.isArray(sale.items) ? sale.items.reduce((itemTotal: number, item: any) => itemTotal + getItemBarUsed(item), 0) : 0)
           ), 0);
@@ -247,10 +235,12 @@ export default function AdminDashboardPage() {
     // fallback for older backend responses or a failed sales request.
     const soldBars = todaySalesBars ?? truckRows.reduce((sum, row) => sum + row.quantity, 0);
     const stockRows = data.pendingStock?.sizeWise || [];
-    const stockChart = stockRows.map((row: any) => ({
-      size: `${row.size} bar`,
-      quantity: Number(row.quantity || 0),
-    }));
+    const stockChart = stockRows
+      .filter((row: any) => !['2', '3'].includes(String(row.size).trim()))
+      .map((row: any) => ({
+        size: `${row.size} bar`,
+        quantity: Math.max(0, Number(row.quantity || 0)),
+      }));
     const paymentMix = [
       { name: 'Collected', value: Number(data.today.collection || 0), color: '#16a34a' },
       { name: 'Balance', value: Number(data.today.balance || 0), color: '#ef4444' },
@@ -752,10 +742,23 @@ export default function AdminDashboardPage() {
         </Panel>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
-        <Panel title="Pending Stock Size-wise" icon={FiPackage}>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Pending stock / Used bars</p>
+      <section className="space-y-4">
+        <div className="overflow-hidden rounded-[20px] border border-sky-200 bg-white shadow-[0_8px_30px_rgba(15,55,80,0.06)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 px-4 py-3 sm:px-5">
+            <div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-600">Today Overview</p><h2 className="font-display text-lg font-bold text-navy-900">Sales Report &amp; Pending Stock</h2></div>
+            <Link href="/admin/sales/all" className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-bold text-navy-900 transition hover:bg-white">View Details</Link>
+          </div>
+          <div className="grid lg:grid-cols-[minmax(0,3fr)_minmax(300px,2fr)]">
+        <div className="min-w-0 border-b border-sky-100 p-4 lg:border-b-0 lg:border-r sm:p-5">
+          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50"><FiDollarSign className="text-emerald-600" /></span> Daily Sales Report</h3>
+          <p className="mb-3 mt-1 pl-10 text-[11px] font-medium text-slate-400">Latest 10 sales recorded today</p>
+          {todaySales.length === 0 ? <EmptyState text="No sales recorded today." /> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[560px] table-fixed border-collapse text-xs"><thead className="bg-sky-50/80 text-navy-900"><tr><th className="w-[19%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Date</th><th className="w-[27%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Customer</th><th className="w-[13%] border-b border-slate-200 px-3 py-2.5 text-center font-bold uppercase">Bars</th><th className="w-[21%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Amount</th><th className="w-[20%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Balance</th></tr></thead><tbody>{todaySales.slice(0, 10).map((sale) => { const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0); return <tr key={sale._id} className="border-b border-slate-100 last:border-0 even:bg-slate-50/60 hover:bg-sky-50/70"><td className="px-3 py-2.5 text-slate-600">{formatDate(sale.date)}</td><td className="truncate px-3 py-2.5 font-semibold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</td><td className="px-3 py-2.5 text-center font-semibold">{bars}</td><td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{formatCurrency(sale.totalAmount)}</td><td className="px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(sale.balanceAmount)}</td></tr>; })}</tbody><tfoot className="border-t border-sky-200 bg-sky-50 font-bold text-navy-900"><tr><td colSpan={2} className="px-3 py-2.5 text-right">TOTAL</td><td className="px-3 py-2.5 text-center">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)}</td><td className="px-3 py-2.5 text-right text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="px-3 py-2.5 text-right text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot></table></div>}
+        </div>
+
+        <div className="min-w-0 bg-sky-50/25 p-4 sm:p-5">
+          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-sky-100"><FiPackage className="text-sky-600" /></span> Pending Stock</h3>
+          <div className="mb-3 mt-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Size-wise bars</p>
             <div className="flex rounded-xl bg-slate-100 p-1">
               {(['today', 'weekly', 'monthly'] as StockRange[]).map((range) => (
                 <button
@@ -774,22 +777,12 @@ export default function AdminDashboardPage() {
             <EmptyState text="No stock data available." />
           ) : (
             <>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {dashboard.stockChart.map((stock: any, index: number) => (
-                <div key={`${stock.size}-${index}`} className="relative overflow-hidden rounded-2xl border border-sky-100 bg-gradient-to-b from-sky-50 via-white to-white p-3 text-center shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                  <IceBlockIcon gradientId={`stock-ice-${index}`} className="mx-auto h-14 w-14 drop-shadow-sm" />
-                  <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Bar Size</p>
-                  <p className="text-sm font-bold text-navy-900">{stock.size}</p>
-                  <p className="mt-1 font-display text-xl font-black text-sky-600">{stock.quantity}<span className="ml-1 text-[10px] font-semibold text-slate-500">bars</span></p>
-                  <div className="mt-2 border-t border-sky-100 pt-2">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{stockRange} used</p>
-                    <p className="mt-0.5 font-display text-sm font-black text-indigo-600">
-                      {stockRangeLoading ? '...' : Number(stockUsedBySize[String(stock.size).replace(' bar', '')] || 0).toFixed(2).replace(/\.00$/, '')}
-                      {!stockRangeLoading && <span className="ml-1 text-[9px] font-semibold text-slate-500">bars</span>}
-                    </p>
-                  </div>
-                </div>
-              ))}
+            <div className="rounded-2xl border border-sky-100 bg-white p-3 shadow-sm">
+              <div className="relative h-[190px]">
+                <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={dashboard.stockChart} dataKey="quantity" nameKey="size" innerRadius={52} outerRadius={76} paddingAngle={3} stroke="transparent">{dashboard.stockChart.map((stock: any, index: number) => <Cell key={`${stock.size}-${index}`} fill={chartColors[index % chartColors.length]} />)}</Pie><Tooltip formatter={(value: any) => [`${value} bars`, 'Pending']} /></PieChart></ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center"><p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total Pending</p><p className="font-display text-2xl font-black text-navy-900">{dashboard.stockChart.reduce((sum: number, stock: any) => sum + Number(stock.quantity || 0), 0)}</p><span className="text-[9px] font-semibold text-slate-500">bars</span></div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">{dashboard.stockChart.map((stock: any, index: number) => <div key={stock.size} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 shadow-sm"><div className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} /><span className="text-xs font-semibold text-navy-900">{stock.size}</span></div><span className="text-xs font-black text-sky-700">{stock.quantity}</span></div>)}</div>
             </div>
             {false && <ResponsiveContainer width="100%" height={280}>
               <BarChart data={dashboard.stockChart}>
@@ -802,33 +795,36 @@ export default function AdminDashboardPage() {
             </ResponsiveContainer>}
             </>
           )}
-        </Panel>
+        </div>
+          </div>
+        </div>
 
+        <div>
         <Panel title="Pending Customer Payments" icon={FiClock}>
           {dashboard.pendingPayments.length === 0 ? (
             <EmptyState text="No pending payments." />
           ) : (
-            <div className="overflow-x-auto border border-slate-300 bg-white">
-              <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-navy-900">
-                <thead className="bg-slate-100 text-navy-900">
+            <div className="overflow-x-auto border-2 border-black bg-white">
+              <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-black">
+                <thead className="bg-slate-100 text-black">
                   <tr>
-                    <th className="w-[7%] border border-slate-300 px-2 py-2.5 text-center text-[10px] font-bold uppercase">S.No</th>
-                    {['Bill Date', 'Customer', 'Truck', 'Total', 'Paid', 'Balance'].map((heading) => <th key={heading} className={`border border-slate-300 px-2 py-2.5 text-[10px] font-bold uppercase ${['Total', 'Paid', 'Balance'].includes(heading) ? 'text-right' : 'text-left'}`}>{heading}</th>)}
+                    <th className="w-[7%] border-2 border-black px-2 py-2.5 text-center text-[10px] font-bold uppercase">S.No</th>
+                    {['Bill Date', 'Customer', 'Truck', 'Total', 'Paid', 'Balance'].map((heading) => <th key={heading} className={`border-2 border-black px-2 py-2.5 text-[10px] font-bold uppercase ${['Total', 'Paid', 'Balance'].includes(heading) ? 'text-right' : 'text-left'}`}>{heading}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {dashboard.pendingPayments.map((sale: any, index: number) => (
                     <tr key={sale._id} className="bg-white even:bg-slate-50 hover:bg-iceblue-50/70">
-                      <td className="border border-slate-300 px-2 py-2.5 text-center font-medium">{index + 1}</td>
-                      <td className="border border-slate-300 px-2 py-2.5">{formatDate(sale.date)}</td>
-                      <td className="break-words border border-slate-300 px-2 py-2.5">
+                      <td className="border-2 border-black px-2 py-2.5 text-center font-medium text-black">{index + 1}</td>
+                      <td className="border-2 border-black px-2 py-2.5 text-black">{formatDate(sale.date)}</td>
+                      <td className="break-words border-2 border-black px-2 py-2.5 text-black">
                         <p className="font-medium">{sale.customer?.name}</p>
-                        <p className="text-xs text-navy-800/45">{sale.customer?.phoneNumber || 'No phone'}</p>
+                        <p className="text-xs text-black">{sale.customer?.phoneNumber || 'No phone'}</p>
                       </td>
-                      <td className="break-words border border-slate-300 px-2 py-2.5">{sale.truck?.truckName || '-'}</td>
-                      <td className="border border-slate-300 px-2 py-2.5 text-right">{formatCurrency(sale.totalAmount)}</td>
-                      <td className="border border-slate-300 px-2 py-2.5 text-right">{formatCurrency(sale.paidAmount)}</td>
-                      <td className="border border-slate-300 px-2 py-2.5 text-right font-semibold">{formatCurrency(sale.balanceAmount)}</td>
+                      <td className="break-words border-2 border-black px-2 py-2.5 text-black">{sale.truck?.truckName || '-'}</td>
+                      <td className="border-2 border-black px-2 py-2.5 text-right text-black">{formatCurrency(sale.totalAmount)}</td>
+                      <td className="border-2 border-black px-2 py-2.5 text-right text-black">{formatCurrency(sale.paidAmount)}</td>
+                      <td className="border-2 border-black px-2 py-2.5 text-right font-semibold text-black">{formatCurrency(sale.balanceAmount)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -836,6 +832,7 @@ export default function AdminDashboardPage() {
             </div>
           )}
         </Panel>
+        </div>
       </section>
 
       <section className="hidden">

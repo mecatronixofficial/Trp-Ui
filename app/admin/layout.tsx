@@ -25,6 +25,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     ? 'Customer Profile'
     : pathname?.startsWith('/admin/trucks/')
       ? 'Truck Profile'
+    : pathname?.startsWith('/admin/workers/buying-history')
+      ? 'Daily Buying History'
     : pathname?.startsWith('/admin/workers/')
       ? 'Worker Profile'
     : Object.entries(titles).find(([p]) => pathname?.startsWith(p))?.[1] || 'Admin';

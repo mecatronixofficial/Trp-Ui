@@ -244,34 +244,6 @@ export default function ProductionPage() {
     const produced = records
       .filter((row) => indiaDateKey(row.date) === today)
       .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
-    const sold = sales
-      .filter((sale) => indiaDateKey(sale.date) === today)
-      .reduce(
-        (sum, sale) =>
-          sum +
-          (sale.items || []).reduce(
-            (itemSum: number, item: any) => itemSum + getItemBarUsed(item),
-            0,
-          ),
-        0,
-      );
-    const wasted = wastage
-      .filter(
-        (row) => indiaDateKey(row.date) === today && row.reason !== "unsold",
-      )
-      .reduce((sum, row) => sum + getItemBarUsed(row), 0);
-    const stocked = stockEntries
-      .filter((row) => indiaDateKey(row.date) === today)
-      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-    const outsourced = outsourceEntries
-      .filter((row) => indiaDateKey(row.date) === today)
-      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-    const assigned = Object.values(truckAssignments).reduce(
-      (sum, quantity) => sum + Number(quantity || 0),
-      0,
-    );
-    // Shop sales do not have a truck. Deduct them only from Shop Ready; truck
-    // sales are already covered by the quantities sent to each truck.
     const shopSold = sales
       .filter((sale) => indiaDateKey(sale.date) === today && !sale.truck)
       .reduce(
@@ -283,16 +255,34 @@ export default function ProductionPage() {
           ),
         0,
       );
-    const finalTotal = produced - stocked + outsourced - assigned - shopSold;
+    const wasted = wastage
+      .filter(
+        (row) => indiaDateKey(row.date) === today && row.reason !== "unsold" && !row.truck,
+      )
+      .reduce((sum, row) => sum + getItemBarUsed(row), 0);
+    const stocked = stockEntries
+      .filter((row) => indiaDateKey(row.date) === today)
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const outsourced = outsourceEntries
+      .filter((row) => indiaDateKey(row.date) === today)
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    const assigned = truckLoads
+      .filter((row) => indiaDateKey(row.date) === today)
+      .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+    // Main Shop receives what remains after factory wastage, stock movement,
+    // and truck distribution. Shop Ready is its live balance after shop sales.
+    const shopTotal = Math.max(0, produced + outsourced - wasted - stocked - assigned);
+    const finalTotal = Math.max(0, shopTotal - shopSold);
     return {
       produced,
-      sold,
+      sold: shopSold,
       wasted,
       stocked,
       outsourced,
       assigned,
       shopSold,
-      balance: produced - sold - wasted,
+      shopTotal,
+      balance: finalTotal,
       finalTotal,
     };
   }, [
@@ -302,6 +292,7 @@ export default function ProductionPage() {
     stockEntries,
     outsourceEntries,
     truckAssignments,
+    truckLoads,
     activeDay,
   ]);
 
@@ -692,6 +683,13 @@ export default function ProductionPage() {
       setTruckBarsError("Enter a valid bar quantity");
       return;
     }
+    const remainingBars = Math.max(0, Number(summary.finalTotal || 0));
+    if (quantity > remainingBars) {
+      setTruckBarsError(
+        `Only ${fmtBars(remainingBars)} bar(s) remaining. You are assigning ${fmtBars(quantity)} bar(s), which is higher than the available balance.`,
+      );
+      return;
+    }
     setSavingTruckBars(true);
     setTruckBarsError("");
     try {
@@ -726,6 +724,7 @@ export default function ProductionPage() {
         ...summary,
         produced: 0,
         sold: 0,
+        shopTotal: 0,
         finalTotal: 0,
         wasted: 0,
         stocked: 0,
@@ -1248,44 +1247,32 @@ export default function ProductionPage() {
         )}
 
         <div className="mx-5 mb-5 mt-5 grid grid-cols-3 overflow-hidden rounded-xl border border-emerald-200 bg-emerald-50 shadow-sm sm:mx-6 sm:grid-cols-4">
-          <div className="col-span-3 flex items-center justify-between border-b border-emerald-200 bg-emerald-100/70 px-3 py-2 sm:col-span-1 sm:border-b-0 sm:border-r">
+          <div className="col-span-3 flex items-center justify-between border-b border-emerald-200 bg-emerald-100/70 px-4 py-3 sm:col-span-1 sm:border-b-0 sm:border-r">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700/70">
                 Shop Distribution
               </p>
-              <p className="mt-0.5 text-sm font-bold text-navy-900">
-                Main Shop
-              </p>
+              <p className="mt-1 text-sm font-bold text-navy-900">Main Shop</p>
             </div>
-            <span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-700 font-black text-white shadow-sm">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-700 font-black text-white shadow-sm">
               S
             </span>
           </div>
-          <div className="border-r border-emerald-200 px-3 py-2 text-center">
-            <p className="text-[10px] font-semibold uppercase text-navy-800/45">
-              Total Bar
-            </p>
+          <div className="border-r border-emerald-200 px-3 py-3 text-center">
+            <p className="text-[10px] font-semibold uppercase text-navy-800/45">Total Bar</p>
             <p className="mt-1 font-display text-lg font-bold text-navy-900">
-              {fmtBars(
-                Number(liveSummary.finalTotal || 0) + Number(liveShopSold || 0),
-              )}
+              {fmtBars(Number(liveSummary.shopTotal || 0))}
             </p>
           </div>
-          <div className="border-r border-emerald-200 px-3 py-2 text-center">
-            <p className="text-[10px] font-semibold uppercase text-navy-800/45">
-              Sold
-            </p>
+          <div className="border-r border-emerald-200 px-3 py-3 text-center">
+            <p className="text-[10px] font-semibold uppercase text-navy-800/45">Sold</p>
             <p className="mt-1 font-display text-lg font-bold text-emerald-600">
               {fmtBars(Number(liveShopSold || 0))}
             </p>
           </div>
-          <div className="px-3 py-2 text-center">
-            <p className="text-[10px] font-semibold uppercase text-navy-800/45">
-              Balance
-            </p>
-            <p
-              className={`mt-1 font-display text-lg font-bold ${Number(liveSummary.finalTotal || 0) < 0 ? "text-red-600" : "text-emerald-700"}`}
-            >
+          <div className="px-3 py-3 text-center">
+            <p className="text-[10px] font-semibold uppercase text-navy-800/45">Balance</p>
+            <p className="mt-1 font-display text-lg font-bold text-emerald-700">
               {fmtBars(Number(liveSummary.finalTotal || 0))}
             </p>
           </div>

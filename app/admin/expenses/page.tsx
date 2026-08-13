@@ -868,18 +868,18 @@ export default function ExpensesPage() {
         )}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 pb-4 md:flex-row md:items-center md:justify-between">
+      <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-navy-900 shadow-sm sm:p-5">
+        <div className="flex flex-col gap-3 border-b border-sky-200 pb-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-navy-800/45">
+            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-sky-700/70">
               Spending by category
             </p>
             <h2 className="mt-0.5 font-display text-base font-bold text-navy-900">
               Expenses Breakdown
             </h2>
           </div>
-          <div className="rounded-xl border border-iceblue-100 bg-iceblue-50 px-4 py-3 text-right">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">
+          <div className="rounded-xl border border-sky-200 bg-white/70 px-4 py-3 text-right">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700/70">
               Total Spending
             </p>
             <p className="mt-1 text-sm font-bold text-navy-900">

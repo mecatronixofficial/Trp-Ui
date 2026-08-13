@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { FiDownload, FiFileText } from 'react-icons/fi';
+import { FiAlertCircle, FiDownload, FiFileText } from 'react-icons/fi';
 import * as XLSX from 'xlsx';
 import api from '../../../lib/api';
 import { formatCurrency, todayISO } from '../../../lib/api';
+import { errorMessage } from '../../../lib/salesUtils';
 
 const REPORT_TABS = [
   { key: 'monthly-sales', label: 'Monthly Sales' },
@@ -16,6 +17,12 @@ const REPORT_TABS = [
   { key: 'expense', label: 'Expense' },
   { key: 'retail-vs-wholesale', label: 'Retail vs Wholesale' },
 ];
+
+// Reports whose backend endpoint actually reads the `truck` query param
+// (see reports.controller.ts / reports.service.ts). Showing the Truck
+// filter for the others is a dead control — it looks interactive but
+// silently changes nothing, which is worse than not having it.
+const TRUCK_FILTER_TABS = new Set(['profit-loss', 'size-wise', 'wastage']);
 
 function firstOfMonth() {
   const d = new Date();
@@ -32,29 +39,41 @@ export default function ReportsPage() {
   const [topCustomers, setTopCustomers] = useState<any[]>([]);
   const [topSizes, setTopSizes] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [reportMonth, setReportMonth] = useState(todayISO().slice(0, 7));
   const reportRequest = useRef(0);
+  const showTruckFilter = TRUCK_FILTER_TABS.has(tab);
 
   useEffect(() => {
-    api.get('/trucks').then((r) => setTrucks(r.data));
+    api.get('/trucks').then((r) => setTrucks(r.data)).catch(() => setTrucks([]));
     if (new URLSearchParams(window.location.search).get('view') === 'monthly-sales') setTab('monthly-sales');
   }, []);
 
   const load = async () => {
     const requestId = ++reportRequest.current;
     setLoading(true);
+    setError('');
     const params: any = { from, to };
-    if (truck) params.truck = truck;
-    const [res, tc, ts] = await Promise.all([
-      tab === 'monthly-sales' ? api.get('/reports/monthly-sales', { params: { month: reportMonth } }) : api.get(`/reports/${tab}`, { params }),
-      api.get('/reports/top-customers', { params: { from, to } }),
-      api.get('/reports/top-sizes', { params: { from, to } }),
-    ]);
-    if (requestId !== reportRequest.current) return;
-    setData(res.data);
-    setTopCustomers(Array.isArray(tc.data) ? tc.data : []);
-    setTopSizes(Array.isArray(ts.data) ? ts.data : []);
-    setLoading(false);
+    if (truck && showTruckFilter) params.truck = truck;
+    try {
+      const [res, tc, ts] = await Promise.all([
+        tab === 'monthly-sales' ? api.get('/reports/monthly-sales', { params: { month: reportMonth } }) : api.get(`/reports/${tab}`, { params }),
+        api.get('/reports/top-customers', { params: { from, to } }),
+        api.get('/reports/top-sizes', { params: { from, to } }),
+      ]);
+      if (requestId !== reportRequest.current) return;
+      setData(res.data);
+      setTopCustomers(Array.isArray(tc.data) ? tc.data : []);
+      setTopSizes(Array.isArray(ts.data) ? ts.data : []);
+    } catch (err: any) {
+      if (requestId !== reportRequest.current) return;
+      setData(null);
+      setTopCustomers([]);
+      setTopSizes([]);
+      setError(errorMessage(err, 'Could not load this report.'));
+    } finally {
+      if (requestId === reportRequest.current) setLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -110,24 +129,32 @@ export default function ReportsPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-3 border-b border-iceblue-100 px-4 py-3">
-          {tab === 'monthly-sales' && <div><label className="label-text">Report Month</label><input type="month" className="input-field" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} /></div>}
-          {tab !== 'monthly-sales' && <>
-          <div>
-            <label className="label-text">From</label>
-            <input type="date" className="input-field" value={from} onChange={(e) => setFrom(e.target.value)} />
-          </div>
-          </>}
-          <div>
-            <label className="label-text">To</label>
-            <input type="date" className="input-field" value={to} onChange={(e) => setTo(e.target.value)} />
-          </div>
-          <div>
-            <label className="label-text">Truck</label>
-            <select className="input-field" value={truck} onChange={(e) => setTruck(e.target.value)}>
-              <option value="">All</option>
-              {trucks.map((t) => <option key={t._id} value={t._id}>{t.truckName}</option>)}
-            </select>
-          </div>
+          {tab === 'monthly-sales' ? (
+            <div className="w-full sm:w-[160px]">
+              <label className="label-text">Report Month</label>
+              <input type="month" className="input-field" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} />
+            </div>
+          ) : (
+            <>
+              <div className="w-full sm:w-[150px]">
+                <label className="label-text">From</label>
+                <input type="date" className="input-field" value={from} onChange={(e) => setFrom(e.target.value)} />
+              </div>
+              <div className="w-full sm:w-[150px]">
+                <label className="label-text">To</label>
+                <input type="date" className="input-field" value={to} onChange={(e) => setTo(e.target.value)} />
+              </div>
+            </>
+          )}
+          {showTruckFilter && (
+            <div className="w-full sm:w-[180px]">
+              <label className="label-text">Truck</label>
+              <select className="input-field" value={truck} onChange={(e) => setTruck(e.target.value)}>
+                <option value="">All</option>
+                {trucks.map((t) => <option key={t._id} value={t._id}>{t.truckName}</option>)}
+              </select>
+            </div>
+          )}
           <button onClick={load} className="btn-secondary">Apply</button>
         </div>
       </section>
@@ -136,7 +163,7 @@ export default function ReportsPage() {
         {REPORT_TABS.map((t) => (
           <button
             key={t.key}
-            onClick={() => { setData(null); setTab(t.key); }}
+            onClick={() => { setData(null); setError(''); setTab(t.key); }}
             className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium transition ${
               tab === t.key ? 'bg-iceblue-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-navy-900 hover:bg-iceblue-50'
             }`}
@@ -153,6 +180,11 @@ export default function ReportsPage() {
         <div className="p-4">
           {loading ? (
             <p className="text-navy-800/50">Loading report...</p>
+          ) : error ? (
+            <p role="alert" className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+              <FiAlertCircle className="mt-0.5 shrink-0" />
+              {error}
+            </p>
           ) : (
             <ReportBody tab={tab} data={data} />
           )}

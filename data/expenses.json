@@ -1,5 +1,17 @@
 [
   {
+    "_id": "1786600678240-580bdf8fabfe88",
+    "date": "2026-08-13T00:00:00.000Z",
+    "costType": "petrol_diesel",
+    "amount": 100,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "description": "",
+    "createdAt": "2026-08-13T05:57:58.240Z",
+    "updatedAt": "2026-08-13T05:57:58.240Z"
+  },
+  {
     "_id": "1786500065525-2344eeefab01d",
     "date": "2026-08-12",
     "costType": "petrol_diesel",

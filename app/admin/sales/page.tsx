@@ -159,9 +159,6 @@ export default function AdminSalesPage() {
           <Link href="/admin/sales/all" className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
             <FiList /> All Sales
           </Link>
-          <button onClick={openAddSale} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-            <FiPlus /> Add Sale
-          </button>
         </div>
 
         <form onSubmit={applyFilters} className="flex flex-wrap items-end gap-2 border-b border-iceblue-100 px-4 py-3">
