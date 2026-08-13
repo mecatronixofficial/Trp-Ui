@@ -9,6 +9,11 @@ export type ExpenseRecord = {
   notes?: string;
   worker?: string;
   workerName?: string;
+  branch?: string;
+  branchName?: string;
+  truck?: string;
+  truckName?: string;
+  fuelQuantity?: number;
   description?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -25,7 +30,7 @@ const storePath = path.join(process.cwd(), 'data', 'expenses.json');
 
 const isSnackCategory = (costType: string) => {
   const normalized = String(costType || '').trim().toLowerCase();
-  return normalized === 'snacks_expenses' || normalized === 'snacks' || normalized.includes('snack');
+  return normalized === 'food' || normalized === 'food_expenses' || normalized === 'snacks_expenses' || normalized === 'snacks' || normalized.includes('snack');
 };
 
 const normalizeCostType = (costType: unknown) => {
@@ -38,8 +43,12 @@ async function readStore() {
   try {
     const raw = await fs.readFile(storePath, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
+    if (!Array.isArray(parsed)) {
+      throw new Error('Expense data file must contain a JSON array');
+    }
+    return parsed as ExpenseRecord[];
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw error;
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(storePath, JSON.stringify([], null, 2));
     return [];
@@ -73,7 +82,7 @@ const indiaDateKey = (date: string | Date) => new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 }).format(new Date(date));
 
-function dateMatches(recordDate: string, filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null }) {
+function dateMatches(recordDate: string, filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null }) {
   if (!filters) return true;
 
   if (filters.today) {
@@ -85,6 +94,12 @@ function dateMatches(recordDate: string, filters?: { month?: number | null; year
     return indiaDateKey(recordDate) === filters.date;
   }
 
+  if (filters.from || filters.to) {
+    const recordKey = indiaDateKey(recordDate);
+    return (!filters.from || recordKey >= filters.from)
+      && (!filters.to || recordKey <= filters.to);
+  }
+
   if (filters.month && filters.year) {
     const monthKey = `${String(filters.year).padStart(4, '0')}-${String(filters.month).padStart(2, '0')}`;
     return recordDate.startsWith(monthKey);
@@ -93,9 +108,10 @@ function dateMatches(recordDate: string, filters?: { month?: number | null; year
   return true;
 }
 
-export async function listExpenses(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null }) {
+export async function listExpenses(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null }) {
   const records = await readStore();
-  return records.filter((record) => dateMatches(record.date, filters));
+  return records.filter((record) => dateMatches(record.date, filters)
+    && (!filters?.branch || String(record.branch || '') === filters.branch));
 }
 
 export async function createExpense(input: Partial<ExpenseRecord>) {
@@ -112,6 +128,11 @@ export async function createExpense(input: Partial<ExpenseRecord>) {
     notes: cleanText(input.notes, 1000),
     worker: cleanText(input.worker, 120),
     workerName: cleanText(input.workerName, 160),
+    branch: cleanText(input.branch, 120),
+    branchName: cleanText(input.branchName, 160),
+    truck: cleanText(input.truck, 120),
+    truckName: cleanText(input.truckName, 160),
+    fuelQuantity: parseAmount(input.fuelQuantity),
     description: cleanText(input.description || input.notes, 1000),
     createdAt: now,
     updatedAt: now,
@@ -140,6 +161,11 @@ export async function updateExpense(id: string, input: Partial<ExpenseRecord>) {
     notes: cleanText(input.notes ?? records[index].notes, 1000),
     worker: cleanText(input.worker ?? records[index].worker, 120),
     workerName: cleanText(input.workerName ?? records[index].workerName, 160),
+    branch: cleanText(input.branch ?? records[index].branch, 120),
+    branchName: cleanText(input.branchName ?? records[index].branchName, 160),
+    truck: cleanText(input.truck ?? records[index].truck, 120),
+    truckName: cleanText(input.truckName ?? records[index].truckName, 160),
+    fuelQuantity: parseAmount(input.fuelQuantity ?? records[index].fuelQuantity),
     description: cleanText(input.description ?? input.notes ?? records[index].description ?? records[index].notes, 1000),
     updatedAt: new Date().toISOString(),
   };
@@ -157,7 +183,7 @@ export async function deleteExpense(id: string) {
   return true;
 }
 
-export async function getExpenseSummary(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null }) {
+export async function getExpenseSummary(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null }) {
   const records = await listExpenses(filters);
   const snacksTotal = records.reduce((sum, record) => sum + (isSnackCategory(record.costType) ? Number(record.amount || 0) : 0), 0);
   const petrolDieselTotal = records.reduce((sum, record) => sum + (normalizeCostType(record.costType) === 'petrol_diesel' ? Number(record.amount || 0) : 0), 0);

@@ -6,23 +6,28 @@ import {
   FiActivity,
   FiAlertCircle,
   FiBox,
-  FiCalendar,
   FiCheck,
   FiCheckCircle,
   FiEdit2,
+  FiDollarSign,
+  FiGitBranch,
   FiPlus,
+  FiRefreshCw,
   FiSettings,
   FiTrash2,
   FiTruck,
 } from "react-icons/fi";
 import api, { dedupedGet } from "../../../lib/api";
-import { getItemBarUsed, formatDate } from "../../../lib/api";
+import { getItemBarUsed, formatDate, WASTAGE_REASONS } from "../../../lib/api";
 import Modal from "../../../components/Modal";
 import SaleForm from "../../../components/SaleForm";
 import { formatBarQuantity, formatCurrency } from "../../../lib/api";
 import useDismissibleMenu from "../../../hooks/useDismissibleMenu";
+import { useAuth } from "../../../context/AuthContext";
+import { selectedBranchHeaders } from "../../../lib/branch-fetch";
 
 type BoxInfo = { nextOpen: number; totalBoxes: number; barsPerBox: number };
+type BranchOption = { _id: string; name: string; code: string; isActive?: boolean };
 type TruckOption = { _id: string; truckName: string; truckNumber: string; isOnline?: boolean; driverOnline?: boolean; online?: boolean };
 type TruckLoad = {
   _id: string;
@@ -31,6 +36,20 @@ type TruckLoad = {
   createdAt?: string;
   truck?: TruckOption | string;
 };
+
+const LOAD_SECTIONS = [
+  "production",
+  "sales",
+  "wastage",
+  "stock",
+  "outsource",
+  "trucks",
+  "assignments",
+  "truckLoads",
+  "closing",
+  "reconciliation",
+] as const;
+type LoadSection = (typeof LOAD_SECTIONS)[number];
 
 // quarter-bar quantities (0.25, 0.5, 0.75...) display with 2 decimals; whole numbers stay clean
 const fmtBars = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
@@ -45,22 +64,25 @@ const indiaDateKey = (date: string | Date) =>
 
 const todayIndiaISO = () => indiaDateKey(new Date());
 
-const nextIndiaDayLabel = (day: string) =>
-  new Intl.DateTimeFormat("en-IN", {
-    timeZone: "Asia/Kolkata",
-    weekday: "long",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(new Date(`${day}T12:00:00+05:30`).getTime() + 86_400_000));
-
 export default function ProductionPage() {
+  const { user, loading: authLoading } = useAuth();
   const [activeDay, setActiveDay] = useState(todayIndiaISO());
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [records, setRecords] = useState<any[]>([]);
   const [sales, setSales] = useState<any[]>([]);
   const [wastage, setWastage] = useState<any[]>([]);
+  const [wastageModalOpen, setWastageModalOpen] = useState(false);
+  const [wastageEditing, setWastageEditing] = useState<any | null>(null);
+  const [wastageQuantity, setWastageQuantity] = useState("");
+  const [wastageReason, setWastageReason] = useState("broken");
+  const [wastageNotes, setWastageNotes] = useState("");
+  const [wastageError, setWastageError] = useState("");
+  const [savingWastage, setSavingWastage] = useState(false);
   const [stockEntries, setStockEntries] = useState<any[]>([]);
   const [outsourceEntries, setOutsourceEntries] = useState<any[]>([]);
+  const [expenseRecords, setExpenseRecords] = useState<any[]>([]);
+  const [expenseLoadError, setExpenseLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -78,7 +100,7 @@ export default function ProductionPage() {
   const [prodSettingsError, setProdSettingsError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{
-    kind: "production" | "stock" | "outsource";
+    kind: "production" | "stock" | "outsource" | "wastage";
     id: string;
     label: string;
   } | null>(null);
@@ -100,6 +122,7 @@ export default function ProductionPage() {
   const [truckAssignments, setTruckAssignments] = useState<
     Record<string, number>
   >({});
+  const [truckAssignmentDetails, setTruckAssignmentDetails] = useState<Record<string, any>>({});
   const [closings, setClosings] = useState<any[]>([]);
   const [driverClosings, setDriverClosings] = useState<any[]>([]);
   const [closeTarget, setCloseTarget] = useState<any | null>(null);
@@ -107,10 +130,12 @@ export default function ProductionPage() {
   const [checkingTruck, setCheckingTruck] = useState("");
   const [checkingAll, setCheckingAll] = useState(false);
   const [closingDay, setClosingDay] = useState(false);
+  const [reopeningDay, setReopeningDay] = useState(false);
   const [truckBarsOpen, setTruckBarsOpen] = useState(false);
   const [selectedTruck, setSelectedTruck] = useState("");
   const [exactTruckBars, setExactTruckBars] = useState("");
   const [savingTruckBars, setSavingTruckBars] = useState(false);
+  const [cancellingTruckBars, setCancellingTruckBars] = useState(false);
   const [truckBarsError, setTruckBarsError] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const quickAddRef = useRef<HTMLDivElement>(null);
@@ -118,75 +143,131 @@ export default function ProductionPage() {
   useDismissibleMenu(quickAddOpen, quickAddRef, closeQuickAdd);
   const [saleModalOpen, setSaleModalOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const loadInFlightRef = useRef<Promise<void> | null>(null);
+  const loadDayRef = useRef("");
+  const isSuperAdmin = user?.role === "super_admin";
+  const canManageProduction = !isSuperAdmin || Boolean(selectedBranch);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+
+  useEffect(() => {
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem("tii_selected_branch") || "";
+    setSelectedBranch(isSuperAdmin ? storedBranch : user?.branch || "");
+    if (isSuperAdmin) {
+      api.get("/branches")
+        .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
+        .catch(() => setBranches([]));
+    }
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  useEffect(() => {
+    if (authLoading || selectedBranch === null) return;
+    setExpenseLoadError("");
+    fetch(`/api/expenses?date=${encodeURIComponent(activeDay)}`, {
+      cache: "no-store",
+      headers: selectedBranchHeaders(),
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload?.message || "Could not load expenses");
+        setExpenseRecords(Array.isArray(payload.records) ? payload.records : []);
+      })
+      .catch((error) => {
+        setExpenseRecords([]);
+        setExpenseLoadError(error?.message || "Could not load expenses");
+      });
+  }, [authLoading, selectedBranch, activeDay]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem("tii_selected_branch", branch);
+    else window.localStorage.removeItem("tii_selected_branch");
+    window.location.reload();
+  };
 
   const load = useCallback(
-    async (initial = false) => {
-      if (initial) setLoading(true);
-      setLoadError("");
-      try {
-        const [
-          productionRows,
-          saleRows,
-          wastageRows,
-          stockRows,
-          outsourceRows,
-          truckRows,
-          assignmentRows,
-          truckLoadRows,
-          closingRows,
-          reconciliationRows,
-        ] = await Promise.all([
-          dedupedGet("/production"),
-          dedupedGet("/sales"),
-          dedupedGet("/wastage"),
-          dedupedGet("/stock-entries"),
-          dedupedGet("/outsource-entries"),
-          dedupedGet("/trucks"),
-          dedupedGet("/truck-assignments", { params: { date: activeDay } }),
-          dedupedGet("/truck-loads"),
-          dedupedGet("/daily-closing", { params: { date: activeDay } }),
-          dedupedGet("/truck-loads/reconciliation", {
-            params: { date: activeDay },
-          }),
-        ]);
-        setRecords(
-          Array.isArray(productionRows.data) ? productionRows.data : [],
-        );
-        setSales(Array.isArray(saleRows.data) ? saleRows.data : []);
-        setWastage(Array.isArray(wastageRows.data) ? wastageRows.data : []);
-        setStockEntries(Array.isArray(stockRows.data) ? stockRows.data : []);
-        setOutsourceEntries(
-          Array.isArray(outsourceRows.data) ? outsourceRows.data : [],
-        );
-        const availableTrucks = Array.isArray(truckRows.data)
-          ? truckRows.data
-          : [];
-        setTrucks(availableTrucks);
-        setTruckLoads(
-          Array.isArray(truckLoadRows.data) ? truckLoadRows.data : [],
-        );
-        setClosings(Array.isArray(closingRows.data) ? closingRows.data : []);
-        setDriverClosings(
-          Array.isArray(reconciliationRows.data) ? reconciliationRows.data : [],
-        );
-        setTruckAssignments(
-          Object.fromEntries(
-            (Array.isArray(assignmentRows.data) ? assignmentRows.data : []).map(
-              (row: any) => [
-                String(row.truck?._id || row.truck),
-                Number(row.quantity || 0),
-              ],
-            ),
-          ),
-        );
-        setSelectedTruck((current) => current || availableTrucks[0]?._id || "");
-      } catch (err: any) {
-        setLoadError(
-          err?.response?.data?.message || "Could not load production data",
-        );
-      } finally {
-        setLoading(false);
+    (initial = false, sections: readonly LoadSection[] = LOAD_SECTIONS, silent = false) => {
+      if (loadInFlightRef.current) {
+        if (silent || (initial && loadDayRef.current === activeDay)) return loadInFlightRef.current;
+        return loadInFlightRef.current.then(() => load(initial, sections, silent));
       }
+      loadDayRef.current = activeDay;
+      if (initial) setLoading(true);
+      if (!initial && !silent) setRefreshing(true);
+      if (!silent) setLoadError("");
+
+      const task = (async () => {
+        const definitions = [
+          { key: "production" as const, label: "production", request: () => dedupedGet("/production") },
+          { key: "sales" as const, label: "sales", request: () => dedupedGet("/sales") },
+          { key: "wastage" as const, label: "wastage", request: () => dedupedGet("/wastage") },
+          { key: "stock" as const, label: "stock", request: () => dedupedGet("/stock-entries") },
+          { key: "outsource" as const, label: "outsource", request: () => dedupedGet("/outsource-entries") },
+          { key: "trucks" as const, label: "trucks", request: () => dedupedGet("/trucks") },
+          { key: "assignments" as const, label: "truck assignments", request: () => dedupedGet("/truck-assignments", { params: { date: activeDay } }) },
+          { key: "truckLoads" as const, label: "truck loads", request: () => dedupedGet("/truck-loads") },
+          { key: "closing" as const, label: "daily closing", request: () => dedupedGet("/daily-closing", { params: { date: activeDay } }) },
+          { key: "reconciliation" as const, label: "truck checks", request: () => dedupedGet("/truck-loads/reconciliation", { params: { date: activeDay } }) },
+        ].filter((definition) => sections.includes(definition.key));
+
+        const completed: Array<{ definition: (typeof definitions)[number]; result: PromiseSettledResult<any> }> = [];
+        // Limit concurrency so opening the page does not overwhelm rate-limited APIs.
+        for (let index = 0; index < definitions.length; index += 3) {
+          const batch = definitions.slice(index, index + 3);
+          const results = await Promise.allSettled(batch.map((definition) => definition.request()));
+          batch.forEach((definition, resultIndex) => completed.push({ definition, result: results[resultIndex] }));
+        }
+
+        let successful = 0;
+        const failures: Array<{ label: string; reason: any }> = [];
+        for (const { definition, result } of completed) {
+          if (result.status === "rejected") {
+            failures.push({ label: definition.label, reason: result.reason });
+            continue;
+          }
+          successful += 1;
+          const rows = Array.isArray(result.value.data) ? result.value.data : [];
+          switch (definition.key) {
+            case "production": setRecords(rows); break;
+            case "sales": setSales(rows); break;
+            case "wastage": setWastage(rows); break;
+            case "stock": setStockEntries(rows); break;
+            case "outsource": setOutsourceEntries(rows); break;
+            case "trucks":
+              setTrucks(rows);
+              setSelectedTruck((current) => current || rows[0]?._id || "");
+              break;
+            case "assignments":
+              setTruckAssignments(Object.fromEntries(rows.map((row: any) => [String(row.truck?._id || row.truck), Number(row.quantity || 0) + Number(row.pendingQuantity || 0)])));
+              setTruckAssignmentDetails(Object.fromEntries(rows.map((row: any) => [String(row.truck?._id || row.truck), row])));
+              break;
+            case "truckLoads": setTruckLoads(rows); break;
+            case "closing": setClosings(rows); break;
+            case "reconciliation": setDriverClosings(rows); break;
+          }
+        }
+
+        if (successful > 0) setLastUpdated(new Date());
+        if (!silent && failures.length > 0) {
+          const rateLimited = failures.some(({ reason }) => reason?.response?.status === 429);
+          const failedNames = failures.map(({ label }) => label).join(", ");
+          setLoadError(
+            rateLimited
+              ? `The server is busy. Showing the last available data; retry ${failedNames} in a moment.`
+              : successful > 0
+                ? `Some information could not refresh: ${failedNames}. Other production data is still available.`
+                : failures[0]?.reason?.response?.data?.message || "Could not load production data",
+          );
+        }
+      })().finally(() => {
+        setLoading(false);
+        if (!silent) setRefreshing(false);
+        loadInFlightRef.current = null;
+      });
+
+      loadInFlightRef.current = task;
+      return task;
     },
     [activeDay],
   );
@@ -199,24 +280,24 @@ export default function ProductionPage() {
 
   useEffect(() => {
     void load(true);
+    void fetchNextBox().catch(() => setBoxInfo(null));
   }, [load]);
 
   useEffect(() => {
-    const refreshDriverPresence = async () => {
-      try {
-        const [truckRows, reconciliationRows] = await Promise.all([
-          api.get('/trucks'),
-          api.get('/truck-loads/reconciliation', { params: { date: activeDay } }),
-        ]);
-        setTrucks(Array.isArray(truckRows.data) ? truckRows.data : []);
-        setDriverClosings(Array.isArray(reconciliationRows.data) ? reconciliationRows.data : []);
-      } catch {
-        // Keep the last known presence when a background refresh fails.
-      }
+    const refreshDriverPresence = () => {
+      if (document.visibilityState !== "visible") return;
+      void load(false, ["trucks", "reconciliation", "assignments"], true);
     };
-    const timer = window.setInterval(() => void refreshDriverPresence(), 15_000);
-    return () => window.clearInterval(timer);
-  }, [activeDay]);
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshDriverPresence();
+    };
+    const timer = window.setInterval(refreshDriverPresence, 60_000);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [load]);
 
   useEffect(() => {
     const moveToCurrentDay = () => {
@@ -239,13 +320,21 @@ export default function ProductionPage() {
     };
   }, []);
 
+  const activeSessionStartedAt =
+    canManageProduction && closings[0]?.status === "open" && closings[0]?.sessionStartedAt
+      ? new Date(closings[0].sessionStartedAt).getTime()
+      : 0;
+  const isCurrentSessionEntry = (row: any) =>
+    !activeSessionStartedAt ||
+    new Date(row.createdAt || row.date).getTime() >= activeSessionStartedAt;
+
   const summary = useMemo(() => {
     const today = activeDay;
     const produced = records
-      .filter((row) => indiaDateKey(row.date) === today)
+      .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
     const shopSold = sales
-      .filter((sale) => indiaDateKey(sale.date) === today && !sale.truck)
+      .filter((sale) => indiaDateKey(sale.date) === today && !sale.truck && isCurrentSessionEntry(sale))
       .reduce(
         (sum, sale) =>
           sum +
@@ -257,17 +346,17 @@ export default function ProductionPage() {
       );
     const wasted = wastage
       .filter(
-        (row) => indiaDateKey(row.date) === today && row.reason !== "unsold" && !row.truck,
+        (row) => indiaDateKey(row.date) === today && row.reason !== "unsold" && !row.truck && isCurrentSessionEntry(row),
       )
       .reduce((sum, row) => sum + getItemBarUsed(row), 0);
     const stocked = stockEntries
-      .filter((row) => indiaDateKey(row.date) === today)
+      .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     const outsourced = outsourceEntries
-      .filter((row) => indiaDateKey(row.date) === today)
+      .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     const assigned = truckLoads
-      .filter((row) => indiaDateKey(row.date) === today)
+      .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     // Main Shop receives what remains after factory wastage, stock movement,
     // and truck distribution. Shop Ready is its live balance after shop sales.
@@ -294,6 +383,7 @@ export default function ProductionPage() {
     truckAssignments,
     truckLoads,
     activeDay,
+    activeSessionStartedAt,
   ]);
 
   const todaysSales = useMemo(
@@ -301,9 +391,21 @@ export default function ProductionPage() {
     [sales, activeDay],
   );
 
+  const sessionSales = useMemo(
+    () => todaysSales.filter((sale) => isCurrentSessionEntry(sale)),
+    [todaysSales, activeSessionStartedAt],
+  );
+
+  const todaysShopWastage = useMemo(
+    () => wastage
+      .filter((entry) => indiaDateKey(entry.date) === activeDay && entry.reason !== "unsold" && !entry.truck)
+      .sort((a, b) => String(b.createdAt || b._id).localeCompare(String(a.createdAt || a._id))),
+    [wastage, activeDay],
+  );
+
   const soldByTruck = useMemo(() => {
     const totals: Record<string, number> = {};
-    for (const sale of todaysSales) {
+    for (const sale of sessionSales) {
       const truckId = String(sale.truck?._id || sale.truck || "");
       if (!truckId) continue;
       const sold = (sale.items || []).reduce(
@@ -313,7 +415,7 @@ export default function ProductionPage() {
       totals[truckId] = (totals[truckId] || 0) + sold;
     }
     return totals;
-  }, [todaysSales]);
+  }, [sessionSales]);
 
   const truckSoldToday = useMemo(
     () =>
@@ -322,7 +424,98 @@ export default function ProductionPage() {
   );
 
   const shopSoldToday = summary.shopSold;
-
+  const totalSoldToday = shopSoldToday + truckSoldToday;
+  const dailyShopSold = useMemo(
+    () => todaysSales
+      .filter((sale) => !sale.truck)
+      .reduce((total, sale) => total + (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0), 0),
+    [todaysSales],
+  );
+  const dailyTruckSold = useMemo(
+    () => todaysSales
+      .filter((sale) => Boolean(sale.truck))
+      .reduce((total, sale) => total + (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0), 0),
+    [todaysSales],
+  );
+  const dailyTotalSold = dailyShopSold + dailyTruckSold;
+  const dailyShopWastage = useMemo(
+    () => wastage
+      .filter((row) => indiaDateKey(row.date) === activeDay && row.reason !== "unsold" && !row.truck)
+      .reduce((sum, row) => sum + getItemBarUsed(row), 0),
+    [wastage, activeDay],
+  );
+  const financialSummary = useMemo(() => {
+    const salesAmount = todaysSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
+    const collectionAmount = todaysSales.reduce((sum, sale) => sum + Number(sale.paidAmount || 0), 0);
+    const pendingAmount = todaysSales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0);
+    const expenses = expenseRecords.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+    return {
+      salesCount: todaysSales.length,
+      salesAmount,
+      collectionAmount,
+      pendingAmount,
+      expenses,
+      profit: collectionAmount - expenses,
+    };
+  }, [todaysSales, expenseRecords]);
+  const overallBranchRows = useMemo(() => branches
+    .filter((branch) => branch.isActive !== false)
+    .map((branch) => {
+      const belongsToBranch = (row: any) => String(row.branch?._id || row.branch || "") === branch._id;
+      const closing = closings.find((row) => belongsToBranch(row));
+      const sessionStartedAt = closing?.status === "open" && closing?.sessionStartedAt
+        ? new Date(closing.sessionStartedAt).getTime()
+        : 0;
+      const inActiveSession = (row: any) => !sessionStartedAt || new Date(row.createdAt || row.date).getTime() >= sessionStartedAt;
+      const produced = records
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
+        .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
+      const branchSales = sales.filter((sale) => indiaDateKey(sale.date) === activeDay && belongsToBranch(sale));
+      const liveBranchSales = closing?.status === "closed" ? branchSales : branchSales.filter(inActiveSession);
+      const shopSold = liveBranchSales
+        .filter((sale) => !sale.truck)
+        .reduce((total, sale) => total + (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0), 0);
+      const truckSold = liveBranchSales
+        .filter((sale) => Boolean(sale.truck))
+        .reduce((total, sale) => total + (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0), 0);
+      const sessionWasted = wastage
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row) && row.reason !== "unsold" && !row.truck)
+        .reduce((sum, row) => sum + getItemBarUsed(row), 0);
+      const dailyWasted = wastage
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && row.reason !== "unsold" && !row.truck)
+        .reduce((sum, row) => sum + getItemBarUsed(row), 0);
+      const stocked = stockEntries
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
+        .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+      const outsourced = outsourceEntries
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
+        .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+      const assigned = truckLoads
+        .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
+        .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+      const expenses = expenseRecords
+        .filter((row) => belongsToBranch(row))
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0);
+      const collection = branchSales.reduce((sum, sale) => sum + Number(sale.paidAmount || 0), 0);
+      const dailySold = branchSales.reduce(
+        (total, sale) => total + (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0),
+        0,
+      );
+      const branchProductionBars = closing
+        ? Math.max(0, Number(closing.produced || 0) - Number(closing.returnedTotal ?? closing.returned ?? 0))
+        : produced;
+      return {
+        ...branch,
+        produced: branchProductionBars,
+        sold: dailySold,
+        ready: closing?.status === "closed" ? 0 : Math.max(0, produced + outsourced - sessionWasted - stocked - assigned - shopSold),
+        wasted: dailyWasted,
+        expenses,
+        profit: collection - expenses,
+        closingBox: closing?.closingBox,
+        status: closing?.status || "open",
+      };
+    }), [branches, records, sales, wastage, stockEntries, outsourceEntries, truckLoads, closings, expenseRecords, activeDay]);
   const soldByTruckAndDate = useMemo(() => {
     const totals: Record<string, number> = {};
     for (const sale of sales) {
@@ -391,11 +584,6 @@ export default function ProductionPage() {
       }))
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [truckLoads, trucks, soldByTruckAndDate]);
-
-  const todaysRecord = useMemo(
-    () => records.find((r) => indiaDateKey(r.date) === activeDay) || null,
-    [records, activeDay],
-  );
 
   const todaysOutsource = useMemo(
     () =>
@@ -494,7 +682,8 @@ export default function ProductionPage() {
         await api.post("/production", payload);
       }
       setModalOpen(false);
-      await load();
+      await load(false, ["production", "closing"]);
+      await fetchNextBox().catch(() => undefined);
     } catch (err: any) {
       setError(err?.response?.data?.message || "Could not save production");
     } finally {
@@ -506,6 +695,7 @@ export default function ProductionPage() {
     production: "/production",
     stock: "/stock-entries",
     outsource: "/outsource-entries",
+    wastage: "/wastage",
   };
 
   const confirmRemove = async () => {
@@ -516,8 +706,11 @@ export default function ProductionPage() {
       await api.delete(
         `${deleteEndpoints[deleteTarget.kind]}/${deleteTarget.id}`,
       );
+      const changedSection: LoadSection = deleteTarget.kind === "production"
+        ? "production"
+        : deleteTarget.kind;
       setDeleteTarget(null);
-      await load();
+      await load(false, [changedSection, "closing"]);
     } catch (err: any) {
       setDeleteError(err?.response?.data?.message || "Could not delete");
     } finally {
@@ -559,7 +752,7 @@ export default function ProductionPage() {
         await api.post("/stock-entries", payload);
       }
       setStockModalOpen(false);
-      await load();
+      await load(false, ["stock", "closing"]);
     } catch (err: any) {
       setStockError(
         err?.response?.data?.message || "Could not save stock entry",
@@ -603,7 +796,7 @@ export default function ProductionPage() {
         await api.post("/outsource-entries", payload);
       }
       setOutsourceModalOpen(false);
-      await load();
+      await load(false, ["outsource", "closing"]);
     } catch (err: any) {
       setOutsourceError(
         err?.response?.data?.message || "Could not save outsourced bars",
@@ -626,6 +819,64 @@ export default function ProductionPage() {
       setProdSettingsError(
         err?.response?.data?.message || "Could not load production settings",
       );
+    }
+  };
+
+  const openShopWastage = () => {
+    setWastageEditing(null);
+    setWastageQuantity("");
+    setWastageReason("broken");
+    setWastageNotes("");
+    setWastageError("");
+    setWastageModalOpen(true);
+    setQuickAddOpen(false);
+  };
+
+  const openShopWastageEdit = (entry: any) => {
+    setWastageEditing(entry);
+    setWastageQuantity(String(entry.quantity || ""));
+    setWastageReason(entry.reason || "broken");
+    setWastageNotes(entry.notes || "");
+    setWastageError("");
+    setWastageModalOpen(true);
+    setQuickAddOpen(false);
+  };
+
+  const saveShopWastage = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const quantity = Number(wastageQuantity);
+    if (!Number.isFinite(quantity) || quantity < 0.25 || Math.round(quantity * 4) !== quantity * 4) {
+      setWastageError("Enter wastage in 0.25 bar increments.");
+      return;
+    }
+    const originalQuantity = Number(wastageEditing?.quantity || 0);
+    const availableForEntry = Math.max(0, Number(summary.finalTotal || 0) + originalQuantity);
+    if (quantity > availableForEntry) {
+      setWastageError(`Shop wastage cannot be more than the available shop balance of ${fmtBars(availableForEntry)} bar(s).`);
+      return;
+    }
+
+    setSavingWastage(true);
+    setWastageError("");
+    try {
+      const payload = {
+        date: activeDay,
+        size: "1",
+        quantity,
+        reason: wastageReason,
+        notes: wastageNotes.trim(),
+        truck: null,
+        location: "shop",
+      };
+      if (wastageEditing) await api.patch(`/wastage/${wastageEditing._id}`, payload);
+      else await api.post("/wastage", payload);
+      setWastageModalOpen(false);
+      setWastageEditing(null);
+      await load(false, ["wastage", "closing"]);
+    } catch (err: any) {
+      setWastageError(err?.response?.data?.message || "Could not save shop wastage.");
+    } finally {
+      setSavingWastage(false);
     }
   };
 
@@ -665,7 +916,7 @@ export default function ProductionPage() {
 
   const handleSaleSaved = async () => {
     setSaleModalOpen(false);
-    await load();
+    await load(false, ["sales", "closing", "reconciliation"]);
   };
 
   const changeSelectedTruck = (truckId: string) => {
@@ -700,10 +951,11 @@ export default function ProductionPage() {
       });
       setTruckAssignments((current) => ({
         ...current,
-        [selectedTruck]: Number(data.quantity || 0),
+        [selectedTruck]: Number(data.quantity || 0) + Number(data.pendingQuantity || 0),
       }));
+      setTruckAssignmentDetails((current) => ({ ...current, [selectedTruck]: data }));
       setExactTruckBars("");
-      await load();
+      await load(false, ["assignments", "truckLoads", "closing", "reconciliation"]);
     } catch (err: any) {
       setTruckBarsError(
         err?.response?.data?.message || "Could not save today’s truck bars",
@@ -713,40 +965,155 @@ export default function ProductionPage() {
     }
   };
 
+  const cancelTruckBarRequest = async () => {
+    const assignment = truckAssignmentDetails[selectedTruck];
+    if (!assignment?._id || Number(assignment.pendingQuantity || 0) <= 0) return;
+    setCancellingTruckBars(true);
+    setTruckBarsError("");
+    try {
+      const { data } = await api.post(`/truck-assignments/${assignment._id}/cancel`);
+      setTruckAssignmentDetails((current) => ({ ...current, [selectedTruck]: data }));
+      setTruckAssignments((current) => ({
+        ...current,
+        [selectedTruck]: Number(data.quantity || 0),
+      }));
+      await load(false, ["assignments", "truckLoads", "reconciliation"]);
+    } catch (err: any) {
+      setTruckBarsError(err?.response?.data?.message || "Could not cancel the assignment request.");
+    } finally {
+      setCancellingTruckBars(false);
+    }
+  };
+
   const dayClosed =
     closings.length > 0 && closings.every((row) => row.status === "closed");
-  const operationsLocked = loading || dayClosed;
-  const allDriversClosed = driverClosings.every((row) => row.driverClosed);
-  const allDriversChecked = driverClosings.every((row) => row.checked);
-  const readyToClose = allDriversClosed && allDriversChecked;
-  const liveSummary = dayClosed
+  const openClosing = closings.find((row) => row.status !== "closed") || null;
+  const currentClosing = closings[0] || null;
+  const hasCurrentSessionProduction = canManageProduction && Number(summary.produced || 0) > 0;
+  const todayProductionRecords = records
+    .filter((record) => indiaDateKey(record.date) === activeDay && (dayClosed || isCurrentSessionEntry(record)))
+    .sort((a, b) => String(a.createdAt || a._id).localeCompare(String(b.createdAt || b._id)));
+  const todayProductionRecord = todayProductionRecords[0];
+  const closingBarsPerBox = Math.max(
+    1,
+    Number(todayProductionRecord?.barsPerBoxUsed || boxInfo?.barsPerBox || 2),
+  );
+  // All made bars that were neither sold nor wasted are returned at closing.
+  // Keep this formula aligned with DailyClosingService so the preview and the
+  // saved closing report always use the same bar and box totals.
+  const currentSessionReturnedBars = Math.max(
+    0,
+    Number(summary.produced || 0) - totalSoldToday - Number(summary.wasted || 0),
+  );
+  const closingBars = Math.max(
+    0,
+    Number(dayClosed ? currentClosing?.lastSessionReturned ?? currentClosing?.returned ?? 0 : currentSessionReturnedBars),
+  );
+  const dailyReturnedBars = Math.max(0, Number(currentClosing?.returnedTotal ?? currentClosing?.returned ?? 0));
+  const closedProductionBars = Math.max(0, Number(currentClosing?.produced || 0) - dailyReturnedBars);
+  const dailyProductionBars = currentClosing
+    ? Math.max(0, Number(currentClosing.produced || 0) - dailyReturnedBars)
+    : Number(summary.produced || 0);
+  const reportMadeBars = dayClosed ? Number(currentClosing?.produced || 0) : Number(summary.produced || 0);
+  const reportReturnedBars = dayClosed ? dailyReturnedBars : currentSessionReturnedBars;
+  const reportProductionBars = Math.max(0, reportMadeBars - reportReturnedBars);
+  const reportShopSold = dayClosed ? dailyShopSold : shopSoldToday;
+  const reportTruckSold = dayClosed ? dailyTruckSold : truckSoldToday;
+  const reportTotalSold = reportShopSold + reportTruckSold;
+  const closingBoxes = Math.ceil(closingBars / closingBarsPerBox);
+  const totalBoxCount = Math.max(1, Number(boxInfo?.totalBoxes || 200));
+  const lastTodayProductionRecord = todayProductionRecords[todayProductionRecords.length - 1];
+  const calculatedClosingBox = lastTodayProductionRecord
+    ? ((Number(lastTodayProductionRecord.boxClose) - closingBoxes + totalBoxCount) % totalBoxCount) + 1
+    : null;
+  const closingBoxNumber = dayClosed && currentClosing?.closingBox != null
+    ? Number(currentClosing.closingBox)
+    : calculatedClosingBox;
+  const operationsLocked = loading || dayClosed || !canManageProduction;
+  const validDriverClosings = useMemo(
+    () => driverClosings.filter((row) => {
+      const truckId = String(row.truckId || row.truck?._id || row.truck || "");
+      return Boolean(
+        truckId &&
+        trucks.some((truck) => truck._id === truckId) &&
+        Number(row.taken || 0) > 0,
+      );
+    }),
+    [driverClosings, trucks],
+  );
+  const allDriversClosed = validDriverClosings.every((row) => row.driverClosed);
+  const allDriversChecked = validDriverClosings.every((row) => row.checked);
+  const onlineTrucks = trucks.filter((truck) => Boolean(truck.isOnline ?? truck.driverOnline ?? truck.online));
+  const readyToClose = allDriversClosed && allDriversChecked && onlineTrucks.length === 0;
+  const liveSummary = !canManageProduction
     ? {
         ...summary,
-        produced: 0,
-        sold: 0,
-        shopTotal: 0,
-        finalTotal: 0,
-        wasted: 0,
-        stocked: 0,
-        outsourced: 0,
-        assigned: 0,
-        balance: 0,
+        produced: overallBranchRows.reduce((sum, branch) => sum + branch.produced, 0),
+        sold: overallBranchRows.reduce((sum, branch) => sum + branch.sold, 0),
+        shopSold: overallBranchRows.reduce((sum, branch) => sum + branch.sold, 0),
+        shopTotal: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
+        balance: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
+        finalTotal: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
+        wasted: overallBranchRows.reduce((sum, branch) => sum + branch.wasted, 0),
       }
-    : summary;
-  const liveShopSold = dayClosed ? 0 : shopSoldToday;
-  const liveTruckSold = dayClosed ? 0 : truckSoldToday;
+    : dayClosed
+      ? {
+        ...summary,
+        produced: closedProductionBars,
+        sold: dailyShopSold,
+        shopSold: dailyShopSold,
+        shopTotal: dailyShopSold,
+        balance: 0,
+        finalTotal: 0,
+      }
+      : {
+        ...summary,
+        produced: dailyProductionBars,
+        wasted: dailyShopWastage,
+      };
+  const liveShopSold = shopSoldToday;
+  const liveTruckSold = truckSoldToday;
   const historyRecords = [...records].sort((a, b) =>
     String(b.date).localeCompare(String(a.date)),
   );
   const todayHistoryRecords = historyRecords.filter(
     (record) => indiaDateKey(record.date) === activeDay,
   );
+  const soldProductionBatchRows = useMemo(() => {
+    const batches = records
+      .filter((record) => indiaDateKey(record.date) === activeDay)
+      .sort((a, b) => String(a.createdAt || a._id).localeCompare(String(b.createdAt || b._id)))
+      .map((record) => ({
+        ...record,
+        branchId: String(record.branch?._id || record.branch || ""),
+        soldBars: 0,
+      }));
+    if (!batches.length) return [];
+
+    for (const sale of todaysSales) {
+      const saleAt = new Date(sale.createdAt || sale.date).getTime();
+      const saleBranchId = String(sale.branch?._id || sale.branch || "");
+      let batchIndex = -1;
+      for (let index = 0; index < batches.length; index += 1) {
+        if (batches[index].branchId !== saleBranchId) continue;
+        const batchAt = new Date(batches[index].createdAt || batches[index].date).getTime();
+        if (batchAt <= saleAt) batchIndex = index;
+      }
+      if (batchIndex < 0) continue;
+      batches[batchIndex].soldBars += (sale.items || []).reduce(
+        (sum: number, item: any) => sum + getItemBarUsed(item),
+        0,
+      );
+    }
+
+    return batches.filter((batch) => batch.soldBars > 0).reverse();
+  }, [records, todaysSales, activeDay]);
   const todayTruckReportRows = truckReportRows.filter(
     (row) => row.date === activeDay,
   );
   const pendingTruckChecks = useMemo(
-    () => driverClosings.filter((row) => row.driverClosed && !row.checked),
-    [driverClosings],
+    () => validDriverClosings.filter((row) => row.driverClosed && !row.checked),
+    [validDriverClosings],
   );
 
   const checkTruckClosing = async (row: any) => {
@@ -757,7 +1124,7 @@ export default function ProductionPage() {
         truck: row.truckId,
         date: activeDay,
       });
-      await load();
+      await load(false, ["reconciliation", "closing"]);
     } catch (err: any) {
       setClosingError(
         err?.response?.data || { message: "Could not check truck closing" },
@@ -780,7 +1147,7 @@ export default function ProductionPage() {
           date: activeDay,
         });
       }
-      await load();
+      await load(false, ["reconciliation", "closing"]);
     } catch (err: any) {
       setClosingError(
         err?.response?.data || { message: "Could not check all trucks" },
@@ -799,7 +1166,8 @@ export default function ProductionPage() {
         branch: row.branch?._id || row.branch,
       });
       setCloseTarget(null);
-      await load();
+      await load(false, ["closing"]);
+      await fetchNextBox().catch(() => undefined);
     } catch (err: any) {
       setClosingError(
         err?.response?.data || { message: "Could not close today" },
@@ -809,21 +1177,22 @@ export default function ProductionPage() {
     }
   };
 
-  const reopenDay = async (row: any) => {
+  const reopenDay = async () => {
+    if (!currentClosing || !canManageProduction) return;
+    setReopeningDay(true);
     setClosingError(null);
-    setPendingAction(`reopen-${row._id}`);
     try {
       await api.post("/daily-closing/reopen", {
         date: activeDay,
-        branch: row.branch?._id || row.branch,
+        branch: currentClosing.branch?._id || currentClosing.branch,
       });
-      await load();
+      setCloseTarget(null);
+      await load(false, LOAD_SECTIONS);
+      await fetchNextBox().catch(() => undefined);
     } catch (err: any) {
-      setClosingError(
-        err?.response?.data || { message: "Could not reopen today" },
-      );
+      setClosingError(err?.response?.data || { message: "Could not open today again" });
     } finally {
-      setPendingAction("");
+      setReopeningDay(false);
     }
   };
 
@@ -835,27 +1204,100 @@ export default function ProductionPage() {
     closingError?.unclosedDrivers ||
     closingError?.message?.unclosedDrivers ||
     [];
-
   return (
     <div className="space-y-4 pb-16 sm:pb-20">
+      {isSuperAdmin && (
+        <section className="flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Production view</p>
+              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : "Overall — all branches"}</p>
+              {!activeBranch && <p className="mt-0.5 text-xs text-navy-800/45">Combined production details are read-only. Select a branch to manage production.</p>}
+            </div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change production branch" value={selectedBranch || ""} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-r from-navy-900 via-sky-900 to-iceblue-700 text-white shadow-lg shadow-iceblue-900/10">
+        <div className="flex flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-xl ring-1 ring-white/15"><FiActivity /></span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100/80">Factory operations</p>
+              <h1 className="mt-0.5 font-display text-xl font-bold sm:text-2xl">Production Control</h1>
+              <p className="mt-1 text-sm text-iceblue-50/80">Production, shop stock, truck distribution, sales and daily closing in one view.</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            {dayClosed ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => currentClosing && setCloseTarget(currentClosing)} disabled={!canManageProduction || !currentClosing} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-400/15 px-3 text-xs font-bold text-emerald-100 ring-1 ring-emerald-300/30 transition hover:bg-emerald-400/25 disabled:cursor-not-allowed disabled:opacity-50">
+                  <FiCheckCircle /> View Closed Report
+                </button>
+                <button type="button" onClick={() => void reopenDay()} disabled={!canManageProduction || !currentClosing || reopeningDay} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-white px-3 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-50">
+                  <FiRefreshCw className={reopeningDay ? "animate-spin" : ""} /> {reopeningDay ? "Opening..." : "Open Again Today"}
+                </button>
+              </div>
+            ) : hasCurrentSessionProduction ? (
+              <button
+                type="button"
+                onClick={() => openClosing && setCloseTarget(openClosing)}
+                disabled={!canManageProduction || !openClosing || !readyToClose}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 text-xs font-bold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiCheckCircle /> {onlineTrucks.length > 0 ? "Trucks Must Be Offline" : readyToClose ? "Close Today" : "Waiting for Checks"}
+              </button>
+            ) : null}
+            {!dayClosed && hasCurrentSessionProduction && (
+              <button
+                type="button"
+                onClick={openShopWastage}
+                disabled={operationsLocked}
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-red-200/40 bg-red-500/90 px-4 text-xs font-bold text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FiTrash2 /> Add Shop Wastage
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={refreshing || loading}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-white px-4 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <FiRefreshCw className={refreshing ? "animate-spin" : ""} />
+              {refreshing ? "Refreshing" : "Refresh"}
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-black/10 px-4 py-2 text-[11px] text-iceblue-50/70 sm:px-6">
+          <span>Automatic truck status refresh runs once per minute while this page is visible.</span>
+          <span>{lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Loading latest data..."}</span>
+        </div>
+      </section>
+
       {loadError && (
-        <div className="flex flex-col gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between">
+        <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
           <span className="flex items-center gap-2 font-medium">
             <FiAlertCircle className="shrink-0" /> {loadError}
           </span>
           <button
             type="button"
             onClick={() => void load()}
-            className="font-bold text-red-700 underline underline-offset-4"
+            disabled={refreshing}
+            className="font-bold text-amber-900 underline underline-offset-4 disabled:opacity-50"
           >
-            Try again
+            {refreshing ? "Retrying..." : "Try again"}
           </button>
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-7">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-8">
         <ProductionSummary
-          label="Produced Today"
+          label={dayClosed ? "Production Bars" : "Produced Today"}
           value={fmtBars(liveSummary.produced)}
           icon={<FiBox />}
         />
@@ -867,11 +1309,11 @@ export default function ProductionPage() {
         />
         <ProductionSummary
           label="Sold Today"
-          value={fmtBars(liveSummary.sold)}
+          value={fmtBars(dailyTotalSold)}
           icon={<FiCheckCircle />}
         />
         <ProductionSummary
-          label="Wastage"
+          label="Shop Wastage"
           value={fmtBars(liveSummary.wasted)}
           icon={<FiAlertCircle />}
           danger={liveSummary.wasted > 0}
@@ -891,9 +1333,135 @@ export default function ProductionPage() {
           value={fmtBars(liveSummary.assigned)}
           icon={<FiTruck />}
         />
+        <ProductionSummary
+          label="Closing Box"
+          value={!canManageProduction || closingBoxNumber == null ? "-" : `${fmtBars(closingBoxNumber)} (${fmtBars(closingBoxes)} boxes)`}
+          icon={<FiBox />}
+        />
       </div>
 
-      <section className="hidden" aria-hidden="true">
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+          <div>
+            <h2 className="flex items-center gap-2 font-display text-lg font-bold text-navy-900"><FiDollarSign className="text-emerald-600" /> Today Financial Check</h2>
+            <p className="mt-1 text-sm text-navy-800/50">Matches the Sales and Expenses pages. Profit is collection minus expenses.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/admin/sales" className="btn-secondary px-3 py-1.5 text-xs">Check Sales</Link>
+            <Link href="/admin/expenses" className="btn-secondary px-3 py-1.5 text-xs">Check Expenses</Link>
+            <Link href="/admin/reports" className="btn-secondary px-3 py-1.5 text-xs">Full Report</Link>
+          </div>
+        </div>
+        {expenseLoadError && <p className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Expense check unavailable: {expenseLoadError}</p>}
+        <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 lg:grid-cols-6">
+          <FinancialMetric label="Sales Count" value={String(financialSummary.salesCount)} />
+          <FinancialMetric label="Total Sales" value={formatCurrency(financialSummary.salesAmount)} />
+          <FinancialMetric label="Collection" value={formatCurrency(financialSummary.collectionAmount)} positive />
+          <FinancialMetric label="Pending" value={formatCurrency(financialSummary.pendingAmount)} danger={financialSummary.pendingAmount > 0} />
+          <FinancialMetric label="Expenses" value={formatCurrency(financialSummary.expenses)} danger={financialSummary.expenses > 0} />
+          <FinancialMetric label="Profit" value={formatCurrency(financialSummary.profit)} positive={financialSummary.profit >= 0} danger={financialSummary.profit < 0} />
+        </div>
+      </section>
+
+      {isSuperAdmin && !selectedBranch && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-4 py-3 sm:px-5">
+            <h2 className="font-display text-lg font-bold text-navy-900">All Branch Production Today</h2>
+            <p className="mt-1 text-sm text-navy-800/50">Combined view of every active branch. Select a branch above to add, edit, assign bars, or close production.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] border-collapse text-sm">
+              <thead className="bg-slate-100 text-xs font-bold uppercase text-navy-900">
+                <tr><th className="border border-slate-300 px-3 py-3 text-left">Branch</th><th className="border border-slate-300 px-3 py-3 text-right">Produced</th><th className="border border-slate-300 px-3 py-3 text-right">Sold</th><th className="border border-slate-300 px-3 py-3 text-right">Shop Ready</th><th className="border border-slate-300 px-3 py-3 text-right">Wastage</th><th className="border border-slate-300 px-3 py-3 text-right">Expenses</th><th className="border border-slate-300 px-3 py-3 text-right">Profit</th><th className="border border-slate-300 px-3 py-3 text-center">Closing Box</th><th className="border border-slate-300 px-3 py-3 text-center">Status</th></tr>
+              </thead>
+              <tbody>
+                {overallBranchRows.map((branch) => (
+                  <tr key={branch._id} className="hover:bg-iceblue-50/50">
+                    <td className="border border-slate-300 px-3 py-3"><p className="font-bold text-navy-900">{branch.name}</p><p className="text-xs text-navy-800/45">{branch.code}</p></td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-bold">{fmtBars(branch.produced)}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-bold text-emerald-700">{fmtBars(branch.sold)}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-bold text-blue-700">{fmtBars(branch.ready)}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">{fmtBars(branch.wasted)}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">{formatCurrency(branch.expenses)}</td>
+                    <td className={`border border-slate-300 px-3 py-3 text-right font-bold ${branch.profit < 0 ? "text-red-600" : "text-emerald-700"}`}>{formatCurrency(branch.profit)}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-center font-semibold">{branch.closingBox == null ? "-" : fmtBars(Number(branch.closingBox))}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-center"><span className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${branch.status === "closed" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{branch.status === "closed" ? "Closed" : "Open"}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {canManageProduction && todaysShopWastage.length > 0 && (
+        <section className="overflow-hidden rounded-2xl border border-red-100 bg-white shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-red-100 bg-red-50/60 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="flex items-center gap-2 font-display text-sm font-bold text-navy-900"><FiTrash2 className="text-red-500" /> Today&apos;s Shop Wastage</h2>
+              <p className="mt-0.5 text-xs text-navy-800/50">Main Shop entries only. Truck wastage is maintained separately by each truck.</p>
+            </div>
+            <span className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-red-600 ring-1 ring-red-100">
+              {fmtBars(summary.wasted)} bars total
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[680px] table-fixed border-collapse text-xs sm:text-sm">
+              <thead className="bg-slate-100 text-navy-900">
+                <tr>
+                  <th className="w-[8%] border border-slate-300 px-2 py-2.5 text-center text-[10px] font-bold uppercase">S.No</th>
+                  <th className="w-[18%] border border-slate-300 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Location</th>
+                  <th className="w-[17%] border border-slate-300 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Reason</th>
+                  <th className="w-[30%] border border-slate-300 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Notes</th>
+                  <th className="w-[15%] border border-slate-300 px-3 py-2.5 text-right text-[10px] font-bold uppercase">Bars</th>
+                  <th className="w-[16%] border border-slate-300 px-3 py-2.5 text-center text-[10px] font-bold uppercase">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {todaysShopWastage.map((entry, index) => (
+                  <tr key={entry._id} className="even:bg-slate-50 hover:bg-red-50/40">
+                    <td className="border border-slate-300 px-2 py-2.5 text-center text-navy-800/60">{index + 1}</td>
+                    <td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">Main Shop</td>
+                    <td className="border border-slate-300 px-3 py-2.5 capitalize text-navy-900">{String(entry.reason || "Other").replaceAll("_", " ")}</td>
+                    <td className="truncate border border-slate-300 px-3 py-2.5 text-navy-800/60" title={entry.notes || ""}>{entry.notes || "—"}</td>
+                    <td className="border border-slate-300 px-3 py-2.5 text-right font-bold tabular-nums text-red-600">{fmtBars(Number(entry.quantity || 0))}</td>
+                    <td className="border border-slate-300 px-3 py-2.5">
+                      <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openShopWastageEdit(entry)}
+                        disabled={operationsLocked}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-iceblue-100 bg-white px-2.5 py-1.5 text-xs font-bold text-iceblue-700 hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <FiEdit2 /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleteTarget({
+                            kind: "wastage",
+                            id: entry._id,
+                            label: `${fmtBars(Number(entry.quantity || 0))}-bar Main Shop wastage`,
+                          });
+                        }}
+                        disabled={operationsLocked}
+                        title="Delete shop wastage"
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-100 bg-white text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <FiTrash2 />
+                      </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {false && <section className="hidden" aria-hidden="true">
         {/* Header */}
         <div className="flex flex-col gap-1 border-b border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -1182,26 +1750,21 @@ export default function ProductionPage() {
             </tfoot>
           </table>
         </div>
-      </section>
+      </section>}
 
-      <section
-        className={`overflow-hidden rounded-2xl border shadow-sm ${dayClosed ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200 bg-white"}`}
-      >
+      {canManageProduction && <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div>
             <h2 className="font-display text-lg font-bold text-navy-900">
               Today&apos;s bar distribution and truck closing
             </h2>
-            {dayClosed && <p className="mt-1 text-sm text-navy-800/50">All live counters are reset to 0. The completed figures remain in the historical reports.</p>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`pill shrink-0 ${dayClosed ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
-            >
-              {dayClosed
-                ? "Today Closed"
-                : `${driverClosings.filter((row) => row.checked).length}/${driverClosings.length} trucks checked`}
-            </span>
+            {!dayClosed && (
+              <span className="pill shrink-0 bg-amber-50 text-amber-700">
+                {validDriverClosings.filter((row) => row.checked).length}/{validDriverClosings.length} assigned trucks checked
+              </span>
+            )}
             {!dayClosed && pendingTruckChecks.length > 0 && (
               <button
                 type="button"
@@ -1218,18 +1781,20 @@ export default function ProductionPage() {
           </div>
         </div>
 
-        {dayClosed && (
-          <div className="mx-5 mb-5 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-white/80 p-4 text-emerald-800 sm:mx-6">
-            <FiCalendar className="mt-0.5 shrink-0 text-xl" />
+        {!dayClosed && pendingTruckChecks.length > 0 && (
+          <div
+            role="status"
+            className="mx-5 mt-5 flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 sm:mx-6"
+          >
+            <FiAlertCircle className="mt-0.5 shrink-0 text-xl" />
             <div>
-              <p className="font-semibold">
-                Next production starts automatically on{" "}
-                {nextIndiaDayLabel(activeDay)}.
+              <p className="font-bold">
+                {pendingTruckChecks.length} truck
+                {pendingTruckChecks.length === 1 ? "" : "s"} requested return approval
               </p>
-              <p className="mt-1 text-sm leading-6 text-emerald-700/80">
-                At 12:00 AM IST, this page switches to the new day, unlocks
-                production actions, and continues from the next box-counter
-                reading.
+              <p className="mt-1 text-sm leading-6 text-amber-800/80">
+                Verify the returned ice bars below and click Accept. The driver
+                will remain Online and cannot logout until the return is accepted.
               </p>
             </div>
           </div>
@@ -1279,8 +1844,9 @@ export default function ProductionPage() {
         </div>
 
         {/* Reconciliation is the single source for truck distribution and closing. */}
-        <div className="overflow-x-auto border-t border-slate-200">
-          <table className="w-full min-w-[820px] border-collapse text-sm">
+        {validDriverClosings.length > 0 && (
+          <div className="overflow-x-auto border-t border-slate-200">
+            <table className="w-full min-w-[820px] border-collapse text-sm">
             <thead>
               <tr className="bg-slate-100 text-left text-xs font-bold uppercase tracking-wider text-navy-900">
                 <th className="border-r border-slate-300 px-4 py-3 text-center">
@@ -1299,6 +1865,9 @@ export default function ProductionPage() {
                   Return
                 </th>
                 <th className="border-r border-slate-300 px-4 py-3 text-center">
+                  Wastage
+                </th>
+                <th className="border-r border-slate-300 px-4 py-3 text-center">
                   Balance
                 </th>
                 <th className="border-r border-slate-300 px-4 py-3 text-center">
@@ -1308,13 +1877,16 @@ export default function ProductionPage() {
               </tr>
             </thead>
             <tbody>
-              {driverClosings.map((row, index) => {
+              {validDriverClosings.map((row, index) => {
                 const remaining = Number(row.remaining || 0);
+                const visibleBalance = Math.max(0, remaining);
                 const truckPresence = trucks.find((truck) => truck._id === row.truckId);
-                const driverOnline = Boolean(
+                const returnApprovalPending = Boolean(row.driverClosed && !row.checked);
+                const mustRemainOnline = remaining > 0.0001 || returnApprovalPending;
+                const driverOnline = mustRemainOnline || Boolean(
+                  truckPresence?.isOnline ?? truckPresence?.driverOnline ?? truckPresence?.online ??
                   row.isOnline ?? row.driverOnline ?? row.online ??
-                  row.truck?.isOnline ?? row.truck?.driverOnline ?? row.truck?.online ??
-                  truckPresence?.isOnline ?? truckPresence?.driverOnline ?? truckPresence?.online ?? false
+                  row.truck?.isOnline ?? row.truck?.driverOnline ?? row.truck?.online ?? false
                 );
                 return (
                   <tr
@@ -1332,12 +1904,12 @@ export default function ProductionPage() {
                     </td>
                     <td className="border-r border-slate-200 px-4 py-3">
                       <p className="font-bold text-navy-900">
-                        {row.truck?.truckName || "Truck"}
+                        {row.truck?.truckName || truckPresence?.truckName || "Truck"}
                       </p>
                       <p className="text-xs text-navy-800/50">
                         {row.truck?.driverName || "Driver"}
-                        {row.truck?.truckNumber
-                          ? ` · ${row.truck.truckNumber}`
+                        {(row.truck?.truckNumber || truckPresence?.truckNumber)
+                          ? ` · ${row.truck?.truckNumber || truckPresence?.truckNumber}`
                           : ""}
                       </p>
                     </td>
@@ -1350,8 +1922,11 @@ export default function ProductionPage() {
                     <td className="border-r border-slate-200 px-4 py-3 text-center font-bold text-navy-900">
                       {fmtBars(Number(row.returned || 0))}
                     </td>
+                    <td className="border-r border-slate-200 px-4 py-3 text-center font-bold text-red-600">
+                      {fmtBars(Number(row.wastage || 0))}
+                    </td>
                     <td className="border-r border-slate-200 px-4 py-3 text-center font-black text-navy-900">
-                      {fmtBars(remaining)}
+                      {fmtBars(visibleBalance)}
                     </td>
                     <td className="border-r border-slate-200 px-4 py-3 text-center">
                       <span
@@ -1364,7 +1939,7 @@ export default function ProductionPage() {
                         {driverOnline ? "Online" : "Offline"}
                       </span>
                       {!row.driverClosed && row.closeReason && (
-                        <p className="mt-1 text-[10px] text-amber-700">
+                        <p className={`mt-1 text-[10px] ${remaining < 0 ? "font-semibold text-red-700" : "text-amber-700"}`}>
                           {row.closeReason}
                         </p>
                       )}
@@ -1395,19 +1970,9 @@ export default function ProductionPage() {
                 );
               })}
 
-              {driverClosings.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-8 text-center text-sm text-slate-400"
-                  >
-                    No active trucks to check today.
-                  </td>
-                </tr>
-              )}
             </tbody>
 
-            {driverClosings.length > 0 && (
+            {validDriverClosings.length > 0 && (
               <tfoot>
                 <tr className="bg-slate-100 font-bold text-navy-900">
                   <td
@@ -1418,7 +1983,7 @@ export default function ProductionPage() {
                   </td>
                   <td className="border-r border-t border-slate-200 px-4 py-3 text-center">
                     {fmtBars(
-                      driverClosings.reduce(
+                      validDriverClosings.reduce(
                         (sum, r) => sum + Number(r.taken || 0),
                         0,
                       ),
@@ -1426,7 +1991,7 @@ export default function ProductionPage() {
                   </td>
                   <td className="border-r border-t border-slate-200 px-4 py-3 text-center">
                     {fmtBars(
-                      driverClosings.reduce(
+                      validDriverClosings.reduce(
                         (sum, r) => sum + Number(r.sold || 0),
                         0,
                       ),
@@ -1434,16 +1999,24 @@ export default function ProductionPage() {
                   </td>
                   <td className="border-r border-t border-slate-200 px-4 py-3 text-center">
                     {fmtBars(
-                      driverClosings.reduce(
+                      validDriverClosings.reduce(
                         (sum, r) => sum + Number(r.returned || 0),
+                        0,
+                      ),
+                    )}
+                  </td>
+                  <td className="border-r border-t border-slate-200 px-4 py-3 text-center text-red-600">
+                    {fmtBars(
+                      validDriverClosings.reduce(
+                        (sum, r) => sum + Number(r.wastage || 0),
                         0,
                       ),
                     )}
                   </td>
                   <td className="border-r border-t border-slate-200 px-4 py-3 text-center">
                     {fmtBars(
-                      driverClosings.reduce(
-                        (sum, r) => sum + Number(r.remaining || 0),
+                      validDriverClosings.reduce(
+                        (sum, r) => sum + Math.max(0, Number(r.remaining || 0)),
                         0,
                       ),
                     )}
@@ -1452,116 +2025,24 @@ export default function ProductionPage() {
                     colSpan={2}
                     className="border-t border-slate-200 px-4 py-3 text-center text-xs text-slate-500"
                   >
-                    {driverClosings.filter((r) => r.checked).length}/
-                    {driverClosings.length} checked
+                    {validDriverClosings.filter((r) => r.checked).length}/
+                    {validDriverClosings.length} checked
                   </td>
                 </tr>
               </tfoot>
             )}
-          </table>
-        </div>
+            </table>
+          </div>
+        )}
 
-        {/* Branch closing sheet */}
-        <div className="overflow-x-auto border-t border-slate-200">
-          <table className="w-full min-w-[720px] border-collapse text-sm">
-            <thead>
-              <tr className="bg-slate-100 text-left text-xs font-bold uppercase tracking-wider text-navy-900">
-                <th className="border-r border-slate-300 px-4 py-3">Branch</th>
-                <th className="border-r border-slate-300 px-4 py-3 text-center">
-                  Made
-                </th>
-                <th className="border-r border-slate-300 px-4 py-3 text-center">
-                  Sold
-                </th>
-                <th className="border-r border-slate-300 px-4 py-3 text-center">
-                  Wastage
-                </th>
-                <th className="border-r border-slate-300 px-4 py-3 text-center">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-center">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {closings.map((row, index) => (
-                <tr
-                  key={row._id}
-                  className={`border-b border-slate-200 transition hover:bg-slate-50 ${
-                    index % 2 === 0 ? "bg-white" : "bg-slate-50/40"
-                  }`}
-                >
-                  <td className="border-r border-slate-200 px-4 py-3 font-semibold text-navy-900">
-                    {row.branch?.name || "Selected Branch"}{" "}
-                    {row.branch?.code ? `(${row.branch.code})` : ""}
-                  </td>
-                  <td className="border-r border-slate-200 px-4 py-3 text-center font-bold text-navy-900">
-                    {fmtBars(Number(row.produced || 0))}
-                  </td>
-                  <td className="border-r border-slate-200 px-4 py-3 text-center font-bold text-navy-900">
-                    {fmtBars(Number(row.sold || 0))}
-                  </td>
-                  <td className="border-r border-slate-200 px-4 py-3 text-center font-bold text-navy-900">
-                    {fmtBars(Number(row.wastage || 0))}
-                  </td>
-                  <td className="border-r border-slate-200 px-4 py-3 text-center">
-                    <span
-                      className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold ${
-                        row.status === "closed"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-amber-100 text-amber-700"
-                      }`}
-                    >
-                      {row.status === "closed" ? "Closed" : "Open"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {row.status === "closed" ? (
-                      <button
-                        type="button"
-                        onClick={() => void reopenDay(row)}
-                        disabled={pendingAction === `reopen-${row._id}`}
-                        className="btn-secondary px-3 py-1.5 text-xs text-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {pendingAction === `reopen-${row._id}`
-                          ? "Reopening..."
-                          : "Reopen"}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setCloseTarget(row)}
-                        disabled={!readyToClose}
-                        className="btn-primary flex items-center gap-2 px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <FiCheckCircle />{" "}
-                        {readyToClose ? "Close Today" : "Waiting for Checks"}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-
-              {closings.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={6}
-                    className="px-4 py-8 text-center text-sm text-slate-400"
-                  >
-                    No branch closing record for today.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      </section>}
 
       <section className="overflow-hidden rounded-2xl border border-slate-300 bg-white shadow-sm">
         {/* Top Header */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-300 bg-white px-4 py-3 sm:px-5">
           <div>
             <h2 className="font-display text-lg font-bold text-navy-900">
-              Production History
+              Today&apos;s Sold Production
             </h2>
           </div>
 
@@ -1582,7 +2063,7 @@ export default function ProductionPage() {
         <div className="w-full">
           {loading ? (
             <LoadingRows />
-          ) : todayHistoryRecords.length ? (
+          ) : soldProductionBatchRows.length ? (
             <table className="w-full min-w-[760px] table-fixed border-collapse text-sm">
               <thead className="bg-slate-100">
                 <tr className="text-navy-900">
@@ -1594,6 +2075,12 @@ export default function ProductionPage() {
                     Date
                   </th>
 
+                  {isSuperAdmin && !selectedBranch && (
+                    <th className="border-b border-r border-slate-300 px-2 py-3 text-left text-[11px] font-bold uppercase tracking-wide">
+                      Branch
+                    </th>
+                  )}
+
                   <th className="w-[11%] border-b border-r border-slate-300 px-2 py-3 text-right text-[11px] font-bold uppercase tracking-wide">
                     Open
                   </th>
@@ -1603,7 +2090,7 @@ export default function ProductionPage() {
                   </th>
 
                   <th className="w-[15%] border-b border-r border-slate-300 px-2 py-3 text-right text-[11px] font-bold uppercase tracking-wide">
-                    Total Bars
+                    Made Bars
                   </th>
 
                   <th className="w-[13%] border-b border-r border-slate-300 px-2 py-3 text-right text-[11px] font-bold uppercase tracking-wide">
@@ -1611,29 +2098,18 @@ export default function ProductionPage() {
                   </th>
 
                   <th className="w-[18%] border-b border-r border-slate-300 px-2 py-3 text-right text-[11px] font-bold uppercase tracking-wide">
-                    Selling Bars
+                    Sold Bars
                   </th>
 
-                  <th className="w-[9%] border-b border-slate-300 px-2 py-3 text-center text-[11px] font-bold uppercase tracking-wide">
+                  <th className="w-[12%] border-b border-slate-300 px-2 py-3 text-center text-[11px] font-bold uppercase tracking-wide">
                     Action
                   </th>
                 </tr>
               </thead>
 
               <tbody>
-                {todayHistoryRecords.map((r, index) => {
-                  const dateKey = indiaDateKey(r.date);
-
-                  const stockForDate = Number(stockByDate[dateKey] || 0);
-
-                  const outsourceForDate = Number(
-                    outsourceByDate[dateKey] || 0,
-                  );
-
+                {soldProductionBatchRows.map((r, index) => {
                   const totalBars = Number(r.totalBars || 0);
-
-                  const sellingBars =
-                    totalBars + outsourceForDate - stockForDate;
 
                   return (
                     <tr
@@ -1649,6 +2125,12 @@ export default function ProductionPage() {
                       <td className="border-b border-r border-slate-200 px-2 py-2.5 text-left text-xs font-semibold text-slate-700 sm:text-sm">
                         {formatDate(r.date)}
                       </td>
+
+                      {isSuperAdmin && !selectedBranch && (
+                        <td className="border-b border-r border-slate-200 px-2 py-2.5 text-left text-xs font-semibold text-navy-900">
+                          {r.branch?.name || branches.find((branch) => branch._id === r.branchId)?.name || "Branch"}
+                        </td>
+                      )}
 
                       {/* Open */}
                       <td className="border-b border-r border-slate-200 px-2 py-2.5 text-right font-semibold tabular-nums text-slate-700">
@@ -1669,54 +2151,70 @@ export default function ProductionPage() {
 
                       {/* Stocks */}
                       <td className="border-b border-r border-slate-200 px-2 py-2.5 text-right">
-                        <span className="font-bold tabular-nums text-navy-900">
-                          {fmtBars(stockForDate)}
-                        </span>
+                        <span className="text-slate-400">—</span>
                       </td>
 
                       {/* Selling Bars */}
                       <td className="border-b border-r border-slate-200 px-2 py-2.5 text-right">
                         <span className="font-bold tabular-nums text-navy-900">
-                          {fmtBars(sellingBars)}
+                          {fmtBars(Number(r.soldBars || 0))}
                         </span>
                       </td>
 
-                      {/* Delete */}
+                      {/* Edit / Delete batch */}
                       <td className="border-b border-slate-200 px-2 py-2.5 text-center">
-                        <button
-                          type="button"
-                          title="Delete"
-                          onClick={() => {
-                            setDeleteError("");
-
-                            setDeleteTarget({
-                              kind: "production",
-                              id: r._id,
-                              label: `production record for ${formatDate(
-                                r.date,
-                              )}`,
-                            });
-                          }}
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition hover:bg-red-50 hover:text-red-700"
-                        >
-                          <FiTrash2 className="text-sm" />
-                        </button>
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            type="button"
+                            title="Edit production batch"
+                            onClick={() => void openEdit(r)}
+                            disabled={operationsLocked}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-iceblue-600 transition hover:bg-iceblue-50 hover:text-iceblue-800 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <FiEdit2 className="text-sm" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Delete production batch"
+                            onClick={() => {
+                              setDeleteError("");
+                              setDeleteTarget({
+                                kind: "production",
+                                id: r._id,
+                                label: `production batch for ${formatDate(r.date)}`,
+                              });
+                            }}
+                            disabled={operationsLocked}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <FiTrash2 className="text-sm" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="bg-slate-100 font-bold text-navy-900">
+                  <td colSpan={isSuperAdmin && !selectedBranch ? 5 : 4} className="border-r border-t border-slate-300 px-3 py-3 text-right text-xs uppercase tracking-wide">Daily Total ({soldProductionBatchRows.length} sold batch{soldProductionBatchRows.length === 1 ? "" : "es"})</td>
+                  <td className="border-r border-t border-slate-300 px-2 py-3 text-right">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.totalBars || 0), 0))}</td>
+                  <td className="border-r border-t border-slate-300 px-2 py-3 text-right">{fmtBars(Number(stockByDate[activeDay] || 0))}</td>
+                  <td className="border-r border-t border-slate-300 px-2 py-3 text-right text-emerald-700">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.soldBars || 0), 0))}</td>
+                  <td className="border-t border-slate-300" />
+                </tr>
+              </tfoot>
             </table>
           ) : (
             <EmptyState
               title="No production recorded"
-              description="Use Add Production to save the first box-counter reading."
+              description="No production batch has recorded a sale yet. Unsold production is returned and is not shown as a sold record."
             />
           )}
         </div>
       </section>
 
-      <section className="card">
+      {canManageProduction && <section className="card">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg font-bold text-navy-900">
@@ -1796,9 +2294,9 @@ export default function ProductionPage() {
             No sales recorded today.
           </p>
         )}
-      </section>
+      </section>}
 
-      <section className="card">
+      {canManageProduction && <section className="card">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-display text-lg font-bold text-navy-900">
@@ -1917,9 +2415,9 @@ export default function ProductionPage() {
             No truck assignments recorded.
           </p>
         )}
-      </section>
+      </section>}
 
-      <div ref={quickAddRef} className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 sm:bottom-7 sm:right-7">
+      {canManageProduction && <div ref={quickAddRef} className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 sm:bottom-7 sm:right-7">
         {quickAddOpen && (
           <div className="mb-3 w-52 overflow-hidden rounded-2xl border border-iceblue-100 bg-white p-2 shadow-xl shadow-iceblue-900/20">
             <button
@@ -1963,17 +2461,12 @@ export default function ProductionPage() {
               type="button"
               onClick={() => {
                 setQuickAddOpen(false);
-                todaysRecord ? openEdit(todaysRecord) : openModal();
+                void openModal();
               }}
               disabled={operationsLocked}
               className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-navy-900 hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {todaysRecord ? (
-                <FiEdit2 className="text-iceblue-600" />
-              ) : (
-                <FiPlus className="text-iceblue-600" />
-              )}{" "}
-              {todaysRecord ? "Edit Production" : "Add Production"}
+              <FiPlus className="text-iceblue-600" /> Add Production Batch
             </button>
             <div className="my-1 border-t border-slate-100" />
             <button
@@ -1997,7 +2490,7 @@ export default function ProductionPage() {
         <button
           type="button"
           onClick={() => setQuickAddOpen((open) => !open)}
-          disabled={operationsLocked}
+          disabled={loading}
           aria-expanded={quickAddOpen}
           aria-label="Open quick add menu"
           className="ml-auto flex h-11 w-11 items-center justify-center rounded-full bg-iceblue-600 p-0 text-sm font-bold text-white shadow-lg shadow-iceblue-900/20 transition hover:-translate-y-0.5 hover:bg-iceblue-700 focus:outline-none focus:ring-4 focus:ring-iceblue-200 disabled:cursor-not-allowed disabled:bg-navy-800/30 disabled:hover:translate-y-0 sm:h-12 sm:w-12 sm:text-base"
@@ -2008,52 +2501,136 @@ export default function ProductionPage() {
             }`}
           />
         </button>
-      </div>
+      </div>}
+
+      {wastageModalOpen && (
+        <Modal title={wastageEditing ? "Edit Shop Wastage" : "Add Shop Wastage"} onClose={() => {
+          if (savingWastage) return;
+          setWastageModalOpen(false);
+          setWastageEditing(null);
+        }}>
+          <form onSubmit={saveShopWastage} className="space-y-4">
+            <div className="flex items-start gap-3 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-red-800">
+              <FiAlertCircle className="mt-0.5 shrink-0 text-lg" />
+              <div>
+                <p className="font-semibold">Main Shop Wastage</p>
+                <p className="mt-0.5 text-xs leading-5 text-red-700/80">
+                  {wastageEditing
+                    ? "Update this Main Shop entry. The Shop Ready balance will be recalculated automatically."
+                    : "This entry is recorded for the shop, not for a truck, and will reduce today's Shop Ready balance."}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label-text">Date</label>
+                <input type="date" className="input-field h-12 bg-slate-50" value={activeDay} disabled />
+              </div>
+              <div>
+                <label className="label-text">Available for This Entry</label>
+                <div className="flex h-12 items-center rounded-xl border border-iceblue-100 bg-iceblue-50 px-3 font-display text-lg font-bold text-navy-900">
+                  {fmtBars(Math.max(0, Number(summary.finalTotal || 0) + Number(wastageEditing?.quantity || 0)))} bars
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label className="label-text">Wastage Bar Quantity</label>
+              <input
+                type="number"
+                min={0.25}
+                max={Math.max(0, Number(summary.finalTotal || 0) + Number(wastageEditing?.quantity || 0)) || undefined}
+                step={0.25}
+                inputMode="decimal"
+                required
+                className="input-field h-12"
+                placeholder="Example: 0.25 or 1.50"
+                value={wastageQuantity}
+                onChange={(event) => setWastageQuantity(event.target.value)}
+              />
+              <p className="mt-1 text-xs text-navy-800/50">Use quarter-bar increments: 0.25, 0.50, 0.75, 1.00...</p>
+            </div>
+
+            <div>
+              <label className="label-text">Reason</label>
+              <select className="input-field h-12" value={wastageReason} onChange={(event) => setWastageReason(event.target.value)}>
+                {WASTAGE_REASONS.filter((reason) => reason.value !== "unsold").map((reason) => (
+                  <option key={reason.value} value={reason.value}>{reason.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="label-text">Notes</label>
+              <textarea
+                className="input-field"
+                rows={3}
+                maxLength={500}
+                placeholder="Explain the shop wastage if needed"
+                value={wastageNotes}
+                onChange={(event) => setWastageNotes(event.target.value)}
+              />
+            </div>
+
+            {wastageError && (
+              <p role="alert" className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">{wastageError}</p>
+            )}
+
+            <button type="submit" className="btn-primary flex h-12 w-full items-center justify-center gap-2" disabled={savingWastage || Number(summary.finalTotal || 0) + Number(wastageEditing?.quantity || 0) <= 0}>
+              {wastageEditing ? <FiEdit2 /> : <FiTrash2 />}
+              {savingWastage ? "Saving Shop Wastage..." : wastageEditing ? "Update Shop Wastage" : "Save Shop Wastage"}
+            </button>
+          </form>
+        </Modal>
+      )}
 
       {closeTarget && (
         <Modal
-          title="Final Check & Close Today"
+          title={closeTarget.status === "closed" ? "Today's Closed Report" : "Final Check & Close Today"}
           onClose={() => setCloseTarget(null)}
           wide
         >
           <div className="space-y-5">
-            <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-              <FiAlertCircle className="mt-0.5 shrink-0 text-xl" />
+            <div className={`flex items-start gap-3 rounded-2xl border p-4 ${closeTarget.status === "closed" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+              {closeTarget.status === "closed" ? <FiCheckCircle className="mt-0.5 shrink-0 text-xl" /> : <FiAlertCircle className="mt-0.5 shrink-0 text-xl" />}
               <div>
-                <p className="font-semibold">
-                  Close today only after checking every value.
-                </p>
+                <p className="font-semibold">{closeTarget.status === "closed" ? "Today is closed. All final figures remain available below." : "Confirm every bar and financial total before closing."}</p>
                 <p className="mt-1 text-sm leading-6">
-                  After closing, production, stock, outsource, truck
-                  assignments, sales, returns, and wastage are locked for today.
+                  Closing returns unsold bars and updates the next opening box. Sales, expenses, and production history remain under this date.
                 </p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <CloseReviewMetric
-                label="Opening"
-                value={closeTarget.openingBalance}
-              />
-              <CloseReviewMetric label="Made" value={closeTarget.produced} />
-              <CloseReviewMetric label="Sold" value={closeTarget.sold} />
-              <CloseReviewMetric label="Wastage" value={closeTarget.wastage} />
-              <CloseReviewMetric
-                label="Balance"
-                value={closeTarget.closingBalance}
-                danger={Number(closeTarget.closingBalance || 0) < 0}
-              />
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+              <CloseReviewMetric label="Made Bars" value={reportMadeBars} />
+              <CloseReviewMetric label="Production Bars" value={reportProductionBars} />
+              <CloseReviewMetric label="Shop Sold" value={reportShopSold} />
+              <CloseReviewMetric label="Truck Sold" value={reportTruckSold} />
+              <CloseReviewMetric label="Total Sold" value={reportTotalSold} />
+              <CloseReviewMetric label="Shop Wastage" value={dayClosed ? Number(currentClosing?.wastage || 0) : summary.wasted} />
+              <CloseReviewMetric label="Returned Bars" value={reportReturnedBars} />
+              <CloseReviewMetric label={`Boxes (${fmtBars(closingBarsPerBox)} bars each)`} value={closingBoxes} />
+              <CloseReviewMetric label="Closing Box" value={Number(closingBoxNumber || 0)} />
             </div>
-            <div className="rounded-2xl bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
-              <FiCheckCircle className="mr-2 inline" /> All{" "}
-              {driverClosings.length} truck
-              {driverClosings.length === 1 ? "" : "s"} closed and checked
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <FinancialMetric label="Sales Count" value={String(financialSummary.salesCount)} />
+              <FinancialMetric label="Total Sales" value={formatCurrency(financialSummary.salesAmount)} />
+              <FinancialMetric label="Collection" value={formatCurrency(financialSummary.collectionAmount)} positive />
+              <FinancialMetric label="Pending" value={formatCurrency(financialSummary.pendingAmount)} danger={financialSummary.pendingAmount > 0} />
+              <FinancialMetric label="Expenses" value={formatCurrency(financialSummary.expenses)} danger={financialSummary.expenses > 0} />
+              <FinancialMetric label="Profit" value={formatCurrency(financialSummary.profit)} positive={financialSummary.profit >= 0} danger={financialSummary.profit < 0} />
             </div>
             {closingError && (
               <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
                 {closingMessage}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-3">
+            {closeTarget.status === "closed" ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <button type="button" onClick={() => setCloseTarget(null)} className="btn-secondary">Close Report</button>
+                <button type="button" onClick={() => void reopenDay()} disabled={reopeningDay} className="btn-primary">{reopeningDay ? "Opening..." : "Open Again Today"}</button>
+              </div>
+            ) : <div className="grid grid-cols-2 gap-3">
               <button
                 type="button"
                 onClick={() => setCloseTarget(null)}
@@ -2069,7 +2646,7 @@ export default function ProductionPage() {
               >
                 {closingDay ? "Closing..." : "Yes, Close Today"}
               </button>
-            </div>
+            </div>}
           </div>
         </Modal>
       )}
@@ -2090,10 +2667,11 @@ export default function ProductionPage() {
                 <option value="">Select truck</option>
                 {trucks.map((truck) => (
                   <option key={truck._id} value={truck._id}>
-                    {truck.truckName} ({truck.truckNumber})
+                    {truck.truckName} ({truck.truckNumber}) - {Boolean(truck.isOnline ?? truck.driverOnline ?? truck.online) ? "Online" : "Offline"}
                   </option>
                 ))}
               </select>
+              <p className="mt-2 text-xs text-navy-800/50">Offline trucks receive this assignment when the driver next logs in.</p>
             </div>
 
             {selectedTruck ? (
@@ -2105,13 +2683,36 @@ export default function ProductionPage() {
                   <p className="mt-1 font-display text-3xl font-bold text-navy-900">
                     {fmtBars(Number(truckAssignments[selectedTruck] || 0))} bars
                   </p>
+                  {Number(truckAssignmentDetails[selectedTruck]?.pendingQuantity || 0) > 0 && (
+                    <div className="mt-3 rounded-xl bg-amber-50 px-3 py-3 text-amber-800">
+                      <p className="font-semibold">Waiting for driver acceptance</p>
+                      <p className="mt-1 text-sm">Pending: {fmtBars(Number(truckAssignmentDetails[selectedTruck]?.pendingQuantity || 0))} bars</p>
+                      <button
+                        type="button"
+                        onClick={() => void cancelTruckBarRequest()}
+                        disabled={cancellingTruckBars}
+                        className="mt-3 inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+                      >
+                        <FiTrash2 /> {cancellingTruckBars ? "Cancelling..." : "Cancel Request"}
+                      </button>
+                    </div>
+                  )}
+                  {truckAssignmentDetails[selectedTruck]?.status === "accepted" && (
+                    <p className="mt-2 font-semibold text-emerald-700">Accepted — ready for sales</p>
+                  )}
+                  {truckAssignmentDetails[selectedTruck]?.status === "rejected" && (
+                    <div className="mt-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">
+                      <p className="font-semibold">Cancelled assignment</p>
+                      <p className="mt-1">Reason: {truckAssignmentDetails[selectedTruck]?.responseReason || "No reason provided"}</p>
+                    </div>
+                  )}
                 </div>
 
                 <div>
                   <label className="label-text">Add Bar Quantity</label>
                   <p className="mb-2 text-xs text-navy-800/50">
-                    Each save adds a separate assignment to today&apos;s truck
-                    report.
+                    The driver must Accept before these bars become available
+                    for sales. Cancelling requires a reason.
                   </p>
                   <div className="flex gap-2">
                     <input
@@ -2131,7 +2732,7 @@ export default function ProductionPage() {
                       disabled={savingTruckBars}
                       className="btn-primary shrink-0 px-5"
                     >
-                      {savingTruckBars ? "Adding..." : "Add"}
+                      {savingTruckBars ? "Sending..." : "Assign"}
                     </button>
                   </div>
                 </div>
@@ -2510,6 +3111,25 @@ function ToolbarButton({
   );
 }
 
+function FinancialMetric({
+  label,
+  value,
+  danger = false,
+  positive = false,
+}: {
+  label: string;
+  value: string;
+  danger?: boolean;
+  positive?: boolean;
+}) {
+  return (
+    <div className={`rounded-2xl border p-3 ${danger ? "border-red-100 bg-red-50" : positive ? "border-emerald-100 bg-emerald-50" : "border-iceblue-100 bg-iceblue-50/60"}`}>
+      <p className={`text-[10px] font-bold uppercase tracking-wide ${danger ? "text-red-700/65" : positive ? "text-emerald-700/65" : "text-navy-800/45"}`}>{label}</p>
+      <p className={`mt-1 font-display text-lg font-bold tabular-nums ${danger ? "text-red-700" : positive ? "text-emerald-700" : "text-navy-900"}`}>{value}</p>
+    </div>
+  );
+}
+
 function ProductionSummary({
   label,
   value,
@@ -2546,18 +3166,9 @@ function ProductionSummary({
 
 function LoadingRows({ compact = false }: { compact?: boolean }) {
   return (
-    <div
-      className={`animate-pulse space-y-3 ${compact ? "py-2" : "p-5"}`}
-      aria-label="Loading data"
-    >
-      {[0, 1, 2].map((row) => (
-        <div key={row} className="grid grid-cols-4 gap-3">
-          <span className="h-4 rounded bg-iceblue-100" />
-          <span className="h-4 rounded bg-iceblue-50" />
-          <span className="h-4 rounded bg-iceblue-100" />
-          <span className="h-4 rounded bg-iceblue-50" />
-        </div>
-      ))}
+    <div role="status" aria-live="polite" className={`flex items-center justify-center gap-3 ${compact ? "py-3" : "p-6"}`}>
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-iceblue-600" />
+      <span className="text-sm font-semibold text-slate-500">Loading...</span>
     </div>
   );
 }

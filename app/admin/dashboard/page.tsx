@@ -34,6 +34,7 @@ import {
 } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
+import { selectedBranchHeaders } from '../../../lib/branch-fetch';
 import DashboardLoader from '../../../components/DashboardLoader';
 
 const chartColors = ['#1ca6d1', '#16a34a', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6'];
@@ -121,7 +122,7 @@ export default function AdminDashboardPage() {
       try {
         setLoadError('');
         const today = todayISO();
-        const [dashResult, profitResult, closingResult, customerResult, workerResult, truckResult, salesResult] = await Promise.allSettled([
+        const [dashResult, profitResult, closingResult, customerResult, workerResult, truckResult, salesResult, expenseResult] = await Promise.allSettled([
           api.get('/dashboard/admin'),
           api.get('/dashboard/monthly-profit'),
           api.get('/daily-closing', { params: { date: today } }),
@@ -134,14 +135,24 @@ export default function AdminDashboardPage() {
               to: `${today}T23:59:59.999+05:30`,
             },
           }),
+          fetch('/api/expenses?today=true', {
+            cache: 'no-store',
+            headers: selectedBranchHeaders(),
+          }).then(async (response) => {
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload?.message || 'Could not load today expenses.');
+            return payload;
+          }),
         ]);
         if (dashResult.status === 'rejected') throw dashResult.reason;
         setData(dashResult.value.data);
         setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
         setTodayClosings(closingResult.status === 'fulfilled' ? closingResult.value.data || [] : []);
-        // Dashboard expense and worker-buying totals must come from the backend
-        // dashboard response because it is scoped by X-Branch-Id for super admins.
-        setTodayExpenses(Number(dashResult.value.data?.today?.makingCost || 0));
+        // Use the same branch-scoped expense source as Expenses, Reports and
+        // Production so every page reconciles to one daily total.
+        setTodayExpenses(expenseResult.status === 'fulfilled'
+          ? Number(expenseResult.value?.summary?.totalExpenses || 0)
+          : 0);
         setEmployeeExpensesToday(0);
         setEmployeeExpenseRows([]);
         const customers = customerResult.status === 'fulfilled' && Array.isArray(customerResult.value.data) ? customerResult.value.data : [];
@@ -289,8 +300,8 @@ export default function AdminDashboardPage() {
   const stockTotal = Number(data.pendingStock?.totalClosingStock || 0);
   const pendingAmount = Number(data.payments?.pendingAmount || 0);
   const todayPendingBills = Number(data.today.balance || 0);
-  const todayProfit = Number(data.today.profit || 0);
   const todayInHand = Number(data.today.collection || 0) - Number(todayExpenses || 0);
+  const todayProfit = todayInHand;
   const workerBuying = Number(data.today.workerBuying || 0) + employeeExpensesToday;
   const indiaDayOfMonth = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric' }).format(new Date())) || 1;
   const monthlyDailyAverage = Number(data.monthlySales || 0) / indiaDayOfMonth;

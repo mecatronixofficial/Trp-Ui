@@ -2,19 +2,30 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiAlertCircle, FiCheckCircle, FiDollarSign, FiEdit2, FiFilter, FiList, FiPlus, FiPrinter, FiRefreshCcw, FiSearch, FiTrash2 } from 'react-icons/fi';
+import { FiAlertCircle, FiCheckCircle, FiDollarSign, FiEdit2, FiFilter, FiGitBranch, FiList, FiPlus, FiPrinter, FiRefreshCcw, FiSearch, FiTrash2 } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
 import PrintBill from '../../../components/PrintBill';
 import PaymentModal from '../../../components/PaymentModal';
+import { useAuth } from '../../../context/AuthContext';
 import { errorMessage, endOfIndiaDay, formatTime, indiaDateISO, startOfIndiaDay, type Sale, type TruckOption } from '../../../lib/salesUtils';
 
+interface BranchOption {
+  _id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+}
+
 export default function AdminSalesPage() {
+  const { user, loading: authLoading } = useAuth();
   const today = indiaDateISO();
   const [sales, setSales] = useState<Sale[]>([]);
   const [trucks, setTrucks] = useState<TruckOption[]>([]);
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Sale | null>(null);
@@ -24,8 +35,13 @@ export default function AdminSalesPage() {
   const [deletingId, setDeletingId] = useState('');
   const [pageError, setPageError] = useState('');
   const [filters, setFilters] = useState({ from: today, to: today, saleType: '', search: '' });
+  const [appliedFilters, setAppliedFilters] = useState({ from: today, to: today, saleType: '', search: '' });
+  const isSuperAdmin = user?.role === 'super_admin';
+  const canManageSales = !isSuperAdmin || Boolean(selectedBranch);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const showingToday = appliedFilters.from === today && appliedFilters.to === today;
 
-  const load = async (activeFilters = filters) => {
+  const load = async (activeFilters = appliedFilters) => {
     setLoading(true);
     setPageError('');
     try {
@@ -36,6 +52,7 @@ export default function AdminSalesPage() {
       if (activeFilters.saleType) params.saleType = activeFilters.saleType;
       const { data } = await api.get('/sales', { params });
       setSales(Array.isArray(data) ? data : []);
+      setAppliedFilters(activeFilters);
     } catch (error: any) {
       setSales([]);
       setPageError(errorMessage(error, 'Could not load sales.'));
@@ -45,12 +62,34 @@ export default function AdminSalesPage() {
   };
 
   useEffect(() => {
-    api.get('/trucks')
-      .then((truckRows) => setTrucks(Array.isArray(truckRows.data) ? truckRows.data : []))
-      .catch((error) => setPageError(errorMessage(error, 'Could not load sales filters.')));
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
+    setSelectedBranch(isSuperAdmin ? storedBranch : (user?.branch || ''));
+    if (isSuperAdmin) {
+      api.get('/branches')
+        .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
+        .catch((error) => setPageError(errorMessage(error, 'Could not load branches.')));
+    }
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  useEffect(() => {
+    if (authLoading || selectedBranch === null) return;
+    if (canManageSales) {
+      api.get('/trucks')
+        .then((truckRows) => setTrucks(Array.isArray(truckRows.data) ? truckRows.data : []))
+        .catch((error) => setPageError(errorMessage(error, 'Could not load sales filters.')));
+    } else {
+      setTrucks([]);
+    }
     void load({ from: today, to: today, saleType: '', search: '' });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authLoading, canManageSales, selectedBranch]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem('tii_selected_branch', branch);
+    else window.localStorage.removeItem('tii_selected_branch');
+    window.location.reload();
+  };
 
   const visibleSales = useMemo(() => {
     const term = filters.search.trim().toLowerCase();
@@ -87,17 +126,19 @@ export default function AdminSalesPage() {
   };
 
   const openAddSale = () => {
+    if (!canManageSales) return;
     setEditing(null);
     setModalOpen(true);
   };
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('add') !== 'sale') return;
+    if (authLoading || !canManageSales || new URLSearchParams(window.location.search).get('add') !== 'sale') return;
     openAddSale();
     window.history.replaceState({}, '', window.location.pathname);
-  }, []);
+  }, [authLoading, canManageSales]);
 
   const remove = async (id: string) => {
+    if (!canManageSales) return;
     if (!confirm('Delete this sale entry?')) return;
     setDeletingId(id);
     setPageError('');
@@ -113,6 +154,21 @@ export default function AdminSalesPage() {
 
   return (
     <div className="-mt-4 space-y-1 pb-24 sm:-mt-5">
+      {isSuperAdmin && (
+        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Sales view</p>
+              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p>
+            </div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change sales branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.filter((branch) => branch.isActive).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
       {!loading && !pageError && (
         <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
           <SalesSummaryCard
@@ -124,9 +180,9 @@ export default function AdminSalesPage() {
           />
           <SalesSummaryCard
             icon={FiDollarSign}
-            label="Sales Amount"
+            label={showingToday ? "Today's Total Sale" : 'Total Sale'}
             value={formatCurrency(summary.amount)}
-            helper="Total billed"
+            helper={activeBranch ? `${activeBranch.name} sales` : isSuperAdmin ? 'All branches combined' : 'Total billed'}
             tone="cyan"
           />
           <SalesSummaryCard
@@ -151,7 +207,7 @@ export default function AdminSalesPage() {
 
       <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
         <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">All Sales</h1>
+          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">{showingToday ? "Today's Sales" : 'Sales'}{activeBranch ? ` — ${activeBranch.name}` : ''}</h1>
           <div className="relative min-w-0 flex-1">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
             <input className="input-field h-10 pl-9" placeholder="Search by customer, phone or truck..." value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} />
@@ -236,13 +292,15 @@ export default function AdminSalesPage() {
                   <td className="border border-slate-300 px-1 py-2.5">
                     <div className="flex flex-wrap items-center justify-center gap-2">
                       <button type="button" onClick={() => setPrintSale(s)} className="text-navy-900 hover:text-black" title="Print sale" aria-label="Print sale"><FiPrinter /></button>
-                      {s.balanceAmount > 0 && (
+                      {canManageSales && s.balanceAmount > 0 && (
                         <button type="button" onClick={() => setPaymentTarget(s)} className="text-navy-900 hover:text-black" title="Collect payment" aria-label="Collect payment">
                           <FiDollarSign />
                         </button>
                       )}
+                      {canManageSales && <>
                       <button type="button" onClick={() => { setEditing(s); setModalOpen(true); }} className="text-navy-900 hover:text-black" title="Edit sale" aria-label="Edit sale"><FiEdit2 /></button>
                       <button type="button" onClick={() => remove(s._id)} disabled={deletingId === s._id} className="text-navy-900 hover:text-black disabled:opacity-40" title="Delete sale" aria-label="Delete sale"><FiTrash2 /></button>
+                      </>}
                     </div>
                   </td>
                 </tr>
@@ -284,7 +342,7 @@ export default function AdminSalesPage() {
         </Modal>
       )}
 
-      <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 sm:bottom-7 sm:right-7">
+      {canManageSales && <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 sm:bottom-7 sm:right-7">
         <button
           type="button"
           onClick={openAddSale}
@@ -293,7 +351,7 @@ export default function AdminSalesPage() {
         >
           <FiPlus className="text-xl" />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

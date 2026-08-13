@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  FiAlertCircle,
   FiCheckCircle,
   FiClock,
   FiCompass,
@@ -31,11 +32,6 @@ const indiaDateISO = (date = new Date()) =>
     day: '2-digit',
   }).format(date);
 
-const nextIndiaDateISO = () => {
-  const [year, month, day] = indiaDateISO().split('-').map(Number);
-  return indiaDateISO(new Date(Date.UTC(year, month - 1, day + 1, 12)));
-};
-
 const createPaymentForm = () => ({ date: indiaDateISO(), amount: '', paymentMode: 'cash', notes: '' });
 const createExpenseForm = () => ({ date: indiaDateISO(), amount: '', purpose: '', notes: '' });
 const createWastageForm = () => ({ date: indiaDateISO(), size: '1', quantity: '', reason: 'broken', notes: '' });
@@ -43,7 +39,9 @@ const createWastageForm = () => ({ date: indiaDateISO(), size: '1', quantity: ''
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error !== 'object' || error === null || !('response' in error)) return fallback;
   const response = (error as { response?: { data?: { message?: unknown } } }).response;
-  return typeof response?.data?.message === 'string' ? response.data.message : fallback;
+  if (typeof response?.data?.message === 'string') return response.data.message;
+  if (Array.isArray(response?.data?.message)) return response.data.message.join(' ');
+  return fallback;
 };
 
 const getCustomerName = (sale: any) => sale.customer?.name || sale.customerName || 'Customer';
@@ -64,6 +62,7 @@ interface TruckAssignment {
   pendingQuantity: number;
   notes?: string;
   status: 'pending' | 'accepted' | 'rejected';
+  responseReason?: string;
 }
 
 const getGreeting = () => {
@@ -78,7 +77,7 @@ const getGreeting = () => {
 };
 
 export default function TruckDashboardPage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [data, setData] = useState<any>(null);
   const [sales, setSales] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
@@ -86,6 +85,8 @@ export default function TruckDashboardPage() {
   const [pendingAssignment, setPendingAssignment] = useState<TruckAssignment | null>(null);
   const [assignmentAction, setAssignmentAction] = useState<AssignmentAction | null>(null);
   const [assignmentMessage, setAssignmentMessage] = useState('');
+  const [assignmentCancelReason, setAssignmentCancelReason] = useState('');
+  const [assignmentCancelOpen, setAssignmentCancelOpen] = useState(false);
   const [closePreviewOpen, setClosePreviewOpen] = useState(false);
   const [closeStatusOpen, setCloseStatusOpen] = useState(false);
   const [amountModalOpen, setAmountModalOpen] = useState(false);
@@ -105,13 +106,28 @@ export default function TruckDashboardPage() {
   const [trend, setTrend] = useState<any>(null);
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendError, setTrendError] = useState('');
+  const [logoutPrompt, setLogoutPrompt] = useState<{
+    mode: 'return' | 'review' | 'close' | 'waiting' | 'error';
+    remaining?: number;
+    message?: string;
+    summary?: {
+      taken: number;
+      sold: number;
+      collectedAmount: number;
+      pendingAmount: number;
+      wastage: number;
+      returned: number;
+      remaining: number;
+    };
+  } | null>(null);
+  const [logoutPending, setLogoutPending] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError('');
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    if (!silent) setError('');
     try {
       const today = indiaDateISO();
-      const params = { from: today, to: nextIndiaDateISO() };
+      const params = { from: today, to: today };
       const [dash, saleRows, expenseRows, tripRows, assignmentRows] = await Promise.all([
         api.get('/dashboard/truck'),
         api.get('/sales', { params }),
@@ -128,13 +144,108 @@ export default function TruckDashboardPage() {
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Could not load driver dashboard.'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let loadedDay = indiaDateISO();
+    const moveToNewDay = () => {
+      const currentDay = indiaDateISO();
+      if (currentDay === loadedDay) return;
+      loadedDay = currentDay;
+      setTrend(null);
+      setPaymentForm(createPaymentForm());
+      setExpenseForm(createExpenseForm());
+      setWastageForm(createWastageForm());
+      setAssignmentMessage('');
+      void load(true);
+    };
+    const timer = window.setInterval(moveToNewDay, 30_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
+  useEffect(() => {
+    if (user?.role !== 'truck') return;
+    const sendPresence = () => {
+      if (document.visibilityState === 'visible') {
+        void api.post('/auth/presence').catch(() => undefined);
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') sendPresence();
+    };
+    sendPresence();
+    const timer = window.setInterval(sendPresence, 30_000);
+    window.addEventListener('focus', sendPresence);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', sendPresence);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [user?.role]);
+
+  useEffect(() => {
+    const handleLogoutRequired = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        mode: 'return' | 'review' | 'close' | 'waiting' | 'error';
+        remaining?: number;
+        message?: string;
+        summary?: {
+          taken: number;
+          sold: number;
+          collectedAmount: number;
+          pendingAmount: number;
+          wastage: number;
+          returned: number;
+          remaining: number;
+        };
+      };
+      setError('');
+      setLogoutPrompt(detail);
+      if (detail.mode === 'waiting') {
+        window.sessionStorage.setItem('tii_logout_after_return', 'true');
+        setLogoutPending(true);
+      }
+    };
+    window.addEventListener('tii:truck-logout-required', handleLogoutRequired);
+    if (window.sessionStorage.getItem('tii_logout_after_return') === 'true') setLogoutPending(true);
+    return () => window.removeEventListener('tii:truck-logout-required', handleLogoutRequired);
+  }, []);
+
+  useEffect(() => {
+    if (!logoutPending) return;
+    let active = true;
+    const checkApproval = async () => {
+      try {
+        const { data: rows } = await api.get('/truck-loads/reconciliation', { params: { date: indiaDateISO() } });
+        if (!active) return;
+        const closing = Array.isArray(rows) ? rows[0] || null : null;
+        setTripClosing(closing);
+        if (closing?.driverClosed && closing?.checked) {
+          window.sessionStorage.removeItem('tii_logout_after_return');
+          setLogoutPending(false);
+          setLogoutPrompt(null);
+          await logout();
+        }
+      } catch {
+        // Keep the driver online and retry while admin approval is pending.
+      }
+    };
+    void checkApproval();
+    const timer = window.setInterval(() => void checkApproval(), 10_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+    // `logout` intentionally stays outside dependencies so polling is not restarted on every provider render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logoutPending]);
 
   const loadTrend = useCallback(async () => {
     setTrendLoading(true);
@@ -170,27 +281,48 @@ export default function TruckDashboardPage() {
   const remainingBars = Number(tripClosing?.remaining || 0);
   const awaitingAdminApproval = Boolean(tripClosing?.driverClosed && !tripClosing?.checked);
   const truckOffline = Boolean(tripClosing?.driverClosed && tripClosing?.checked);
-  const barsTaken = truckOffline ? 0 : Number(data?.todayPicked || 0);
-  const barsSold = truckOffline ? 0 : Number(data?.todayQuantitySold || 0);
+  const barsTaken = Number(data?.todayPicked || 0);
+  const barsSold = Number(data?.todayQuantitySold || 0);
+  const canRecordTrip = Boolean(tripClosing && !tripClosing.driverClosed && Number(tripClosing.taken || 0) > 0);
+
+  useEffect(() => {
+    if (pendingAssignment) return;
+    const refreshForNewAssignment = () => {
+      if (document.visibilityState === 'visible') void load(true);
+    };
+    const timer = window.setInterval(refreshForNewAssignment, 10_000);
+    return () => window.clearInterval(timer);
+  }, [pendingAssignment, load]);
   const progress = barsTaken > 0 ? Math.max(0, Math.min(100, Math.round((barsSold / barsTaken) * 100))) : 0;
   const totalExpense = useMemo(() => expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0), [expenses]);
 
   const respondToAssignment = async (action: AssignmentAction) => {
     if (!pendingAssignment || assignmentAction) return;
+    if (action === 'reject' && assignmentCancelReason.trim().length < 3) {
+      setError('Enter a reason before cancelling the assigned bars.');
+      return;
+    }
     setAssignmentAction(action);
     setAssignmentMessage('');
     setError('');
     try {
-      await api.post(`/truck-assignments/${pendingAssignment._id}/${action}`);
+      await api.post(`/truck-assignments/${pendingAssignment._id}/${action}`, action === 'reject' ? { reason: assignmentCancelReason.trim() } : {});
       const quantity = formatBarQuantity(pendingAssignment.pendingQuantity) || '0';
       setAssignmentMessage(
         action === 'accept'
           ? `${quantity} ice bar(s) accepted and added to your truck.`
-          : `${quantity} ice bar(s) rejected. The admin can see your response.`,
+          : `${quantity} ice bar(s) cancelled. The admin can see your reason.`,
       );
+      setAssignmentCancelReason('');
+      setAssignmentCancelOpen(false);
+      if (action === 'reject') {
+        setPendingAssignment(null);
+        await logout({ confirmedTruckClose: true });
+        return;
+      }
       await load();
     } catch (err: unknown) {
-      setError(getErrorMessage(err, `Could not ${action} the ice bar assignment.`));
+      setError(getErrorMessage(err, action === 'reject' ? 'Could not cancel the ice bar assignment.' : 'Could not accept the ice bar assignment.'));
     } finally {
       setAssignmentAction(null);
     }
@@ -268,13 +400,23 @@ export default function TruckDashboardPage() {
     }
   };
 
-  const closeTruckDay = async () => {
+  const closeTruckDay = async (logoutRequest = false) => {
     if (!tripClosing || closingDay) return;
     setClosingDay(true);
     setError('');
     try {
-      await api.post('/truck-loads/reconciliation/driver-close', { date: indiaDateISO() });
-      setClosePreviewOpen(false);
+      const { data: closing } = await api.post('/truck-loads/reconciliation/driver-close', { date: indiaDateISO() });
+      if (logoutRequest) {
+        if (closing?.requiresAdminApproval) {
+          window.sessionStorage.setItem('tii_logout_after_return', 'true');
+          setLogoutPending(true);
+          setLogoutPrompt({ mode: 'waiting', remaining: 0, summary: closing, message: 'Return submitted. Waiting for admin approval.' });
+        } else {
+          setLogoutPrompt(null);
+          await logout({ confirmedTruckClose: true });
+          return;
+        }
+      }
       await load();
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Could not close truck day.'));
@@ -303,7 +445,7 @@ export default function TruckDashboardPage() {
                 <p className="mt-1 truncate font-display text-2xl font-bold">{data?.truck?.truckName || 'Truck'}</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                   {data?.truck?.truckNumber && <span className="rounded-full bg-white/10 px-2.5 py-1 text-white/80">{data.truck.truckNumber}</span>}
-                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 ${truckOffline ? 'bg-white/10 text-white/70' : awaitingAdminApproval ? 'bg-amber-400/20 text-amber-100' : 'bg-emerald-400/20 text-emerald-100'}`}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${truckOffline ? 'bg-white/40' : 'bg-emerald-300'}`} />{truckOffline ? 'Offline' : awaitingAdminApproval ? 'Online · Awaiting Admin' : 'Online'}</span>
+                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 ${awaitingAdminApproval ? 'bg-amber-400/20 text-amber-100' : 'bg-emerald-400/20 text-emerald-100'}`}><span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-300" />{truckOffline ? 'Online · Waiting for Bars' : awaitingAdminApproval ? 'Online · Awaiting Admin' : 'Online'}</span>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-white/65">
                   {data?.truck?.phoneNumber && <span className="inline-flex items-center gap-1.5"><FiPhone /> {data.truck.phoneNumber}</span>}
@@ -316,64 +458,78 @@ export default function TruckDashboardPage() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-100/75">Bars Sold / Taken</p><p className="mt-1 font-display text-4xl font-black sm:text-5xl">{formatBarQuantity(barsSold) || 0}<span className="text-cyan-100/55"> / {formatBarQuantity(barsTaken) || 0}</span></p></div>
               <div className="flex flex-wrap gap-2">
-                {!tripClosing?.driverClosed && <button type="button" onClick={() => { setError(''); setAmountModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiDollarSign /> {formatCurrency(totalExpense)}</button>}
+                {canRecordTrip && <button type="button" onClick={() => { setError(''); setAmountModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiDollarSign /> {formatCurrency(totalExpense)}</button>}
                 <button type="button" onClick={() => void load()} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiRefreshCcw /> Refresh</button>
-                {!tripClosing?.driverClosed && <button type="button" onClick={() => { setError(''); setWastageModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiTrash2 /> Wastage</button>}
+                {canRecordTrip && <button type="button" onClick={() => { setError(''); setWastageModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiTrash2 /> Wastage</button>}
               </div>
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/20"><div className="h-full rounded-full bg-cyan-100 transition-all" style={{ width: `${progress}%` }} /></div>
             <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold">
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Returned {truckOffline ? 0 : formatBarQuantity(data?.todayReturned || 0) || 0}</span>
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Wastage {truckOffline ? 0 : formatBarQuantity(data?.todayWastage || 0) || 0}</span>
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Remaining {truckOffline ? 0 : formatBarQuantity(data?.remainingBars || 0) || 0}</span>
-              {tripClosing && <button type="button" onClick={() => { setError(''); setCloseStatusOpen(true); }} className="rounded-full bg-white/10 px-2.5 py-1 transition hover:bg-white/20"><FiClock className="mr-1 inline" />{truckOffline ? 'Offline' : awaitingAdminApproval ? 'Awaiting Admin' : 'Close Day'}</button>}
+              <span className="rounded-full bg-white/10 px-2.5 py-1">Returned {formatBarQuantity(data?.todayReturned || 0) || 0}</span>
+              <span className="rounded-full bg-white/10 px-2.5 py-1">Wastage {formatBarQuantity(data?.todayWastage || 0) || 0}</span>
+              <span className="rounded-full bg-white/10 px-2.5 py-1">Remaining {formatBarQuantity(Math.max(0, Number(tripClosing?.remaining || 0))) || 0}</span>
             </div>
           </div>
         </div>
       </section>
 
       {pendingAssignment && (
-        <section className="overflow-hidden rounded-[1.75rem] border border-emerald-200 bg-[radial-gradient(circle_at_top_right,#d1fae5_0,#ecfdf5_40%,#ffffff_100%)] p-5 shadow-lg shadow-emerald-900/10 sm:p-7">
-          <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-            <div className="flex min-w-0 items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-2xl text-emerald-600 ring-4 ring-emerald-50">
+        <Modal title={assignmentCancelOpen ? "Cancel Assigned Bars" : "New Ice Bar Assignment"} onClose={() => undefined}>
+          <div className="space-y-5">
+            <div className="flex min-w-0 items-start gap-4 rounded-2xl border border-emerald-100 bg-emerald-50/70 p-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-100 text-xl text-emerald-600">
                 <FiPackage />
               </div>
               <div className="min-w-0">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-700">New assignment</p>
-                <h1 className="mt-1 font-display text-2xl font-bold text-navy-900 sm:text-3xl">New ice bars assigned to your truck</h1>
+                <h2 className="mt-1 font-display text-xl font-bold text-navy-900">Ice bars assigned to your truck</h2>
                 <p className="mt-2 text-sm leading-6 text-navy-800/65">Please check the quantity and accept it only after receiving the bars.</p>
                 {pendingAssignment.notes && <p className="mt-2 text-sm font-medium text-navy-800/70">Note: {pendingAssignment.notes}</p>}
               </div>
             </div>
 
-            <div className="rounded-2xl border border-emerald-200 bg-white/90 p-4 text-center shadow-sm sm:min-w-72">
+            <div className="rounded-2xl border border-emerald-200 bg-white p-5 text-center shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-navy-800/45">Assigned Quantity</p>
               <p className="mt-1 font-display text-4xl font-bold text-emerald-600">
                 {formatBarQuantity(pendingAssignment.pendingQuantity) || 0}
                 <span className="ml-2 text-base font-semibold text-navy-800/55">bars</span>
               </p>
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => void respondToAssignment('reject')}
-                  disabled={assignmentAction !== null}
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition hover:bg-red-100 disabled:opacity-50"
-                >
-                  <FiXCircle /> {assignmentAction === 'reject' ? 'Rejecting...' : 'Reject'}
+            </div>
+
+            {assignmentCancelOpen ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="label-text">Reason for Cancellation</label>
+                  <textarea
+                    autoFocus
+                    rows={3}
+                    maxLength={250}
+                    value={assignmentCancelReason}
+                    onChange={(event) => setAssignmentCancelReason(event.target.value)}
+                    placeholder="Tell Admin why you cannot accept these bars"
+                    className="input-field text-sm"
+                  />
+                </div>
+                {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-600">{error}</p>}
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => { setAssignmentCancelOpen(false); setAssignmentCancelReason(''); setError(''); }} disabled={assignmentAction !== null} className="btn-secondary">Back</button>
+                  <button type="button" onClick={() => void respondToAssignment('reject')} disabled={assignmentAction !== null} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 text-sm font-semibold text-white disabled:opacity-50">
+                    <FiXCircle /> {assignmentAction === 'reject' ? 'Cancelling...' : 'Confirm Cancel'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => { setAssignmentCancelOpen(true); setError(''); }} disabled={assignmentAction !== null} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 transition hover:bg-red-100 disabled:opacity-50">
+                  <FiXCircle /> Cancel
                 </button>
-                <button
-                  type="button"
-                  onClick={() => void respondToAssignment('accept')}
-                  disabled={assignmentAction !== null}
-                  className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50"
-                >
+                <button type="button" onClick={() => void respondToAssignment('accept')} disabled={assignmentAction !== null} className="inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:opacity-50">
                   <FiCheckCircle /> {assignmentAction === 'accept' ? 'Accepting...' : 'Accept'}
                 </button>
               </div>
-            </div>
+            )}
           </div>
-        </section>
+        </Modal>
       )}
 
       {assignmentMessage && (
@@ -383,6 +539,122 @@ export default function TruckDashboardPage() {
       )}
 
       {error && <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{error}</p>}
+
+      {logoutPrompt && (
+        <Modal
+          title={logoutPrompt.mode === 'return' ? 'Return Ice Bars Before Logout' : logoutPrompt.mode === 'review' ? 'Admin Verification Required' : logoutPrompt.mode === 'close' ? 'Check All & Close' : logoutPrompt.mode === 'waiting' ? 'Waiting for Admin Approval' : 'Logout Check Failed'}
+          onClose={() => {
+            setLogoutPrompt(null);
+            if (logoutPrompt.mode === 'waiting') {
+              window.sessionStorage.removeItem('tii_logout_after_return');
+              setLogoutPending(false);
+            }
+          }}
+        >
+          <div className="space-y-4">
+            {logoutPrompt.summary && (
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {[
+                  ['Taken', formatBarQuantity(logoutPrompt.summary.taken) || '0'],
+                  ['Sold', formatBarQuantity(logoutPrompt.summary.sold) || '0'],
+                  ['Collection', formatCurrency(logoutPrompt.summary.collectedAmount)],
+                  ['Pending', formatCurrency(logoutPrompt.summary.pendingAmount)],
+                  ['Wastage', formatBarQuantity(logoutPrompt.summary.wastage) || '0'],
+                  ['Balance', formatBarQuantity(Math.max(0, logoutPrompt.summary.remaining)) || '0'],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-xl border border-iceblue-100 bg-iceblue-50/50 p-3">
+                    <p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p>
+                    <p className="mt-1 font-bold text-navy-900">{value}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {logoutPrompt.mode === 'return' ? (
+              <>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                  <p className="flex items-center gap-2 font-semibold"><FiPackage /> {Number(logoutPrompt.remaining || 0) > 0 ? 'Ice bars are still with this truck' : 'Returned bars need Admin approval'}</p>
+                  <p className="mt-2 text-sm leading-6">
+                    {Number(logoutPrompt.remaining || 0) > 0
+                      ? <>You cannot logout or go Offline while carrying <strong>{formatBarQuantity(logoutPrompt.remaining || 0)} bar(s)</strong>. Return all remaining bars and wait for Admin acceptance.</>
+                      : <>Admin must verify and accept <strong>{formatBarQuantity(logoutPrompt.summary?.returned || 0)} returned bar(s)</strong> before this truck can go Offline.</>}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
+                  <button type="button" onClick={() => void closeTruckDay(true)} disabled={closingDay} className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
+                    <FiTruck /> {closingDay ? 'Submitting...' : Number(logoutPrompt.remaining || 0) > 0 ? `Return ${formatBarQuantity(logoutPrompt.remaining || 0)} Bars` : 'Submit Return'}
+                  </button>
+                </div>
+              </>
+            ) : logoutPrompt.mode === 'review' ? (
+              <>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                  <p className="flex items-center gap-2 font-semibold"><FiAlertCircle /> Entry difference needs Admin verification</p>
+                  <p className="mt-2 text-sm leading-6 text-amber-800/80">
+                    Sold, returned or wastage is {formatBarQuantity(Math.abs(logoutPrompt.remaining || 0))} bar(s) higher than Taken. Submit the closing without deleting any records. The truck remains Online until Admin accepts it.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
+                  <button type="button" onClick={() => void closeTruckDay(true)} disabled={closingDay} className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
+                    <FiCheckCircle /> {closingDay ? 'Submitting...' : 'Submit to Admin'}
+                  </button>
+                </div>
+              </>
+            ) : logoutPrompt.mode === 'close' ? (
+              <>
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900">
+                  <p className="flex items-center gap-2 font-semibold"><FiCheckCircle /> No ice bars remain in this truck</p>
+                  <p className="mt-2 text-sm leading-6 text-emerald-800/80">
+                    Check Taken, Sold, Collection, Pending and Wastage. Because the balance is zero, Admin return approval is not required.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (Number(logoutPrompt.summary?.taken || 0) > 0 && tripClosing) void closeTruckDay(true);
+                      else void logout({ confirmedTruckClose: true });
+                    }}
+                    disabled={closingDay}
+                    className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    <FiCheckCircle /> {closingDay ? 'Closing...' : 'Check All & Close'}
+                  </button>
+                </div>
+              </>
+            ) : logoutPrompt.mode === 'waiting' ? (
+              <>
+                <div className="rounded-2xl border border-iceblue-200 bg-iceblue-50 p-4 text-navy-900">
+                  <p className="flex items-center gap-2 font-semibold"><FiClock /> Return request sent to Admin</p>
+                  <p className="mt-2 text-sm leading-6 text-navy-800/65">
+                    The truck remains Online until Admin verifies and accepts the returned bars. This screen checks approval automatically.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => {
+                    window.sessionStorage.removeItem('tii_logout_after_return');
+                    setLogoutPending(false);
+                    setLogoutPrompt(null);
+                  }} className="btn-secondary">Stay Online</button>
+                  <button type="button" onClick={() => void load()} className="btn-primary flex items-center justify-center gap-2"><FiRefreshCcw /> Check Approval</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                  {logoutPrompt.message || 'Could not verify the truck balance. Logout was cancelled for safety.'}
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <button type="button" onClick={() => setLogoutPrompt(null)} className="btn-secondary">Cancel</button>
+                  <button type="button" onClick={() => { setLogoutPrompt(null); void logout(); }} className="btn-primary">Try Again</button>
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
 
       {closeStatusOpen && tripClosing && <Modal title="End-of-Day Truck Closing" onClose={() => setCloseStatusOpen(false)}>
         <div className="space-y-4">
@@ -394,17 +666,17 @@ export default function TruckDashboardPage() {
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{[
-            ['Taken', tripClosing.taken], ['Sold', tripClosing.sold], ['Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Balance', tripClosing.remaining], ['Sales', formatCurrency(tripClosing.salesAmount)], ['Pending', formatCurrency(tripClosing.pendingAmount)], ['Driver Amount', formatCurrency(tripClosing.driverAmount)],
+            ['Taken', tripClosing.taken], ['Sold', tripClosing.sold], ['Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Balance', tripClosing.remaining], ['Collection', formatCurrency(tripClosing.collectedAmount)], ['Pending', formatCurrency(tripClosing.pendingAmount)], ['Total Sales', formatCurrency(tripClosing.salesAmount)],
           ].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-iceblue-100/70 bg-white px-3 py-2"><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className="mt-1 break-words font-bold text-navy-900">{value}</p></div>)}</div>
           {!tripClosing.driverClosed && remainingBars > 0 && <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">Click Return Bars &amp; Close to move {formatBarQuantity(remainingBars)} remaining bar(s) to Unsold Returns.</p>}
-          {!tripClosing.driverClosed && remainingBars < 0 && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-medium text-red-700">Balance is negative. Correct the taken, sales, return, or wastage entries before closing.</p>}
+          {!tripClosing.driverClosed && remainingBars < 0 && <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">There is a {formatBarQuantity(Math.abs(remainingBars))}-bar difference in today&apos;s entries. Submit the closing for Admin verification; the truck remains Online until Admin accepts it.</p>}
           {truckOffline ? (
             <p className="flex items-center gap-2 font-semibold text-slate-600"><FiCheckCircle /> Admin accepted the closing. Truck is offline.</p>
           ) : awaitingAdminApproval ? (
             <p className="flex items-center gap-2 font-semibold text-amber-700"><FiClock /> Closing sent to admin. Truck remains online until approval.</p>
           ) : (
-            <button type="button" onClick={() => { setCloseStatusOpen(false); setClosePreviewOpen(true); }} disabled={remainingBars < 0} className="btn-primary flex w-full items-center justify-center gap-2 disabled:opacity-50">
-              <FiCheckCircle /> {remainingBars > 0 ? `Return ${formatBarQuantity(remainingBars)} Bars & Close` : 'Close Truck Day'}
+            <button type="button" onClick={() => { setCloseStatusOpen(false); setClosePreviewOpen(true); }} className="btn-primary flex w-full items-center justify-center gap-2">
+              <FiCheckCircle /> {remainingBars > 0 ? `Return ${formatBarQuantity(remainingBars)} Bars & Close` : remainingBars < 0 ? 'Submit Difference to Admin' : 'Check All & Close'}
             </button>
           )}
         </div>
@@ -419,41 +691,43 @@ export default function TruckDashboardPage() {
           <div className="grid grid-cols-2 gap-2">
             {[['Bars Taken', tripClosing.taken], ['Bars Sold', tripClosing.sold], ['Already Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Current Balance', tripClosing.remaining], ['Auto Return', Math.max(Number(tripClosing.remaining || 0), 0)]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-iceblue-50 p-3"><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className="mt-1 text-lg font-bold text-navy-900">{value}</p></div>)}
           </div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <AmountBox label="Total Sales" value={tripClosing.salesAmount} />
+            <AmountBox label="Collection" value={tripClosing.collectedAmount} />
             <AmountBox label="Pending" value={tripClosing.pendingAmount} danger={tripClosing.pendingAmount > 0} />
             <AmountBox label="Driver Amount" value={tripClosing.driverAmount} />
           </div>
           {remainingBars > 0 && <p className="rounded-xl bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-700">When you confirm, {formatBarQuantity(remainingBars)} remaining bar(s) will be recorded as Unsold Returns and the closing will be sent to admin.</p>}
+          {remainingBars < 0 && <p className="rounded-xl bg-amber-50 px-3 py-3 text-sm font-semibold text-amber-800">The {formatBarQuantity(Math.abs(remainingBars))}-bar difference will be sent to Admin for verification. No sale or wastage record will be deleted automatically.</p>}
           <div className="grid grid-cols-2 gap-3">
             <button type="button" onClick={() => setClosePreviewOpen(false)} className="btn-secondary">Cancel</button>
-            <button type="button" onClick={() => void closeTruckDay()} disabled={closingDay} className="btn-primary disabled:opacity-50">
-              {closingDay ? 'Closing...' : remainingBars > 0 ? `Return ${formatBarQuantity(remainingBars)} & Close` : 'Close Day'}
+            <button type="button" onClick={() => void closeTruckDay(true)} disabled={closingDay} className="btn-primary disabled:opacity-50">
+              {closingDay ? 'Closing...' : remainingBars > 0 ? `Return ${formatBarQuantity(remainingBars)} & Close` : remainingBars < 0 ? 'Submit to Admin' : 'Check All & Close'}
             </button>
           </div>
         </div>
       </Modal>}
 
-      {tripClosing?.driverClosed ? (
-        <section className={`rounded-[2rem] border px-5 py-10 text-center shadow-sm sm:px-8 sm:py-14 ${truckOffline ? 'border-slate-200 bg-[linear-gradient(135deg,#f8fafc,#e2e8f0)]' : 'border-amber-200 bg-[linear-gradient(135deg,#fffbeb,#e0f2fe)]'}`}>
-          <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-3xl text-3xl ${truckOffline ? 'bg-slate-200 text-slate-600' : 'bg-amber-100 text-amber-600'}`}>
-            {truckOffline ? <FiCheckCircle /> : <FiClock />}
+      {tripClosing?.driverClosed && (
+        <section className={`rounded-[2rem] border px-5 py-10 text-center shadow-sm sm:px-8 sm:py-14 ${truckOffline ? 'border-iceblue-200 bg-[linear-gradient(135deg,#f0f9ff,#ecfeff)]' : 'border-amber-200 bg-[linear-gradient(135deg,#fffbeb,#e0f2fe)]'}`}>
+          <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-3xl text-3xl ${truckOffline ? 'bg-iceblue-100 text-iceblue-700' : 'bg-amber-100 text-amber-600'}`}>
+            {truckOffline ? <FiPackage /> : <FiClock />}
           </div>
           <h2 className="mt-5 font-display text-2xl font-bold text-navy-900 sm:text-3xl">
-            {truckOffline ? 'Admin accepted — truck is offline' : 'Closing submitted — waiting for admin'}
+            {truckOffline ? 'Online — waiting for Admin to assign bars' : 'Closing submitted — waiting for Admin'}
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-navy-800/65 sm:text-base">
             {truckOffline
-              ? 'The admin verified the returned bars and accepted the closing. Today’s truck work is complete.'
+              ? 'The previous trip is complete. This truck is Online, and a new trip starts automatically when Admin assigns ice bars.'
               : 'Remaining bars were recorded as returns. Sales and entries are locked, but the truck stays online until the admin verifies and accepts the closing.'}
           </p>
-          {awaitingAdminApproval ? (
-            <button type="button" onClick={() => void load()} className="btn-secondary mx-auto mt-5 inline-flex items-center justify-center gap-2"><FiRefreshCcw /> Check Approval Status</button>
-          ) : (
-            <p className="mt-5 font-semibold text-slate-600">See you tomorrow or on the next production day.</p>
-          )}
+          <button type="button" onClick={() => void load()} className="btn-secondary mx-auto mt-5 inline-flex items-center justify-center gap-2">
+            <FiRefreshCcw /> {awaitingAdminApproval ? 'Check Approval Status' : 'Check for Assigned Bars'}
+          </button>
+          {truckOffline && <p className="mt-3 text-xs font-medium text-navy-800/45">This page also checks automatically every 10 seconds.</p>}
         </section>
-      ) : (
+      )}
+
         <>
           {/* Section tabs — same iceblue/navy palette, split into focused screens instead of one long scroll */}
           <div className="flex gap-1.5 rounded-2xl bg-iceblue-50/70 p-1.5">
@@ -481,8 +755,8 @@ export default function TruckDashboardPage() {
           )}
 
           {activeTab === 'sales' && (
-            <div className="grid gap-5 xl:grid-cols-[minmax(380px,0.9fr)_minmax(0,1.1fr)] xl:items-start">
-              <section className="card p-3 transition-shadow hover:shadow-md sm:p-5 xl:sticky xl:top-24">
+            <div className={`grid gap-5 ${canRecordTrip ? 'xl:grid-cols-[minmax(380px,0.9fr)_minmax(0,1.1fr)]' : 'grid-cols-1'} xl:items-start`}>
+              {canRecordTrip && <section className="card p-3 transition-shadow hover:shadow-md sm:p-5 xl:sticky xl:top-24">
                 <SaleForm
                   key={saleFormKey}
                   fixedTruckId={user?.truck || ''}
@@ -491,7 +765,13 @@ export default function TruckDashboardPage() {
                     setSaleFormKey((key) => key + 1);
                   }}
                 />
-              </section>
+              </section>}
+
+              {!canRecordTrip && (
+                <p className="rounded-2xl border border-iceblue-100 bg-iceblue-50 px-4 py-3 text-sm font-medium text-navy-800/65">
+                  Today&apos;s report is read-only. Admin must assign ice bars to start a new trip and enable sales.
+                </p>
+              )}
 
               <SalesTable title="Today's Sales" rows={saleRows} onPay={openPayment} empty="No sales recorded today." />
             </div>
@@ -507,13 +787,11 @@ export default function TruckDashboardPage() {
               trendLoading={trendLoading}
               trendError={trendError}
               onRetryTrend={() => void loadTrend()}
-              onCloseDay={() => { setError(''); setCloseStatusOpen(true); }}
             />
           )}
         </>
-      )}
 
-      {!tripClosing?.driverClosed && paymentTarget && (
+      {canRecordTrip && paymentTarget && (
         <Modal title={`Update Payment: ${getCustomerName(paymentTarget)}`} onClose={() => setPaymentTarget(null)}>
           <form onSubmit={savePayment} className="space-y-4">
             {error && <ErrorAlert message={error} />}
@@ -796,9 +1074,9 @@ function OverviewTab({
     { label: "Today's Sales", value: formatCurrency(data?.todaySales || 0), icon: FiDollarSign, tone: 'blue' },
     { label: 'Collected', value: formatCurrency(data?.todayCollection || 0), icon: FiCheckCircle, tone: 'emerald' },
     { label: 'Balance Due', value: formatCurrency(balanceDue), icon: FiClock, tone: 'amber', danger: balanceDue > 0 },
-    { label: 'Wastage', value: `${formatBarQuantity(truckOffline ? 0 : data?.todayWastage || 0) || 0} bar`, icon: FiTrash2, tone: 'red' },
+    { label: 'Wastage', value: `${formatBarQuantity(data?.todayWastage || 0) || 0} bar`, icon: FiTrash2, tone: 'red' },
     { label: 'Driver Amount', value: formatCurrency(totalExpense), icon: FiDollarSign, tone: 'violet' },
-    { label: 'Bars Remaining', value: `${formatBarQuantity(truckOffline ? 0 : data?.remainingBars || 0) || 0} bar`, icon: FiPackage, tone: 'cyan' },
+    { label: 'Bars Remaining', value: `${formatBarQuantity(Math.max(0, Number(data?.remainingBars || 0))) || 0} bar`, icon: FiPackage, tone: 'cyan' },
   ];
 
   return (
@@ -859,7 +1137,6 @@ function TripTab({
   trendLoading,
   trendError,
   onRetryTrend,
-  onCloseDay,
 }: {
   tripClosing: any;
   remainingBars: number;
@@ -869,8 +1146,17 @@ function TripTab({
   trendLoading: boolean;
   trendError: string;
   onRetryTrend: () => void;
-  onCloseDay: () => void;
 }) {
+  const report = tripClosing || {
+    taken: 0,
+    sold: 0,
+    returned: 0,
+    wastage: 0,
+    remaining: 0,
+    collectedAmount: 0,
+    pendingAmount: 0,
+    driverAmount: 0,
+  };
   return (
     <div className="space-y-5">
       <section className="card p-4 sm:p-5">
@@ -916,20 +1202,17 @@ function TripTab({
         <h2 className="flex items-center gap-2 font-display text-base font-semibold text-navy-900">
           <FiTruck className="text-iceblue-500" /> Today&apos;s Trip
         </h2>
-        {!tripClosing ? (
-          <p className="mt-3 rounded-2xl bg-iceblue-50/60 px-4 py-8 text-center text-sm text-navy-800/50">Trip details aren&apos;t ready yet.</p>
-        ) : (
           <>
             <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
               {[
-                ['Taken', tripClosing.taken],
-                ['Sold', tripClosing.sold],
-                ['Returned', tripClosing.returned],
-                ['Wastage', tripClosing.wastage],
-                ['Balance', tripClosing.remaining],
-                ['Sales', formatCurrency(tripClosing.salesAmount)],
-                ['Pending', formatCurrency(tripClosing.pendingAmount)],
-                ['Driver Amount', formatCurrency(tripClosing.driverAmount)],
+                ['Taken', report.taken],
+                ['Sold', report.sold],
+                ['Returned', report.returned],
+                ['Wastage', report.wastage],
+                ['Balance', Math.max(0, Number(report.remaining || 0))],
+                ['Collection', formatCurrency(report.collectedAmount)],
+                ['Pending', formatCurrency(report.pendingAmount)],
+                ['Driver Amount', formatCurrency(report.driverAmount)],
               ].map(([label, value]) => (
                 <div key={String(label)} className="rounded-xl border border-iceblue-100/70 bg-iceblue-50/40 px-3 py-2">
                   <p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p>
@@ -937,11 +1220,10 @@ function TripTab({
                 </div>
               ))}
             </div>
-            <button type="button" onClick={onCloseDay} className="btn-primary mt-4 flex w-full items-center justify-center gap-2">
-              <FiClock /> {truckOffline ? 'Offline' : awaitingAdminApproval ? 'Awaiting Admin Approval' : remainingBars > 0 ? `Return ${formatBarQuantity(remainingBars)} Bars & Close` : 'Close Truck Day'}
-            </button>
+            <p className="mt-4 rounded-xl bg-iceblue-50 px-3 py-2 text-center text-xs font-medium text-navy-800/60">
+              Truck closing is checked automatically when you Logout.
+            </p>
           </>
-        )}
       </section>
     </div>
   );
