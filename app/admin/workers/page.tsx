@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { FiDollarSign, FiEdit2, FiPlus, FiTrash2, FiUserCheck, FiUsers } from 'react-icons/fi';
+import { FiArrowRight, FiDollarSign, FiEdit2, FiPlus, FiTrash2, FiUserCheck, FiUsers } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatCurrency, formatDate, todayISO } from '../../../lib/api';
 import Modal from '../../../components/Modal';
@@ -21,6 +21,15 @@ type Worker = {
 const emptyWorkerForm = { name: '', phoneNumber: '', role: '', notes: '' };
 const WORKER_ROLE_OPTIONS = ['Driver', 'Cleaner', 'Manager'];
 const emptyBuyingForm = { worker: '', date: todayISO(), buyingAmount: '', notes: '' };
+
+const formatEntryDateTime = (value: string | Date) => new Date(value).toLocaleString('en-IN', {
+  timeZone: 'Asia/Kolkata',
+  day: '2-digit',
+  month: 'short',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
 
 function currentMonth() {
   return todayISO().slice(0, 7);
@@ -56,22 +65,25 @@ export default function WorkersPage() {
   const [roleMode, setRoleMode] = useState('');
   const [buyingForm, setBuyingForm] = useState<any>(emptyBuyingForm);
   const [error, setError] = useState('');
+  const [recentBuying, setRecentBuying] = useState<any[]>([]);
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
       const { from, to } = monthRange(month);
-      const [workerRows, summaryRows, driverRows, expenseRows] = await Promise.all([
+      const [workerRows, summaryRows, driverRows, expenseRows, recentRows] = await Promise.all([
         api.get('/workers'),
         api.get('/workers/summary', { params: { month } }),
         api.get('/trucks'),
         api.get('/driver-expenses', { params: { from, to } }),
+        api.get('/workers/buying', { params: { limit: 10 } }),
       ]);
       setWorkers(workerRows.data);
       setSummary(summaryRows.data);
       setDrivers(driverRows.data);
       setDriverExpenses(expenseRows.data);
+      setRecentBuying(Array.isArray(recentRows.data) ? recentRows.data : []);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Could not load workers');
     } finally {
@@ -336,6 +348,28 @@ export default function WorkersPage() {
         </div>
       </section>
 
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-iceblue-100 px-4 py-3">
+          <div>
+            <h2 className="font-display text-base font-bold text-navy-900">Recent Daily Buying</h2>
+            <p className="mt-0.5 text-xs text-navy-800/50">Latest 10 worker buying entries</p>
+          </div>
+          <Link href="/admin/workers/buying-history" className="btn-secondary flex items-center gap-2 text-sm">
+            View More <FiArrowRight />
+          </Link>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] table-fixed border-collapse text-xs sm:text-sm">
+            <thead className="bg-slate-100 text-navy-900"><tr><th className="w-[7%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">S.No</th><th className="w-[20%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Worker Name</th><th className="w-[15%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Buying Date</th><th className="w-[23%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Entry Date &amp; Time</th><th className="w-[15%] border border-slate-300 px-3 py-3 text-right font-bold uppercase">Amount</th><th className="w-[20%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Notes</th></tr></thead>
+            <tbody>
+              {recentBuying.map((row, index) => <tr key={row._id} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-300 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">{row.worker?.name || 'Worker'}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDate(row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td><td className="border border-slate-300 px-3 py-2.5">{row.notes || '-'}</td></tr>)}
+              {recentBuying.length === 0 && <tr><td colSpan={6} className="border border-slate-300 py-8 text-center text-navy-800/50">No daily buying history yet.</td></tr>}
+            </tbody>
+            {recentBuying.length > 0 && <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={4} className="border border-slate-300 px-3 py-3 text-right uppercase">Total</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">{formatCurrency(recentBuying.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td><td className="border border-slate-300" /></tr></tfoot>}
+          </table>
+        </div>
+      </section>
+
       {workerModalOpen && (
         <Modal title={editingWorker ? 'Edit Worker' : 'Add Worker'} onClose={() => setWorkerModalOpen(false)}>
           <form onSubmit={saveWorker} className="space-y-3">
@@ -453,10 +487,11 @@ export default function WorkersPage() {
               {workerDetailLoading ? (
                 <p className="text-navy-800/50">Loading...</p>
               ) : (
-                <table className="table-base min-w-[500px]">
+                <table className="table-base min-w-[650px]">
                   <thead>
                     <tr>
                       <th>Date</th>
+                      <th>Current Date &amp; Time</th>
                       <th>Buying Amount</th>
                       <th>Notes</th>
                     </tr>
@@ -465,18 +500,20 @@ export default function WorkersPage() {
                     {workerDetailRows.map((row) => (
                       <tr key={row._id}>
                         <td>{formatDate(row.date)}</td>
+                        <td>{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td>
                         <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
                         <td className="text-xs text-navy-800/60">{row.notes}</td>
                       </tr>
                     ))}
                     {workerDetailRows.length === 0 && (
-                      <tr><td colSpan={3} className="py-4 text-center text-navy-800/50">No buying entries for the selected range.</td></tr>
+                      <tr><td colSpan={4} className="py-4 text-center text-navy-800/50">No buying entries for the selected range.</td></tr>
                     )}
                   </tbody>
                   {workerDetailRows.length > 0 && (
                     <tfoot>
                       <tr className="font-semibold">
                         <td>Total</td>
+                        <td></td>
                         <td className="text-red-500">{formatCurrency(workerDetailRows.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td>
                         <td></td>
                       </tr>

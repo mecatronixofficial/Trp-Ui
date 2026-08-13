@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createExpense, deleteExpense, getExpenseSummary, listExpenses, updateExpense } from '../../../data/expense-store';
+import { requireAdmin } from '../../../lib/server-auth';
 
 export async function GET(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   const { searchParams } = new URL(request.url);
   const month = searchParams.get('month');
   const year = searchParams.get('year');
@@ -29,6 +31,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   try {
     const payload = await request.json();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -42,6 +45,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -59,6 +63,7 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

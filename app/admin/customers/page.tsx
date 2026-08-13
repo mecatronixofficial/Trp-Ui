@@ -240,7 +240,8 @@ export default function CustomersPage() {
           icon={FiUsers}
           label="Total Customers"
           value={customerTotals.total}
-          helper={`Total Pending: ${formatCurrency(customerTotals.truckPending + customerTotals.localPending)}`}
+          helperLabel="Total Pending"
+          helperValue={formatCurrency(customerTotals.truckPending + customerTotals.localPending)}
           danger={(customerTotals.truckPending + customerTotals.localPending) > 0}
           tone="blue"
         />
@@ -248,7 +249,8 @@ export default function CustomersPage() {
           icon={FiTruck}
           label="Truck Customers"
           value={customerTotals.truck}
-          helper={`Truck Pending: ${formatCurrency(customerTotals.truckPending)}`}
+          helperLabel="Truck Pending"
+          helperValue={formatCurrency(customerTotals.truckPending)}
           danger={customerTotals.truckPending > 0}
           tone="cyan"
         />
@@ -256,7 +258,8 @@ export default function CustomersPage() {
           icon={FiHome}
           label="Local Customers"
           value={customerTotals.local}
-          helper={`Local Pending: ${formatCurrency(customerTotals.localPending)}`}
+          helperLabel="Local Pending"
+          helperValue={formatCurrency(customerTotals.localPending)}
           danger={customerTotals.localPending > 0}
           tone="violet"
         />
@@ -629,7 +632,7 @@ export default function CustomersPage() {
   );
 }
 
-function CustomerSummaryCard({ icon: Icon, label, value, helper, danger = false, tone = 'blue' }: { icon: any; label: string; value: string | number; helper?: string; danger?: boolean; tone?: 'blue' | 'cyan' | 'violet' | 'amber' }) {
+function CustomerSummaryCard({ icon: Icon, label, value, helperLabel, helperValue, danger = false, tone = 'blue' }: { icon: any; label: string; value: string | number; helperLabel?: string; helperValue?: string; danger?: boolean; tone?: 'blue' | 'cyan' | 'violet' | 'amber' }) {
   const styles = {
     blue: { card: 'from-blue-50 to-white', icon: 'bg-blue-600', accent: 'bg-blue-500' },
     cyan: { card: 'from-cyan-50 to-white', icon: 'bg-cyan-600', accent: 'bg-cyan-500' },
@@ -637,18 +640,18 @@ function CustomerSummaryCard({ icon: Icon, label, value, helper, danger = false,
     amber: { card: 'from-amber-50 to-white', icon: 'bg-amber-500', accent: 'bg-amber-500' },
   }[tone];
   return (
-    <div className={`relative flex min-h-[108px] min-w-0 items-center gap-3 overflow-hidden rounded-2xl border bg-gradient-to-br px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
-      <span className={`absolute inset-y-0 left-0 w-1 ${danger ? 'bg-red-500' : styles.accent}`} />
-      <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-lg text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}>
+    <div className={`relative flex min-h-[108px] min-w-0 items-center gap-3 overflow-hidden rounded-2xl border border-iceblue-100 bg-gradient-to-br px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card}`}>
+      <span className={`absolute inset-y-0 left-0 w-1 ${styles.accent}`} />
+      <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-lg text-white shadow-sm ${styles.icon}`}>
         <Icon />
       </span>
 
       <div className="min-w-0">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">{label}</p>
-        <p className={`mt-1 break-words font-display text-lg font-bold leading-tight ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
-        {helper && (
-          <p className={`mt-0.5 text-xs font-semibold ${danger ? 'text-red-600' : 'text-navy-800/55'}`}>
-            {helper}
+        <p className="mt-1 break-words font-display text-base font-bold leading-tight text-navy-900">{value}</p>
+        {helperLabel && helperValue && (
+          <p className="mt-0.5 text-xs font-semibold text-navy-800/55">
+            {helperLabel}: <span className={`text-sm font-bold ${danger ? 'text-red-600' : 'text-navy-900'}`}>{helperValue}</span>
           </p>
         )}
       </div>

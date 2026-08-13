@@ -18,8 +18,6 @@ import {
   FiShield,
   FiUser,
 } from 'react-icons/fi';
-import BrandLogo from '../../components/BrandLogo';
-import AppLoadingScreen from '../../components/AppLoadingScreen';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../lib/api';
 
@@ -60,6 +58,103 @@ function getApiMessage(err: any, fallback: string) {
   return err?.response?.data?.message || err?.message || fallback;
 }
 
+function IceCrystal({ className = '', style }: { className?: string; style?: CSSProperties }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none">
+      <path
+        d="M12 1 L15 9 L23 12 L15 15 L12 23 L9 15 L1 12 L9 9 Z"
+        fill="currentColor"
+        fillOpacity="0.9"
+        stroke="currentColor"
+        strokeOpacity="0.3"
+        strokeWidth="0.5"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/**
+ * Living ice backdrop: drifting aurora-blue light, slow-floating crystals,
+ * and falling frost specks — purely decorative (pointer-events-none) so it
+ * never competes with the content on top. Same iceblue/navy/white palette
+ * already used on the page; `variant` only swaps which of those existing
+ * tones fits the panel it sits behind (light card vs. navy panel).
+ */
+function IceMotionBackdrop({ className = '', variant = 'light' }: { className?: string; variant?: 'light' | 'dark' }) {
+  const crystals = [
+    { top: '10%', left: '12%', size: 22, duration: '7s', delay: '0s', opacity: 0.5 },
+    { top: '18%', left: '82%', size: 16, duration: '9s', delay: '1.2s', opacity: 0.4 },
+    { top: '68%', left: '8%', size: 18, duration: '8s', delay: '2.4s', opacity: 0.35 },
+    { top: '78%', left: '86%', size: 24, duration: '10s', delay: '.6s', opacity: 0.45 },
+    { top: '42%', left: '92%', size: 14, duration: '6.5s', delay: '1.8s', opacity: 0.4 },
+  ];
+
+  const flakes = [
+    { left: '6%', size: 3, duration: '11s', delay: '0s' },
+    { left: '18%', size: 2, duration: '9s', delay: '2.1s' },
+    { left: '31%', size: 3, duration: '13s', delay: '.7s' },
+    { left: '47%', size: 2, duration: '10s', delay: '3.4s' },
+    { left: '58%', size: 3, duration: '12s', delay: '1.5s' },
+    { left: '71%', size: 2, duration: '9.5s', delay: '4s' },
+    { left: '84%', size: 3, duration: '11.5s', delay: '2.8s' },
+    { left: '94%', size: 2, duration: '10.5s', delay: '.3s' },
+  ];
+
+  const isDark = variant === 'dark';
+
+  return (
+    <div className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}>
+      {/* Slow-drifting aurora light pools */}
+      <div className={`absolute -left-24 -top-24 h-80 w-80 animate-aurora-drift rounded-full blur-3xl ${isDark ? 'bg-iceblue-500/25' : 'bg-iceblue-200/50'}`} />
+      <div className={`absolute -bottom-32 -right-20 h-96 w-96 animate-aurora-drift-slow rounded-full blur-3xl ${isDark ? 'bg-iceblue-400/20' : 'bg-iceblue-300/40'}`} />
+      <div
+        className={`absolute left-1/3 top-1/2 h-72 w-72 -translate-y-1/2 animate-aurora-drift rounded-full blur-3xl [animation-delay:-6s] ${isDark ? 'bg-cyan-100/10' : 'bg-cyan-100/60'}`}
+      />
+
+      {/* Faint grid, like frost etched on glass */}
+      <div
+        className={`absolute inset-0 [background-size:40px_40px] ${
+          isDark
+            ? 'opacity-[0.08] [background-image:linear-gradient(rgba(255,255,255,.5)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.5)_1px,transparent_1px)]'
+            : 'opacity-[0.05] [background-image:linear-gradient(rgba(18,132,172,.6)_1px,transparent_1px),linear-gradient(90deg,rgba(18,132,172,.6)_1px,transparent_1px)]'
+        }`}
+      />
+
+      {/* Large watermark ice block, slowly floating */}
+      <LoginIceBlock
+        className={`absolute -bottom-10 -right-12 h-56 w-56 rotate-[14deg] animate-ice-float ${isDark ? 'text-white opacity-[0.05]' : 'text-iceblue-500 opacity-[0.07]'}`}
+      />
+
+      {/* Drifting ice crystals */}
+      {crystals.map((c, i) => (
+        <IceCrystal
+          key={i}
+          className={`absolute animate-crystal-drift ${isDark ? 'text-white' : 'text-iceblue-400'}`}
+          style={{
+            top: c.top,
+            left: c.left,
+            width: c.size,
+            height: c.size,
+            opacity: isDark ? c.opacity * 0.7 : c.opacity,
+            animationDuration: c.duration,
+            animationDelay: c.delay,
+          }}
+        />
+      ))}
+
+      {/* Falling frost specks */}
+      {flakes.map((f, i) => (
+        <span
+          key={i}
+          className={`absolute top-0 animate-frost-fall rounded-full ${isDark ? 'bg-white/30' : 'bg-iceblue-400/50'}`}
+          style={{ left: f.left, width: f.size, height: f.size, animationDuration: f.duration, animationDelay: f.delay }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function LoginIceBlock({ className = '', style }: { className?: string; style?: CSSProperties }) {
   return (
     <svg viewBox="0 0 48 48" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
@@ -81,55 +176,6 @@ function LoginIceBlock({ className = '', style }: { className?: string; style?: 
       {/* shine */}
       <rect x="10" y="12" width="5" height="14" rx="2.5" fill="white" opacity="0.55" />
     </svg>
-  );
-}
-
-function IceCrystal({ className = '' }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} xmlns="http://www.w3.org/2000/svg" fill="none">
-      <path
-        d="M12 1 L15 9 L23 12 L15 15 L12 23 L9 15 L1 12 L9 9 Z"
-        fill="white"
-        fillOpacity="0.85"
-        stroke="#bae6fd"
-        strokeWidth="0.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-/** A literal stockpile of ice blocks, like the cold-store yard, anchoring the hero panel. */
-function IceBlockStack({ className = '' }: { className?: string }) {
-  const blocks = [
-    { size: 64, bottom: 0, left: '2%', rotate: -8, delay: '0s', opacity: 0.95 },
-    { size: 84, bottom: 0, left: '16%', rotate: 4, delay: '.3s', opacity: 1 },
-    { size: 56, bottom: 6, left: '34%', rotate: -12, delay: '.6s', opacity: 0.9 },
-    { size: 96, bottom: 0, left: '46%', rotate: 6, delay: '.15s', opacity: 1 },
-    { size: 60, bottom: 4, left: '65%', rotate: -6, delay: '.45s', opacity: 0.92 },
-    { size: 72, bottom: 0, left: '78%', rotate: 10, delay: '.75s', opacity: 0.96 },
-  ];
-
-  return (
-    <div className={`relative ${className}`}>
-      <div className="absolute inset-x-0 bottom-0 h-16 rounded-[100%] bg-cyan-950/25 blur-2xl" />
-      {blocks.map((block, index) => (
-        <LoginIceBlock
-          key={index}
-          className="absolute animate-ice-float drop-shadow-xl"
-          style={{
-            width: block.size,
-            height: block.size,
-            left: block.left,
-            bottom: block.bottom,
-            opacity: block.opacity,
-            animationDelay: block.delay,
-            ['--ice-rotate' as any]: `${block.rotate}deg`,
-            transform: `rotate(${block.rotate}deg)`,
-          }}
-        />
-      ))}
-    </div>
   );
 }
 
@@ -276,192 +322,164 @@ export default function LoginPage() {
   };
 
   if (authLoading || redirecting || user) {
-    return <AppLoadingScreen message="Opening your dashboard" role={user?.role || null} />;
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-white" aria-label="Loading">
+        <FiLoader className="animate-spin text-2xl text-iceblue-600" />
+      </main>
+    );
   }
 
   return (
-    <main className="relative min-h-screen overflow-hidden bg-[radial-gradient(circle_at_18%_12%,#ffffff_0,#dff7ff_24%,#75d2eb_45%,#17617b_74%,#071620_100%)] px-4 py-8 text-white sm:px-6 lg:px-8">
-      <div className="absolute inset-0 opacity-25 [background-image:linear-gradient(rgba(255,255,255,.2)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.16)_1px,transparent_1px)] [background-size:42px_42px]" />
-      <div className="absolute left-8 top-10 h-32 w-32 rounded-full border border-white/25" />
-      <div className="absolute bottom-10 right-10 h-44 w-44 rounded-full border border-cyan-100/20" />
-      <div className="absolute right-[12%] top-[16%] hidden h-24 w-24 rotate-12 rounded-[28px] border border-white/20 bg-white/10 shadow-2xl shadow-cyan-950/30 backdrop-blur md:block" />
-      <div className="absolute bottom-[14%] left-[10%] hidden h-20 w-20 -rotate-12 rounded-[24px] border border-white/20 bg-white/10 shadow-2xl shadow-cyan-950/30 backdrop-blur md:block" />
+    <main className="relative min-h-screen bg-white text-navy-900 lg:flex">
+      {/* Left brand panel — solid, high-contrast, no glass/blur so it stays legible everywhere */}
+      <section className="relative isolate hidden flex-col justify-between overflow-hidden bg-navy-900 px-6 py-10 text-white sm:px-10 lg:flex lg:w-[46%] lg:px-14 lg:py-14 xl:w-[42%]">
+        <IceMotionBackdrop variant="dark" />
 
-      {/* Big ice-block watermarks */}
-      <LoginIceBlock className="pointer-events-none absolute -left-14 bottom-[-6%] hidden h-[24rem] w-[24rem] -rotate-12 opacity-[0.16] lg:block" />
-      <LoginIceBlock className="pointer-events-none absolute -right-10 -top-10 hidden h-56 w-56 rotate-[18deg] opacity-[0.12] md:block" />
-
-      {/* Floating ice crystals */}
-      <IceCrystal className="absolute left-[6%] top-[22%] h-6 w-6 animate-[spin_9s_linear_infinite] opacity-70" />
-      <IceCrystal className="absolute right-[8%] top-[38%] hidden h-4 w-4 animate-[spin_7s_linear_infinite] opacity-60 sm:block" />
-      <IceCrystal className="absolute bottom-[18%] left-[22%] hidden h-5 w-5 animate-[spin_11s_linear_infinite] opacity-50 md:block" />
-      <IceCrystal className="absolute bottom-[30%] right-[16%] h-3.5 w-3.5 animate-[spin_6s_linear_infinite] opacity-70" />
-
-      {/* Falling frost specks */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {[
-          { left: '4%', size: 3, duration: '7s', delay: '0s' },
-          { left: '14%', size: 2, duration: '9s', delay: '1.4s' },
-          { left: '27%', size: 4, duration: '8s', delay: '.4s' },
-          { left: '41%', size: 2, duration: '10s', delay: '2.2s' },
-          { left: '55%', size: 3, duration: '7.5s', delay: '.9s' },
-          { left: '68%', size: 2, duration: '9.5s', delay: '3s' },
-          { left: '79%', size: 4, duration: '8.5s', delay: '1.8s' },
-          { left: '90%', size: 3, duration: '11s', delay: '.2s' },
-        ].map((flake, index) => (
-          <span
-            key={index}
-            className="absolute top-0 animate-frost-fall rounded-full bg-white/70"
-            style={{ left: flake.left, width: flake.size, height: flake.size, animationDuration: flake.duration, animationDelay: flake.delay }}
-          />
-        ))}
-      </div>
-
-      <div className="relative mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-6xl items-center">
-        <section className="grid w-full items-center gap-8 lg:grid-cols-[1.05fr_.95fr]">
-          <div className="hidden lg:block">
-            <div className="mb-8 inline-flex items-center gap-3 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-cyan-50 backdrop-blur">
-              <BrandLogo alt="" className="h-6 w-6 rounded-md object-cover" />
-              Since 2000
+        <div className="relative">
+          <div className="mb-10 flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-white/10 ring-1 ring-white/25">
+              <LoginIceBlock className="h-7 w-7" />
             </div>
+            <div>
+              <p className="font-display text-lg font-bold leading-none">Tiruppur Ice</p>
+              <p className="mt-1 text-xs font-medium uppercase tracking-wider text-iceblue-200/80">Since 2000</p>
+            </div>
+          </div>
 
-            <h1 className="max-w-xl font-display text-5xl font-bold leading-tight">
-              Tiruppur Ice Admin Desk
-            </h1>
-            <p className="mt-5 max-w-lg text-lg leading-8 text-cyan-50/85">
-              Manage stock, trucks, production, customers, billing, and daily reports from one secure workspace.
+          <h1 className="max-w-md font-display text-4xl font-bold leading-tight xl:text-[2.75rem]">
+            Run your ice business from one admin desk
+          </h1>
+          <p className="mt-4 max-w-sm text-[15px] leading-7 text-white/70">
+            Track stock, truck sales, production, customers, and billing in real time — built for the cold-store floor.
+          </p>
+        </div>
+
+        <div className="relative mt-12 grid grid-cols-2 gap-3 lg:mt-0">
+          {[
+            { icon: FiDroplet, title: 'Live stock', subtitle: 'Production & inventory' },
+            { icon: FiShield, title: 'Secure access', subtitle: 'Role-based logins' },
+            { icon: FiArrowRight, title: 'Truck sales', subtitle: 'Fast field billing' },
+            { icon: FiUser, title: 'Customer ledger', subtitle: 'Dues & history' },
+          ].map(({ icon: Icon, title, subtitle }) => (
+            <div key={title} className="rounded-2xl bg-white/[0.06] p-4 ring-1 ring-white/10">
+              <Icon className="mb-2 text-iceblue-300" />
+              <p className="text-sm font-semibold text-white">{title}</p>
+              <p className="mt-0.5 text-xs text-white/55">{subtitle}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Right form panel — living ice backdrop behind a solid card, so the graphic never fights legibility */}
+      <section className="relative flex flex-1 items-center justify-center overflow-hidden bg-gradient-to-b from-iceblue-50 via-white to-iceblue-50 px-4 py-10 sm:px-6 lg:px-10">
+        <IceMotionBackdrop />
+
+        <div className="relative w-full max-w-md rounded-[2rem] border border-iceblue-100 bg-white/90 p-6 shadow-xl shadow-iceblue-900/5 backdrop-blur-sm sm:p-9">
+          <div className="mb-8 text-center lg:hidden">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-navy-900 shadow-lg shadow-navy-900/20">
+              <LoginIceBlock className="h-10 w-10" />
+            </div>
+            <h1 className="font-display text-2xl font-bold text-navy-900">Tiruppur Ice Admin Desk</h1>
+            <p className="mt-1 text-sm text-navy-800/60">Since 2000</p>
+          </div>
+
+          <div className="mb-7">
+            <p className="text-sm font-semibold uppercase tracking-wide text-iceblue-600">Welcome back</p>
+            <h2 className="mt-2 font-display text-3xl font-bold text-navy-900">Sign in to continue</h2>
+            <p className="mt-2 text-sm leading-6 text-navy-800/60">
+              Enter your admin username or truck login ID to access the dashboard.
             </p>
-
-            <div className="mt-10 grid max-w-xl grid-cols-3 gap-3">
-              {[
-                ['Fresh stock', 'Live entries'],
-                ['Truck sales', 'Fast billing'],
-                ['Admin control', 'Secure access'],
-              ].map(([title, subtitle]) => (
-                <div key={title} className="rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur">
-                  <p className="text-sm font-semibold text-white">{title}</p>
-                  <p className="mt-1 text-xs text-cyan-50/70">{subtitle}</p>
-                </div>
-              ))}
-            </div>
           </div>
 
-          <div className="mx-auto w-full max-w-md">
-            <div className="mb-6 text-center lg:hidden">
-              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-3xl border border-white/25 bg-white/15 shadow-xl shadow-cyan-950/20 backdrop-blur">
-                <LoginIceBlock className="h-12 w-12 drop-shadow-md" />
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label className="label-text" htmlFor="username">
+                Username
+              </label>
+              <div className="relative">
+                <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-navy-800/40" />
+                <input
+                  id="username"
+                  className="input-field h-12 rounded-xl border-iceblue-200 pl-11 text-base focus:border-iceblue-400"
+                  placeholder="admin or truck login ID"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
               </div>
-              <h1 className="font-display text-3xl font-bold">Tiruppur Ice</h1>
-              <p className="mt-1 text-sm text-cyan-50/80">Since 2000 &middot; Admin Desk</p>
             </div>
 
-            <form
-              onSubmit={handleSubmit}
-              className="rounded-[2rem] border border-white/35 bg-white/95 p-6 text-navy-900 shadow-2xl shadow-cyan-950/35 backdrop-blur-xl sm:p-8"
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <label className="label-text mb-0" htmlFor="password">
+                  Password
+                </label>
+                <button
+                  type="button"
+                  onClick={openForgotPassword}
+                  className="text-xs font-semibold text-iceblue-700 transition hover:text-navy-900"
+                >
+                  Forgot password?
+                </button>
+              </div>
+              <div className="relative">
+                <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-navy-800/40" />
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  className="input-field h-12 rounded-xl border-iceblue-200 pl-11 pr-11 text-base focus:border-iceblue-400"
+                  placeholder="Password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-navy-800/50 transition hover:bg-iceblue-50 hover:text-iceblue-700"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <FiEyeOff /> : <FiEye />}
+                </button>
+              </div>
+            </div>
+
+            {error && (
+              <p role="alert" className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
+                <FiAlertCircle className="mt-0.5 shrink-0" />
+                {error}
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-navy-900 px-4 font-semibold text-white shadow-lg shadow-navy-900/20 transition hover:bg-iceblue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <div className="mb-8">
-                <div className="relative mb-5 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-iceblue-50 to-iceblue-100 shadow-lg shadow-iceblue-500/20">
-                  <LoginIceBlock className="h-14 w-14 drop-shadow-md" />
-                  <IceCrystal className="absolute -right-1.5 -top-1.5 h-4 w-4 animate-[spin_5s_linear_infinite]" />
-                </div>
-                <p className="text-sm font-semibold uppercase text-iceblue-600">Welcome back</p>
-                <h2 className="mt-2 font-display text-3xl font-bold text-navy-900">Sign in securely</h2>
-                <p className="mt-2 text-sm leading-6 text-navy-800/65">
-                  Enter your admin username or truck login ID to continue.
-                </p>
-              </div>
+              {loading ? <FiLoader className="animate-spin" /> : <FiArrowRight />}
+              {loading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
 
-              <div className="space-y-5">
-                <div>
-                  <label className="label-text" htmlFor="username">
-                    Username
-                  </label>
-                  <div className="relative">
-                    <FiUser className="absolute left-4 top-1/2 -translate-y-1/2 text-iceblue-500" />
-                    <input
-                      id="username"
-                      className="input-field h-12 rounded-2xl border-iceblue-100 bg-iceblue-50/60 pl-11 text-base"
-                      placeholder="admin or truck login ID"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      autoComplete="username"
-                      autoFocus
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <label className="label-text mb-0" htmlFor="password">
-                      Password
-                    </label>
-                    <button
-                      type="button"
-                      onClick={openForgotPassword}
-                      className="text-xs font-semibold text-iceblue-700 transition hover:text-navy-900"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
-                  <div className="relative">
-                    <FiLock className="absolute left-4 top-1/2 -translate-y-1/2 text-iceblue-500" />
-                    <input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      className="input-field h-12 rounded-2xl border-iceblue-100 bg-iceblue-50/60 pl-11 pr-11 text-base"
-                      placeholder="Password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      autoComplete="current-password"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((value) => !value)}
-                      className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-xl text-navy-800/55 transition hover:bg-white hover:text-iceblue-700"
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <FiEyeOff /> : <FiEye />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {error && (
-                <p role="alert" className="mt-5 flex items-start gap-2 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
-                  <FiAlertCircle className="mt-0.5 shrink-0" />
-                  {error}
-                </p>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-navy-900 px-4 font-semibold text-white shadow-lg shadow-navy-900/25 transition hover:bg-iceblue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {loading ? <FiLoader className="animate-spin" /> : <FiArrowRight />}
-                {loading ? 'Signing in...' : 'Sign In'}
-              </button>
-
-              <div className="mt-6 grid grid-cols-2 gap-3 text-xs text-navy-800/65">
-                <div className="flex items-center gap-2 rounded-2xl bg-iceblue-50 px-3 py-3">
-                  <FiShield className="shrink-0 text-iceblue-600" />
-                  <span>Admin access</span>
-                </div>
-                <div className="flex items-center gap-2 rounded-2xl bg-iceblue-50 px-3 py-3">
-                  <FiDroplet className="shrink-0 text-iceblue-600" />
-                  <span>Truck login</span>
-                </div>
-              </div>
-            </form>
-
-            <div className="mt-5 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-center text-xs text-cyan-50/80 backdrop-blur">
-              Admin password reset is available with OTP verification. Truck passwords are reset by admin.
+          <div className="mt-6 grid grid-cols-2 gap-3 text-xs text-navy-800/65">
+            <div className="flex items-center gap-2 rounded-xl border border-iceblue-100 bg-iceblue-50/60 px-3 py-3">
+              <FiShield className="shrink-0 text-iceblue-600" />
+              <span>Admin access</span>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl border border-iceblue-100 bg-iceblue-50/60 px-3 py-3">
+              <FiDroplet className="shrink-0 text-iceblue-600" />
+              <span>Truck login</span>
             </div>
           </div>
-        </section>
-      </div>
+
+          <p className="mt-5 text-center text-xs text-navy-800/50">
+            Admin password reset is available with OTP verification. Truck passwords are reset by admin.
+          </p>
+        </div>
+      </section>
 
       {forgotOpen && (
         <div

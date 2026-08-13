@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSettings, updateSettings } from '../../../data/settings-store';
+import { requireAdmin } from '../../../lib/server-auth';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   const settings = await getSettings();
   return NextResponse.json({ settings });
 }
 
 export async function PATCH(request: NextRequest) {
+  const authError = await requireAdmin(request); if (authError) return authError;
   try {
     const payload = await request.json();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {

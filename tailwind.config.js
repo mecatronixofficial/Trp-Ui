@@ -49,10 +49,21 @@ module.exports = {
           '0%, 100%': { transform: 'translateY(0px) rotate(var(--ice-rotate, 0deg))' },
           '50%': { transform: 'translateY(-16px) rotate(var(--ice-rotate, 0deg))' },
         },
+        auroraDrift: {
+          '0%, 100%': { transform: 'translate3d(0,0,0) scale(1)' },
+          '50%': { transform: 'translate3d(-4%, 5%, 0) scale(1.1)' },
+        },
+        crystalDrift: {
+          '0%, 100%': { transform: 'translateY(0px) translateX(0px) rotate(0deg)' },
+          '50%': { transform: 'translateY(-14px) translateX(6px) rotate(12deg)' },
+        },
       },
       animation: {
         'frost-fall': 'frostFall 9s linear infinite',
         'ice-float': 'iceFloat 5s ease-in-out infinite',
+        'aurora-drift': 'auroraDrift 16s ease-in-out infinite',
+        'aurora-drift-slow': 'auroraDrift 22s ease-in-out infinite reverse',
+        'crystal-drift': 'crystalDrift 7s ease-in-out infinite',
       },
     },
   },
