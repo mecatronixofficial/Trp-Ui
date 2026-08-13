@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { FiCheckCircle, FiPlus, FiSearch, FiTrash2, FiUser, FiUserPlus } from 'react-icons/fi';
 import api from '../lib/api';
-import { PAYMENT_MODES, formatBarQuantity, formatCurrency, getItemBarUsed, todayISO } from '../lib/api';
+import { PAYMENT_MODES, formatBarQuantity, formatCurrency, getItemBarUsed } from '../lib/api';
 
 interface SaleFormProps {
   trucks?: { _id: string; truckName: string }[]; // only needed for admin (truck picker)
@@ -34,6 +34,9 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const router = useRouter();
   const [customers, setCustomers] = useState<any[]>([]);
   const [customerSearch, setCustomerSearch] = useState('');
+  const [showAllCustomers, setShowAllCustomers] = useState(false);
+  const [customersLoading, setCustomersLoading] = useState(true);
+  const [customersError, setCustomersError] = useState('');
   const [customer, setCustomer] = useState(initial?.customer?._id || initial?.customer || '');
   const [saleType, setSaleType] = useState(initial?.saleType || 'retail');
   const [items, setItems] = useState<Item[]>(
@@ -55,16 +58,40 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   const [availableStock, setAvailableStock] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const customerRequestRef = useRef(0);
 
-  const loadCustomers = async () => {
-    const { data } = await api.get('/customers');
-    setCustomers(data);
-    return data;
+  const loadCustomers = async (search = '') => {
+    const requestId = ++customerRequestRef.current;
+    setCustomersLoading(true);
+    setCustomersError('');
+    try {
+      const { data } = await api.get('/customers', {
+        params: { limit: 10000, ...(search.trim() ? { search: search.trim() } : {}) },
+      });
+      const rows = Array.isArray(data) ? data : Array.isArray(data?.records) ? data.records : [];
+      const initialCustomer = initial?.customer && typeof initial.customer === 'object' ? initial.customer : null;
+      const completeRows = initialCustomer && !rows.some((row: any) => row._id === initialCustomer._id)
+        ? [initialCustomer, ...rows]
+        : rows;
+      if (requestId === customerRequestRef.current) setCustomers(completeRows);
+      return completeRows;
+    } catch (requestError: any) {
+      if (requestId === customerRequestRef.current) {
+        setCustomers([]);
+        setCustomersError(requestError?.response?.data?.message || 'Could not load customers.');
+      }
+      return [];
+    } finally {
+      if (requestId === customerRequestRef.current) setCustomersLoading(false);
+    }
   };
 
   useEffect(() => {
-    loadCustomers();
-  }, []);
+    if (customer || showAllCustomers) return;
+    const term = customerSearch.trim();
+    const timer = window.setTimeout(() => void loadCustomers(term), term ? 250 : 0);
+    return () => window.clearTimeout(timer);
+  }, [customer, customerSearch, showAllCustomers]);
 
   useEffect(() => {
     if (!customer) return setPriceList([]);
@@ -83,28 +110,18 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
   }, [customer]);
 
   const selectedCustomer = useMemo(() => customers.find((c) => c._id === customer), [customer, customers]);
-  const activeTruck = fixedTruckId || getCustomerTruckId(selectedCustomer);
   const visibleCustomers = useMemo(() => {
     const term = customerSearch.trim().toLowerCase();
 
     return customers.filter((c) => {
       const searchMatch =
         !term ||
-        c.name?.toLowerCase().includes(term) ||
-        c.phoneNumber?.toLowerCase().includes(term);
+        String(c.name || '').toLowerCase().includes(term) ||
+        String(c.phoneNumber || '').toLowerCase().includes(term);
 
       return searchMatch;
-    });
-  }, [activeTruck, customerSearch, customers]);
-
-  useEffect(() => {
-    if (!selectedCustomer) return;
-    const customerTruck = getCustomerTruckId(selectedCustomer);
-    if (!fixedTruckId && activeTruck && customerTruck && customerTruck !== activeTruck) {
-      setCustomer('');
-      setPriceList([]);
-    }
-  }, [activeTruck, selectedCustomer]);
+    }).sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  }, [customerSearch, customers]);
 
   useEffect(() => {
     if (!selectedCustomer || initial?._id) return;
@@ -161,10 +178,11 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
 
   const totalAmount = items.reduce((sum, i) => sum + (Number(i.pricePerBar) || 0), 0);
   const balance = totalAmount - (Number(paidAmount) || 0);
-  const customerTruckId = getCustomerTruckId(selectedCustomer);
-  // Only drivers and customers assigned to a truck use line/truck stock.
-  // All other admin sales are shop sales.
-  const derivedTruck = fixedTruckId || customerTruckId;
+  const initialTruckId = typeof initial?.truck === 'string' ? initial.truck : initial?.truck?._id || '';
+  // Customer-to-truck assignment is only customer classification; it must not
+  // silently turn an admin shop sale into a truck sale. Drivers always use
+  // their own truck, while editing keeps the original sale location.
+  const derivedTruck = fixedTruckId || (initial?._id ? initialTruckId : '');
 
   // Admin sales show the same "Shop Ready" quantity as the production page:
   // today's production less stock movements and truck assignments, plus
@@ -178,8 +196,10 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         api.get('/production'),
         api.get('/stock-entries'),
         api.get('/outsource-entries'),
-        api.get('/truck-assignments', { params: { date: indiaDateKey(new Date()) } }),
+        api.get('/truck-loads'),
         api.get('/sales'),
+        api.get('/wastage'),
+        api.get('/daily-closing', { params: { date: indiaDateKey(new Date()) } }),
       ]);
 
     request
@@ -190,26 +210,37 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           return;
         }
 
-        const [productionRows, stockRows, outsourceRows, assignmentRows, saleRows] = res;
+        const [productionRows, stockRows, outsourceRows, truckLoadRows, saleRows, wastageRows, closingRows] = res;
         const today = indiaDateKey(new Date());
+        const closing = (Array.isArray(closingRows.data) ? closingRows.data : [])[0];
+        if (closing?.status === 'closed') {
+          setAvailableStock(0);
+          return;
+        }
+        const sessionStartedAt = closing?.sessionStartedAt ? new Date(closing.sessionStartedAt).getTime() : 0;
+        const inCurrentSession = (row: any) => !sessionStartedAt || new Date(row.createdAt || row.date).getTime() >= sessionStartedAt;
         const produced = (Array.isArray(productionRows.data) ? productionRows.data : [])
-          .filter((row: any) => indiaDateKey(row.date) === today)
+          .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.totalBars || 0), 0);
         const stocked = (Array.isArray(stockRows.data) ? stockRows.data : [])
-          .filter((row: any) => indiaDateKey(row.date) === today)
+          .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
         const outsourced = (Array.isArray(outsourceRows.data) ? outsourceRows.data : [])
-          .filter((row: any) => indiaDateKey(row.date) === today)
+          .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
-        const assigned = (Array.isArray(assignmentRows.data) ? assignmentRows.data : [])
+        const assigned = (Array.isArray(truckLoadRows.data) ? truckLoadRows.data : [])
+          .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
         const shopSold = (Array.isArray(saleRows.data) ? saleRows.data : [])
-          .filter((sale: any) => indiaDateKey(sale.date) === today && !sale.truck)
+          .filter((sale: any) => indiaDateKey(sale.date) === today && !sale.truck && inCurrentSession(sale))
           .reduce((sum: number, sale: any) => sum + (sale.items || []).reduce(
             (itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0,
           ), 0);
+        const wasted = (Array.isArray(wastageRows.data) ? wastageRows.data : [])
+          .filter((row: any) => indiaDateKey(row.date) === today && !row.truck && row.reason !== 'unsold' && inCurrentSession(row))
+          .reduce((sum: number, row: any) => sum + getItemBarUsed(row), 0);
 
-        setAvailableStock(produced - stocked + outsourced - assigned - shopSold);
+        setAvailableStock(Math.max(0, produced - stocked + outsourced - assigned - shopSold - wasted));
       })
       .catch(() => { if (active) setAvailableStock(0); });
 
@@ -274,19 +305,48 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         <div className="relative">
           <FiSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-iceblue-500" />
           <input
-            className="input-field h-12 pl-11"
+            className="input-field h-12 pl-11 pr-16"
             placeholder="Search old customer by name or phone"
             value={customerSearch}
             onChange={(e) => {
               setCustomerSearch(e.target.value);
               setCustomer('');
+              setShowAllCustomers(false);
             }}
           />
+          <button
+            type="button"
+            onClick={() => {
+              const opening = !showAllCustomers;
+              setCustomer('');
+              setCustomerSearch('');
+              setShowAllCustomers(opening);
+              if (opening) void loadCustomers();
+            }}
+            className={`absolute right-2 top-1/2 flex h-8 -translate-y-1/2 items-center justify-center rounded-lg px-3 text-xs font-bold transition ${showAllCustomers ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-iceblue-700 hover:bg-iceblue-100'}`}
+            aria-expanded={showAllCustomers}
+            aria-label="Show all customers in this branch"
+          >
+            All
+          </button>
         </div>
 
-        {!customer && customerSearch && (
-          <div className="mt-2 max-h-56 overflow-y-auto rounded-2xl border border-iceblue-100 bg-white shadow-lg shadow-iceblue-900/10">
-            {visibleCustomers.length === 0 ? (
+        {!customer && (customerSearch || showAllCustomers) && (
+          <div className="mt-2 max-h-[55vh] overflow-y-auto rounded-2xl border border-iceblue-100 bg-white shadow-lg shadow-iceblue-900/10 sm:max-h-[43rem]">
+            {showAllCustomers && !customersLoading && !customersError && (
+              <div className="sticky top-0 z-[1] flex items-center justify-between border-b border-iceblue-100 bg-iceblue-50 px-4 py-2 text-xs font-semibold text-navy-800">
+                <span>All branch customers</span>
+                <span>{visibleCustomers.length}</span>
+              </div>
+            )}
+            {customersLoading ? (
+              <p className="px-4 py-5 text-center text-sm text-navy-800/50">Loading customers...</p>
+            ) : customersError ? (
+              <div className="px-4 py-4 text-sm text-red-600">
+                <p>{customersError}</p>
+                <button type="button" onClick={() => void loadCustomers()} className="mt-2 font-semibold text-navy-900 underline">Try again</button>
+              </div>
+            ) : visibleCustomers.length === 0 ? (
               <div className="px-4 py-3">
                 <p className="text-sm text-navy-800/50">{fixedTruckId ? 'No customer found. Ask admin to add this customer.' : 'No customer found.'}</p>
                 {!fixedTruckId && (
@@ -300,27 +360,24 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
                 )}
               </div>
             ) : (
-              visibleCustomers.slice(0, 8).map((c) => {
+              visibleCustomers.map((c) => {
                   const customerTruck = typeof c.truck === 'object' && c.truck ? `${c.truck.truckName} (${c.truck.truckNumber})` : 'Local';
-                  const isNew = String(c.createdAt || '').slice(0, 10) === todayISO();
 
                   return (
                     <button
                       key={c._id}
                       type="button"
-                      onClick={() => setCustomer(c._id)}
-                      className="flex w-full items-start gap-3 border-b border-iceblue-50 px-4 py-3 text-left last:border-b-0 hover:bg-iceblue-50"
+                      onClick={() => {
+                        setCustomer(c._id);
+                        setShowAllCustomers(false);
+                      }}
+                      className="flex min-h-[64px] w-full items-start gap-3 border-b border-iceblue-50 px-4 py-3 text-left last:border-b-0 hover:bg-iceblue-50"
                     >
                       <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-600">
                         <FiUser />
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-2">
-                          <span className="truncate text-sm font-semibold text-navy-900">{c.name}</span>
-                          <span className={`pill shrink-0 ${isNew ? 'bg-emerald-50 text-emerald-600' : 'bg-navy-900/5 text-navy-800'}`}>
-                            {isNew ? 'New' : 'Old'}
-                          </span>
-                        </span>
+                        <span className="block truncate text-sm font-semibold text-navy-900">{c.name}</span>
                         <span className="mt-1 block text-xs text-navy-800/55">
                           {c.phoneNumber || 'No phone'} · {customerTruck}
                         </span>
@@ -344,15 +401,6 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
                   {selectedCustomer.phoneNumber || 'No phone'} · {selectedCustomer.address || 'No address'}
                 </p>
               </div>
-              <span
-                className={`pill shrink-0 ${
-                  String(selectedCustomer.createdAt || '').slice(0, 10) === todayISO()
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : 'bg-white text-navy-800'
-                }`}
-              >
-                {String(selectedCustomer.createdAt || '').slice(0, 10) === todayISO() ? 'New Customer' : 'Old Customer'}
-              </span>
             </div>
             <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
               <InfoPill

@@ -14,6 +14,7 @@ import {
   FiCoffee,
   FiDollarSign,
   FiEdit3,
+  FiGitBranch,
   FiPlus,
   FiRefreshCw,
   FiSearch,
@@ -22,7 +23,11 @@ import {
 } from "react-icons/fi";
 import { PieChart, Pie, ResponsiveContainer, Cell, Tooltip } from "recharts";
 import Modal from "../../../components/Modal";
-import { COST_TYPES, formatCurrency, formatDate } from "../../../lib/api";
+import api, { COST_TYPES, formatCurrency, formatDate } from "../../../lib/api";
+import { useAuth } from "../../../context/AuthContext";
+import { selectedBranchHeaders } from "../../../lib/branch-fetch";
+
+type Branch = { _id: string; name: string; code: string; isActive?: boolean };
 
 type ExpenseRecord = {
   _id: string;
@@ -32,6 +37,11 @@ type ExpenseRecord = {
   notes?: string;
   worker?: string;
   workerName?: string;
+  branch?: string;
+  branchName?: string;
+  truck?: string;
+  truckName?: string;
+  fuelQuantity?: number;
   createdAt?: string;
 };
 
@@ -42,6 +52,8 @@ type ExpenseForm = {
   notes: string;
   customCategory: string;
   worker: string;
+  truck: string;
+  fuelQuantity: string;
 };
 
 async function readExpenseResponse(response: Response) {
@@ -76,6 +88,8 @@ const createForm = (): ExpenseForm => ({
   notes: "",
   customCategory: "",
   worker: "",
+  truck: "",
+  fuelQuantity: "",
 });
 
 const expenseLabel = (value: string) =>
@@ -95,14 +109,16 @@ const displayCategoryName = (value: string) => {
 
   const normalized = normalizeCategory(raw);
   const aliases: Record<string, string> = {
-    snacks: "Snacks",
-    snack: "Snacks",
-    snacks_expenses: "Snacks",
-    advance_for_employee: "Advance for Employee",
-    advance_for_emp: "Advance for Employee",
-    advance_employee: "Advance for Employee",
-    advance: "Advance for Employee",
-    employee_advance: "Advance for Employee",
+    food: "Food",
+    food_expenses: "Food",
+    snacks: "Food",
+    snack: "Food",
+    snacks_expenses: "Food",
+    advance_for_employee: "Worker Amount",
+    advance_for_emp: "Worker Amount",
+    advance_employee: "Worker Amount",
+    advance: "Worker Amount",
+    employee_advance: "Worker Amount",
     other_expenses: "Other Expenses",
     other_expense: "Other Expenses",
     other: "Other Expenses",
@@ -132,7 +148,7 @@ const displayCategoryName = (value: string) => {
 
 const apiCostType = (category: string) => {
   const normalized = normalizeCategory(category);
-  if (["snacks", "snack", "snacks_expenses"].includes(normalized))
+  if (["food", "food_expenses", "snacks", "snack", "snacks_expenses"].includes(normalized))
     return "snacks";
   if (["petrol_diesel", "petrol", "diesel"].includes(normalized))
     return "petrol_diesel";
@@ -203,7 +219,7 @@ const notesForApi = (category: string, costType: string, notes: string) => {
 
 const presetCategoryValue = (category: string) => {
   const normalized = normalizeCategory(category);
-  if (["snacks", "snacks_expenses"].includes(normalized)) return "snacks";
+  if (["food", "food_expenses", "snacks", "snack", "snacks_expenses"].includes(normalized)) return "food";
   if (["petrol_diesel", "petrol", "diesel"].includes(normalized))
     return "petrol_diesel";
   if (
@@ -224,17 +240,13 @@ const presetCategoryValue = (category: string) => {
 };
 
 export default function ExpensesPage() {
+  const { user, loading: authLoading } = useAuth();
   const [records, setRecords] = useState<ExpenseRecord[]>([]);
-  const [summary, setSummary] = useState<{
-    totalExpenses: number;
-    snacksTotal: number;
-    petrolDieselTotal: number;
-    balance: number;
-  } | null>(null);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<ExpenseForm>(createForm);
   const [saving, setSaving] = useState(false);
@@ -246,6 +258,10 @@ export default function ExpensesPage() {
     null,
   );
   const [workers, setWorkers] = useState<any[]>([]);
+  const [trucks, setTrucks] = useState<any[]>([]);
+  const isSuperAdmin = user?.role === "super_admin";
+  const canManageExpenses = Boolean(selectedBranch);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
 
   const today = todayIndiaISO();
   const initialMonth = today.slice(0, 7);
@@ -274,22 +290,11 @@ export default function ExpensesPage() {
             params.set("year", year);
           }
         }
-        const response = await fetch(`/api/expenses?${params.toString()}`, { cache: "no-store" });
+        const response = await fetch(`/api/expenses?${params.toString()}`, { cache: "no-store", headers: selectedBranchHeaders() });
         const payload = await readExpenseResponse(response);
         if (!response.ok)
           throw new Error(payload?.message || "Could not load expenses");
         setRecords(Array.isArray(payload.records) ? payload.records : []);
-        setSummary(
-          payload?.summary
-            ? {
-                totalExpenses: Number(payload.summary.totalExpenses || 0),
-                snacksTotal: Number(payload.summary.snacksTotal || 0),
-                petrolDieselTotal: Number(payload.summary.petrolDieselTotal || 0),
-                balance: Number(payload.summary.balance || 0),
-              }
-            : null,
-        );
-        setLastUpdated(new Date());
       } catch (error: any) {
         setLoadError(error?.message || "Could not load expenses");
       } finally {
@@ -301,14 +306,38 @@ export default function ExpensesPage() {
   );
 
   useEffect(() => {
+    if (authLoading || selectedBranch === null) return;
     void load(true);
-  }, [load]);
+  }, [authLoading, load, selectedBranch]);
 
   useEffect(() => {
-    import("../../../lib/api").then(({ default: api }) => api.get("/workers")
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem("tii_selected_branch") || "";
+    setSelectedBranch(isSuperAdmin ? storedBranch : String(user?.branch || ""));
+    if (isSuperAdmin) api.get("/branches")
+      .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
+      .catch(() => setBranches([]));
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  useEffect(() => {
+    if (authLoading || selectedBranch === null || !canManageExpenses) {
+      setWorkers([]);
+      setTrucks([]);
+      return;
+    }
+    api.get("/workers")
       .then(({ data }) => setWorkers((Array.isArray(data) ? data : []).filter((worker: any) => worker.isActive !== false)))
-      .catch(() => setWorkers([])));
-  }, []);
+      .catch(() => setWorkers([]));
+    api.get("/trucks")
+      .then(({ data }) => setTrucks((Array.isArray(data) ? data : []).filter((truck: any) => truck.status !== false)))
+      .catch(() => setTrucks([]));
+  }, [authLoading, canManageExpenses, selectedBranch]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem("tii_selected_branch", branch);
+    else window.localStorage.removeItem("tii_selected_branch");
+    window.location.reload();
+  };
 
   const monthRecords = useMemo(() => {
     if (filterMode === "today") {
@@ -341,29 +370,10 @@ export default function ExpensesPage() {
     const term = search.trim().toLowerCase();
     if (!term) return filteredRecords;
     return filteredRecords.filter((record) =>
-      [displayCategoryName(recordCategory(record)), record.workerName, recordNotes(record)]
+      [displayCategoryName(recordCategory(record)), record.workerName, record.truckName, recordNotes(record)]
         .some((value) => String(value || "").toLowerCase().includes(term)),
     );
   }, [filteredRecords, search]);
-
-  const totals = useMemo(() => {
-    const all = monthRecords.reduce(
-      (sum, record) => sum + Number(record.amount || 0),
-      0,
-    );
-    const todayTotal = monthRecords
-      .filter((record) => indiaDateKey(record.date) === today)
-      .reduce((sum, record) => sum + Number(record.amount || 0), 0);
-    const monthTotal = monthRecords.reduce(
-      (sum, record) => sum + Number(record.amount || 0),
-      0,
-    );
-    const visible = filteredRecords.reduce(
-      (sum, record) => sum + Number(record.amount || 0),
-      0,
-    );
-    return { all, today: todayTotal, month: monthTotal, visible };
-  }, [monthRecords, filteredRecords, today]);
 
   const categoryTotals = useMemo(() => {
     const grouped: Record<string, number> = {};
@@ -387,8 +397,10 @@ export default function ExpensesPage() {
     "#ef4444",
     "#64748b",
   ];
-  // Use the filtered backend summary as the source of truth for the donut total.
-  const totalSpending = Number(summary?.totalExpenses ?? totals.visible);
+  const totalSpending = useMemo(
+    () => monthRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0),
+    [monthRecords],
+  );
   const chartData = useMemo(
     () =>
       categoryTotals.map((item, index) => ({
@@ -438,9 +450,11 @@ export default function ExpensesPage() {
     const label = displayCategoryName(recordCategory(record));
     const normalized = normalizeCategory(label);
     return (
+      normalized === "food" ||
+      normalized === "food_expenses" ||
       normalized === "snacks" ||
       normalized === "snacks_expenses" ||
-      normalizeCategory(record.costType) === "snacks"
+      ["food", "food_expenses", "snacks", "snacks_expenses"].includes(normalizeCategory(record.costType))
     );
   };
   const snacksAmount = monthRecords.reduce(
@@ -448,10 +462,18 @@ export default function ExpensesPage() {
       sum + (isSnackRecord(record) ? Number(record.amount || 0) : 0),
     0,
   );
+  const petrolDieselAmount = monthRecords.reduce(
+    (sum, record) =>
+      sum +
+      (displayCategoryName(recordCategory(record)) === "Petrol / Diesel"
+        ? Number(record.amount || 0)
+        : 0),
+    0,
+  );
   const advanceAmount = monthRecords.reduce(
     (sum, record) =>
       sum +
-      (displayCategoryName(recordCategory(record)) === "Advance for Employee"
+      (displayCategoryName(recordCategory(record)) === "Worker Amount"
         ? Number(record.amount || 0)
         : 0),
     0,
@@ -466,6 +488,7 @@ export default function ExpensesPage() {
   );
 
   const openAddExpense = () => {
+    if (!canManageExpenses) return;
     setEditingRecord(null);
     setForm(createForm());
     setFormError("");
@@ -473,6 +496,7 @@ export default function ExpensesPage() {
   };
 
   const openEditExpense = (record: ExpenseRecord) => {
+    if (!canManageExpenses) return;
     const categoryText = recordCategory(record);
     const preset = presetCategoryValue(categoryText);
     setEditingRecord(record);
@@ -483,6 +507,8 @@ export default function ExpensesPage() {
       notes: recordNotes(record),
       customCategory: preset === "custom" ? categoryText : "",
       worker: record.worker || "",
+      truck: record.truck || "",
+      fuelQuantity: record.fuelQuantity ? String(record.fuelQuantity) : "",
     });
     setFormError("");
     setModalOpen(true);
@@ -490,6 +516,7 @@ export default function ExpensesPage() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canManageExpenses) return;
     const typedCategory =
       form.costType === "custom"
         ? form.customCategory.trim()
@@ -509,9 +536,22 @@ export default function ExpensesPage() {
     try {
       const costType = apiCostType(typedCategory);
       const needsWorker = costType === "advance_for_employee";
+      const needsTruck = costType === "petrol_diesel";
       const selectedWorker = workers.find((worker) => worker._id === form.worker);
+      const selectedTruck = trucks.find((truck) => truck._id === form.truck);
       if (needsWorker && !selectedWorker) {
-        setFormError("Select a registered employee");
+        setFormError("Select a registered worker");
+        setSaving(false);
+        return;
+      }
+      const fuelQuantity = Number(form.fuelQuantity);
+      if (needsTruck && !selectedTruck) {
+        setFormError("Select the truck that used this fuel");
+        setSaving(false);
+        return;
+      }
+      if (needsTruck && (!Number.isFinite(fuelQuantity) || fuelQuantity <= 0)) {
+        setFormError("Enter fuel consumed in litres");
         setSaving(false);
         return;
       }
@@ -522,46 +562,31 @@ export default function ExpensesPage() {
         notes: notesForApi(typedCategory, costType, form.notes),
         worker: needsWorker ? selectedWorker._id : "",
         workerName: needsWorker ? selectedWorker.name : "",
+        truck: needsTruck ? selectedTruck._id : "",
+        truckName: needsTruck ? `${selectedTruck.truckName}${selectedTruck.truckNumber ? ` (${selectedTruck.truckNumber})` : ""}` : "",
+        fuelQuantity: needsTruck ? fuelQuantity : 0,
+        branch: selectedBranch || "",
+        branchName: activeBranch ? `${activeBranch.name} (${activeBranch.code})` : "",
       };
-      let responseRecord: ExpenseRecord | null = null;
       if (editingRecord) {
         const response = await fetch(`/api/expenses?id=${editingRecord._id}`, {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...selectedBranchHeaders() },
           body: JSON.stringify(payload),
         });
         const result = await readExpenseResponse(response);
         if (!response.ok)
           throw new Error(result?.message || "Could not save expense");
-        responseRecord = {
-          ...editingRecord,
-          ...payload,
-          _id: editingRecord._id,
-          amount: Number(payload.amount),
-          notes: payload.notes,
-          date: payload.date,
-          ...(result.record || {}),
-        } as ExpenseRecord;
       } else {
         const response = await fetch("/api/expenses", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...selectedBranchHeaders() },
           body: JSON.stringify(payload),
         });
         const result = await readExpenseResponse(response);
         if (!response.ok)
           throw new Error(result?.message || "Could not save expense");
-        const created = result.record || result;
-        responseRecord = {
-          ...created,
-          _id: created?._id || `${Date.now()}`,
-          date: created?.date || payload.date,
-          costType: created?.costType || payload.costType,
-          amount: Number(created?.amount || payload.amount),
-          notes: created?.notes || payload.notes,
-        } as ExpenseRecord;
       }
-      setLastUpdated(new Date());
       setModalOpen(false);
       setForm(createForm());
       setEditingRecord(null);
@@ -575,11 +600,13 @@ export default function ExpensesPage() {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    if (!canManageExpenses) return;
     setDeleting(true);
     setDeleteError("");
     try {
       const response = await fetch(`/api/expenses?id=${deleteTarget._id}`, {
         method: "DELETE",
+        headers: selectedBranchHeaders(),
       });
       const result = await readExpenseResponse(response);
       if (!response.ok)
@@ -597,33 +624,45 @@ export default function ExpensesPage() {
 
   return (
     <div className="-mt-4 space-y-1 sm:-mt-5">
+      {isSuperAdmin && (
+        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Expense view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : "Overall — all branches"}</p></div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change expense branch" value={selectedBranch || ""} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
       <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
         <ExpenseSummaryCard
           icon={FiDollarSign}
           label="Total Expenses"
-          value={formatCurrency(summary?.totalExpenses ?? totals.month)}
-          helper="All recorded expenses"
+          value={formatCurrency(totalSpending)}
+          helper={selectedPeriodLabel}
           tone="blue"
         />
         <ExpenseSummaryCard
           icon={FiCoffee}
-          label="Snacks Expenses"
-          value={formatCurrency(summary?.snacksTotal ?? snacksAmount)}
+          label="Food Expenses"
+          value={formatCurrency(snacksAmount)}
           helper="Food & refreshments"
           tone="amber"
         />
         <ExpenseSummaryCard
           icon={FiDollarSign}
           label="Petrol / Diesel"
-          value={formatCurrency(summary?.petrolDieselTotal ?? 0)}
+          value={formatCurrency(petrolDieselAmount)}
           helper="Fuel expenses"
           tone="amber"
         />
         <ExpenseSummaryCard
           icon={FiUser}
-          label="Advance for Employee"
+          label="Worker Amount"
           value={formatCurrency(advanceAmount)}
-          helper="Employee advance payments"
+          helper="Amounts paid to workers"
           tone="cyan"
         />
         <ExpenseSummaryCard
@@ -637,17 +676,17 @@ export default function ExpensesPage() {
 
       <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
         <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">All Expenses</h1>
+          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">Expenses</h1>
           <div className="relative min-w-0 flex-1">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
-            <input className="input-field h-10 pl-9" placeholder="Search by category, employee or notes..." value={search} onChange={(event) => setSearch(event.target.value)} />
+            <input className="input-field h-10 pl-9" placeholder="Search by category, worker or notes..." value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
           <Link href="/admin/expenses/all" className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
             All Records
           </Link>
-          <button type="button" onClick={openAddExpense} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
+          {canManageExpenses && <button type="button" onClick={openAddExpense} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
             <FiPlus /> Add Expense
-          </button>
+          </button>}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-iceblue-100 px-4 py-3">
@@ -778,13 +817,14 @@ export default function ExpensesPage() {
           <ExpenseLoading />
         ) : visibleRecords.length ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] table-fixed border-collapse text-left text-xs sm:text-sm">
+            <table className={`w-full ${isSuperAdmin ? "min-w-[1060px]" : "min-w-[920px]"} table-fixed border-collapse text-left text-xs sm:text-sm`}>
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
                   <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                  {isSuperAdmin && <th className="w-[13%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
                   <th className="w-[12%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Date</th>
                   <th className="w-[16%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Category</th>
-                  <th className="w-[16%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Employee</th>
+                  <th className="w-[16%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker / Truck</th>
                   <th className="w-[25%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Notes</th>
                   <th className="w-[14%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Amount</th>
                   <th className="w-[12%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Action</th>
@@ -797,6 +837,7 @@ export default function ExpensesPage() {
                     className="even:bg-slate-50 hover:bg-iceblue-50/70"
                   >
                     <td className="border border-slate-300 px-1 py-2.5 text-center font-medium text-navy-900">{index + 1}</td>
+                    {isSuperAdmin && <td className="break-words border border-slate-300 px-2 py-2.5 text-center text-navy-900">{record.branchName || branches.find((branch) => branch._id === record.branch)?.name || "Unassigned"}</td>}
                     <td className="border border-slate-300 px-2 py-2.5 text-center font-medium text-navy-900">
                       {formatDate(record.date)}
                     </td>
@@ -805,7 +846,10 @@ export default function ExpensesPage() {
                         {displayCategoryName(recordCategory(record))}
                       </span>
                     </td>
-                    <td className="break-words border border-slate-300 px-2 py-2.5 text-center font-medium text-navy-900">{record.workerName || "—"}</td>
+                    <td className="break-words border border-slate-300 px-2 py-2.5 text-center font-medium text-navy-900">
+                      {record.workerName || record.truckName || "—"}
+                      {Number(record.fuelQuantity || 0) > 0 && <span className="mt-0.5 block text-xs text-navy-800/50">{Number(record.fuelQuantity).toLocaleString("en-IN")} L</span>}
+                    </td>
                     <td
                       className="truncate border border-slate-300 px-2 py-2.5 text-center text-navy-800/60"
                       title={recordNotes(record)}
@@ -816,7 +860,7 @@ export default function ExpensesPage() {
                       {formatCurrency(Number(record.amount || 0))}
                     </td>
                     <td className="border border-slate-300 px-2 py-2.5">
-                      <div className="flex flex-wrap items-center justify-center gap-2">
+                      {canManageExpenses ? <div className="flex flex-wrap items-center justify-center gap-2">
                         <button
                           type="button"
                           onClick={() => openEditExpense(record)}
@@ -836,12 +880,12 @@ export default function ExpensesPage() {
                         >
                           <FiTrash2 />
                         </button>
-                      </div>
+                      </div> : <span className="block text-center text-navy-800/30">—</span>}
                     </td>
                   </tr>
                 ))}
                 {visibleRecords.length === 0 && (
-                  <tr><td colSpan={7} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No expenses found.</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 8 : 7} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No expenses found.</td></tr>
                 )}
               </tbody>
             </table>
@@ -857,13 +901,13 @@ export default function ExpensesPage() {
             <p className="mt-1 max-w-sm text-sm text-slate-600">
               Add the first expense to begin tracking business spending.
             </p>
-            <button
+            {canManageExpenses && <button
               type="button"
               onClick={openAddExpense}
               className="btn-primary mt-4 flex items-center gap-2"
             >
               <FiPlus /> Add Expense
-            </button>
+            </button>}
           </div>
         )}
       </section>
@@ -989,14 +1033,16 @@ export default function ExpensesPage() {
                     costType: event.target.value,
                     customCategory: "",
                     worker: "",
+                    truck: "",
+                    fuelQuantity: "",
                   })
                 }
               >
                 <option value="">Select category</option>
-                <option value="snacks">Snacks</option>
+                <option value="food">Food</option>
                 <option value="petrol_diesel">Petrol / Diesel</option>
                 <option value="advance_for_employee">
-                  Advance for Employee
+                  Worker Amount
                 </option>
                 <option value="other_expenses">Other Expenses</option>
                 <option value="custom">Custom category</option>
@@ -1019,11 +1065,26 @@ export default function ExpensesPage() {
             </div>
             {form.costType === "advance_for_employee" && (
               <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Registered Employee</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Select Worker</label>
                 <select required className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none transition focus:border-amber-400 focus:bg-white" value={form.worker} onChange={(event) => setForm({ ...form, worker: event.target.value })}>
-                  <option value="">Select employee</option>
+                  <option value="">Select worker</option>
                   {workers.map((worker) => <option key={worker._id} value={worker._id}>{worker.name}{worker.role ? ` (${worker.role})` : ""}</option>)}
                 </select>
+              </div>
+            )}
+            {form.costType === "petrol_diesel" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Truck</label>
+                  <select required className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none transition focus:border-amber-400 focus:bg-white" value={form.truck} onChange={(event) => setForm({ ...form, truck: event.target.value })}>
+                    <option value="">Select truck</option>
+                    {trucks.map((truck) => <option key={truck._id} value={truck._id}>{truck.truckName}{truck.truckNumber ? ` (${truck.truckNumber})` : ""}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Fuel Used (Litres)</label>
+                  <input type="number" min="0.01" step="0.01" inputMode="decimal" required className="h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm outline-none transition focus:border-amber-400 focus:bg-white" placeholder="0.00" value={form.fuelQuantity} onChange={(event) => setForm({ ...form, fuelQuantity: event.target.value })} />
+                </div>
               </div>
             )}
             <div>

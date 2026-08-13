@@ -11,7 +11,14 @@ api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const branch = window.localStorage.getItem('tii_selected_branch');
     const isAuthRequest = String(config.url || '').startsWith('/auth/');
-    if (branch && !isAuthRequest) config.headers['X-Branch-Id'] = branch;
+    const isBranchListRequest = String(config.url || '').startsWith('/branches');
+    let isSuperAdmin = false;
+    try {
+      isSuperAdmin = JSON.parse(Cookies.get('tii_user') || '{}')?.role === 'super_admin';
+    } catch {
+      /* Invalid cached user data must not apply a cross-branch scope. */
+    }
+    if (branch && isSuperAdmin && !isAuthRequest && !isBranchListRequest) config.headers['X-Branch-Id'] = branch;
   }
   return config;
 });
@@ -59,8 +66,8 @@ export const COST_TYPES = [
   { value: 'salt_chemical', label: 'Salt / Chemical' },
   { value: 'packing', label: 'Packing' },
   { value: 'truck_expense', label: 'Truck Expense' },
-  { value: 'snacks_expenses', label: 'Snacks Expenses' },
-  { value: 'advance_for_employee', label: 'Advance for Employee' },
+  { value: 'snacks_expenses', label: 'Food Expenses' },
+  { value: 'advance_for_employee', label: 'Worker Amount' },
   { value: 'chat_expenses', label: 'Other Expenses' },
   { value: 'other_expenses', label: 'Other Expenses' },
   { value: 'other', label: 'Other' },
@@ -111,5 +118,10 @@ export function formatDate(date: string | Date) {
 }
 
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }

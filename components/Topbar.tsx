@@ -20,6 +20,7 @@ import {
   FiX,
   FiGitBranch,
   FiDollarSign,
+  FiMonitor,
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import useDismissibleMenu from '../hooks/useDismissibleMenu';
@@ -34,6 +35,7 @@ const adminLinks = [
   ['/admin/sales', 'Sales', FiShoppingCart],
   ['/admin/expenses', 'Expenses', FiDollarSign],
   ['/admin/reports', 'Reports', FiBarChart2],
+  ['/admin/sample', 'Sample', FiMonitor],
   ['/admin/settings', 'Settings', FiSettings],
 ];
 
@@ -68,6 +70,8 @@ export default function Topbar({ title }: { title: string }) {
   const TimeIcon = hour >= 18 || hour < 6 ? FiMoon : FiSun;
   const timeLabel = now?.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) || '--:--';
   const dateLabel = now?.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) || '';
+  const userName = user?.displayName || user?.username || 'Admin';
+  const userInitial = userName.charAt(0).toUpperCase();
 
   useEffect(() => {
     setNow(new Date());
@@ -89,38 +93,40 @@ export default function Topbar({ title }: { title: string }) {
   };
 
   return (
-    <header ref={menuRef} className="sticky top-0 z-30 bg-iceblue-50/80 px-3 py-3 backdrop-blur-xl sm:px-4 md:px-8">
-      <div className="flex items-center justify-between gap-3 rounded-3xl border border-white/80 bg-white px-3 py-2.5 shadow-lg shadow-iceblue-900/10">
-        <div className="flex min-w-0 items-center gap-3">
+    <header ref={menuRef} className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
+      <div className="flex min-h-[74px] items-center justify-between gap-3 px-3 sm:px-5 md:px-8">
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
           <button
-            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-navy-900 text-white shadow-sm transition hover:bg-iceblue-700"
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition ${open ? 'border-navy-900 bg-navy-900 text-white shadow-lg shadow-navy-900/20' : 'border-slate-200 bg-slate-50 text-navy-900 hover:border-iceblue-300 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
             onClick={() => setOpen(!open)}
             aria-label="Toggle navigation"
           >
-            {open ? <FiX size={22} /> : <FiMenu size={22} />}
+            {open ? <FiX size={21} /> : <FiMenu size={21} />}
           </button>
 
-          <div className="h-11 w-11 shrink-0 overflow-hidden rounded-2xl bg-[#071824] shadow-lg shadow-navy-900/20">
+          <div className="hidden h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-[#071824] shadow-md shadow-navy-900/15 sm:block">
             <BrandLogo className="h-full w-full object-cover" />
           </div>
 
-          <div className="min-w-0">
-            <div className="hidden items-center gap-2 sm:flex">
-              <span className="h-1.5 w-1.5 rounded-full bg-iceblue-500" />
-              <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-navy-800/45">{activeArea}</p>
+          <span className="hidden h-9 w-px bg-slate-200 sm:block" />
+
+          <div className="min-w-0 leading-tight">
+            <div className="flex items-center gap-2">
+              <span className="hidden h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-50 sm:block" />
+              <p className="truncate text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-400">{activeArea}</p>
             </div>
-            <h1 className="truncate font-display text-base font-semibold text-navy-900 sm:text-lg">{title}</h1>
+            <h1 className="mt-1 truncate font-display text-base font-bold text-navy-900 sm:text-lg">{title}</h1>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
           {isAdminArea && (
             <>
               <Link
                 href="/admin/trucks"
                 title="Trucks"
                 aria-label="Trucks"
-                className={`flex h-10 w-10 items-center justify-center rounded-xl transition ${pathname?.startsWith('/admin/trucks') ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-iceblue-700 hover:bg-iceblue-100'}`}
+                className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${pathname?.startsWith('/admin/trucks') ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-200 bg-white text-slate-500 hover:border-iceblue-200 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
               >
                 <FiTruck />
               </Link>
@@ -128,7 +134,7 @@ export default function Topbar({ title }: { title: string }) {
                 href="/admin/settings"
                 title="Settings"
                 aria-label="Settings"
-                className={`flex h-10 w-10 items-center justify-center rounded-xl transition ${pathname?.startsWith('/admin/settings') ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-iceblue-700 hover:bg-iceblue-100'}`}
+                className={`hidden h-10 w-10 items-center justify-center rounded-xl border transition sm:flex ${pathname?.startsWith('/admin/settings') ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-200 bg-white text-slate-500 hover:border-iceblue-200 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
               >
                 <FiSettings />
               </Link>
@@ -137,7 +143,7 @@ export default function Topbar({ title }: { title: string }) {
           {user?.role === 'super_admin' && (
             <select
               aria-label="Select dashboard branch"
-              className="hidden h-11 max-w-48 rounded-2xl border border-iceblue-100 bg-iceblue-50 px-3 text-sm font-semibold text-navy-900 outline-none lg:block"
+              className="hidden h-11 max-w-52 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-navy-900 outline-none ring-0 transition focus:border-iceblue-400 xl:block"
               value={selectedBranch}
               onChange={(event) => changeBranch(event.target.value)}
             >
@@ -145,31 +151,37 @@ export default function Topbar({ title }: { title: string }) {
               {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
             </select>
           )}
-          <div className="hidden items-center gap-2 rounded-2xl bg-iceblue-50 px-3 py-1.5 text-navy-900 sm:flex">
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white text-iceblue-700 shadow-sm">
-              <TimeIcon />
-            </span>
-            <div>
-              <p className="text-sm font-bold leading-none">{timeLabel}</p>
-              <p className="mt-1 text-[11px] font-medium text-navy-800/50">{dateLabel}</p>
+          <div className="hidden h-11 items-center gap-2 rounded-xl bg-navy-900 px-3 text-white lg:flex">
+            <TimeIcon className="text-iceblue-300" />
+            <div className="leading-none">
+              <p className="text-xs font-bold">{timeLabel}</p>
+              <p className="mt-1 text-[9px] font-semibold uppercase tracking-wide text-iceblue-200/70">{dateLabel}</p>
+            </div>
+          </div>
+
+          <div className="hidden items-center gap-2 border-l border-slate-200 pl-2 md:flex">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-iceblue-500 to-sky-700 text-sm font-black text-white shadow-sm">{userInitial}</span>
+            <div className="hidden max-w-28 leading-tight 2xl:block">
+              <p className="truncate text-xs font-bold text-navy-900">{userName}</p>
+              <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-slate-400">{String(user?.role || 'account').replace('_', ' ')}</p>
             </div>
           </div>
 
           <button
-            onClick={logout}
-            className="flex h-10 w-10 items-center justify-center rounded-2xl bg-red-50 text-red-500 transition hover:bg-red-100 md:w-auto md:px-4"
+            onClick={() => void logout()}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-500 transition hover:border-red-200 hover:bg-red-100"
             aria-label="Logout"
+            title="Logout"
           >
             <FiLogOut />
-            <span className="ml-2 hidden text-sm font-semibold md:inline">Logout</span>
           </button>
         </div>
       </div>
 
       {open && (
-        <div className="absolute left-3 top-[68px] z-50 w-[280px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-iceblue-100 bg-white p-2.5 shadow-2xl shadow-navy-900/20 sm:left-4 md:left-8">
-          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-[#071824] px-3 py-2 text-white">
-            <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-iceblue-200/80">{activeArea}</p>
+        <div className="absolute left-3 top-[66px] z-50 w-[300px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2.5 shadow-2xl shadow-navy-900/20 sm:left-5 md:left-8">
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-gradient-to-r from-[#071824] to-sky-900 px-3 py-2.5 text-white">
+            <div><p className="text-[9px] font-bold uppercase tracking-[0.16em] text-iceblue-200/70">Navigation</p><p className="mt-1 text-sm font-bold">{activeArea}</p></div>
             <div className="flex items-center gap-1.5 rounded-lg bg-white/10 px-2 py-1.5 text-right">
               <TimeIcon className="text-iceblue-200" />
               <div>
@@ -201,7 +213,7 @@ export default function Topbar({ title }: { title: string }) {
                   href={href as string}
                   onClick={() => setOpen(false)}
                   className={`flex h-10 items-center gap-2 rounded-xl px-2.5 text-xs font-semibold transition ${
-                    active ? 'bg-[#071824] text-white shadow-lg shadow-navy-900/15' : 'text-navy-800 hover:bg-iceblue-50'
+                    active ? 'bg-gradient-to-r from-navy-900 to-sky-900 text-white shadow-lg shadow-navy-900/15' : 'text-navy-800 hover:bg-iceblue-50'
                   }`}
                 >
                   <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${active ? 'bg-white/15' : 'bg-iceblue-50 text-iceblue-700'}`}>
@@ -215,7 +227,7 @@ export default function Topbar({ title }: { title: string }) {
           </div>
 
           <button
-            onClick={logout}
+            onClick={() => void logout()}
             className="mt-2 flex h-9 w-full items-center gap-2 rounded-xl bg-red-50 px-2.5 text-left text-xs font-semibold text-red-500"
           >
             <FiLogOut className="text-lg" />

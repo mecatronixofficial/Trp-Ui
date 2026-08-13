@@ -2,10 +2,11 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
+import { useAuth } from '../../../context/AuthContext';
 
 function last30Days() {
   const date = new Date();
@@ -58,13 +59,24 @@ interface Customer {
   isActive: boolean;
   customerType?: 'local' | 'truck';
   truck?: { _id: string; truckName: string; truckNumber: string; driverName?: string } | string | null;
+  notes?: string;
 }
 
-const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '' };
+interface Branch {
+  _id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+}
+
+const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '', isActive: true };
 
 export default function CustomersPage() {
+  const { user, loading: authLoading } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [trucks, setTrucks] = useState<any[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -81,6 +93,12 @@ export default function CustomersPage() {
   const [historyError, setHistoryError] = useState('');
   const [pageError, setPageError] = useState('');
   const [formError, setFormError] = useState('');
+  const [priceError, setPriceError] = useState('');
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const [deletingCustomerId, setDeletingCustomerId] = useState('');
+  const isSuperAdmin = user?.role === 'super_admin';
+  const canManageCustomers = !isSuperAdmin || Boolean(selectedBranch);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
 
   const customerTotals = useMemo(() => customers.reduce((totals, customer) => {
     const type = customer.customerType || (customer.truck ? 'truck' : 'local');
@@ -110,17 +128,44 @@ export default function CustomersPage() {
   };
 
   useEffect(() => {
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
+    setSelectedBranch(isSuperAdmin ? storedBranch : (user?.branch || ''));
+    if (isSuperAdmin) {
+      api.get('/branches')
+        .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
+        .catch(() => setBranches([]));
+    }
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  useEffect(() => {
+    if (authLoading || selectedBranch === null || !canManageCustomers) {
+      setTrucks([]);
+      return;
+    }
     api.get('/trucks')
       .then(({ data }) => setTrucks(Array.isArray(data) ? data : []))
       .catch(() => setTrucks([]));
-  }, []);
+  }, [authLoading, canManageCustomers, selectedBranch]);
 
   useEffect(() => {
+    if (authLoading || selectedBranch === null) {
+      setCustomers([]);
+      setLoading(false);
+      return;
+    }
     const timer = window.setTimeout(() => void load(search), 250);
     return () => window.clearTimeout(timer);
-  }, [search]);
+  }, [authLoading, search, selectedBranch]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem('tii_selected_branch', branch);
+    else window.localStorage.removeItem('tii_selected_branch');
+    window.location.reload();
+  };
 
   const openCreate = () => {
+    if (!canManageCustomers) return;
     setEditing(null);
     setForm(emptyForm);
     setFormError('');
@@ -128,15 +173,26 @@ export default function CustomersPage() {
   };
 
   const openEdit = (c: Customer) => {
+    if (!canManageCustomers) return;
     setEditing(c);
     const truckId = typeof c.truck === 'string' ? c.truck : c.truck?._id || '';
-    setForm({ customerType: c.customerType || (truckId ? 'truck' : 'local'), name: c.name, phoneNumber: c.phoneNumber, address: c.address, defaultSaleType: c.defaultSaleType, truck: truckId });
+    setForm({
+      customerType: c.customerType || (truckId ? 'truck' : 'local'),
+      name: c.name,
+      phoneNumber: c.phoneNumber || '',
+      address: c.address || '',
+      defaultSaleType: c.defaultSaleType || 'retail',
+      truck: truckId,
+      notes: c.notes || '',
+      isActive: c.isActive !== false,
+    });
     setFormError('');
     setModalOpen(true);
   };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageCustomers) return;
     setFormError('');
     const normalizedName = String(form.name || '').trim().toLocaleLowerCase();
     const normalizedPhone = String(form.phoneNumber || '').replace(/\D/g, '');
@@ -146,6 +202,7 @@ export default function CustomersPage() {
       return;
     }
     const payload = { ...form, truck: form.customerType === 'truck' ? form.truck : null };
+    setSavingCustomer(true);
     try {
       if (editing) await api.patch(`/customers/${editing._id}`, payload);
       else await api.post('/customers', payload);
@@ -153,42 +210,76 @@ export default function CustomersPage() {
       void load(search);
     } catch (error: any) {
       setFormError(error?.response?.data?.message || 'Could not save customer. A duplicate value may already exist.');
+    } finally {
+      setSavingCustomer(false);
     }
   };
 
   const remove = async (c: Customer) => {
+    if (!canManageCustomers) return;
     if (!confirm(`Delete customer "${c.name}"?`)) return;
-    await api.delete(`/customers/${c._id}`);
-    load(search);
+    setDeletingCustomerId(c._id);
+    setPageError('');
+    try {
+      await api.delete(`/customers/${c._id}`);
+      await load(search);
+    } catch (error: any) {
+      setPageError(error?.response?.data?.message || `Could not delete ${c.name}.`);
+    } finally {
+      setDeletingCustomerId('');
+    }
   };
 
   const openPrices = async (c: Customer) => {
+    if (!canManageCustomers) return;
+    setPriceError('');
     setPriceTarget(c);
-    const { data } = await api.get(`/price-list/customer/${c._id}`);
-    setPrices(data);
-    setPriceForm({
-      retail: data.find((p: any) => p.saleType === 'retail')?.price?.toString() || '',
-      wholesale: data.find((p: any) => p.saleType === 'wholesale')?.price?.toString() || '',
-    });
+    setPrices([]);
+    try {
+      const { data } = await api.get(`/price-list/customer/${c._id}`);
+      const rows = Array.isArray(data) ? data : [];
+      setPrices(rows);
+      setPriceForm({
+        retail: rows.find((p: any) => p.saleType === 'retail')?.price?.toString() || '',
+        wholesale: rows.find((p: any) => p.saleType === 'wholesale')?.price?.toString() || '',
+      });
+    } catch (error: any) {
+      setPriceError(error?.response?.data?.message || 'Could not load customer prices.');
+    }
   };
 
   const savePrice = async (saleType: 'retail' | 'wholesale') => {
-    if (!priceTarget) return;
+    if (!priceTarget || !canManageCustomers) return;
     const price = Number(priceForm[saleType]);
-    if (!price) return;
+    if (!Number.isFinite(price) || price <= 0) {
+      setPriceError('Enter a price greater than zero.');
+      return;
+    }
+    setPriceError('');
     setSavingPrice(true);
-    await api.post('/price-list', { customer: priceTarget._id, saleType, price });
-    const { data } = await api.get(`/price-list/customer/${priceTarget._id}`);
-    setPrices(data);
-    setSavingPrice(false);
+    try {
+      await api.post('/price-list', { customer: priceTarget._id, saleType, price });
+      const { data } = await api.get(`/price-list/customer/${priceTarget._id}`);
+      setPrices(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      setPriceError(error?.response?.data?.message || 'Could not save the customer price.');
+    } finally {
+      setSavingPrice(false);
+    }
   };
 
   const removePrice = async (saleType: 'retail' | 'wholesale') => {
+    if (!canManageCustomers) return;
     const entry = prices.find((p) => p.saleType === saleType);
     if (!entry) return;
-    await api.delete(`/price-list/${entry._id}`);
-    setPrices(prices.filter((p) => p._id !== entry._id));
-    setPriceForm((prev) => ({ ...prev, [saleType]: '' }));
+    setPriceError('');
+    try {
+      await api.delete(`/price-list/${entry._id}`);
+      setPrices(prices.filter((p) => p._id !== entry._id));
+      setPriceForm((prev) => ({ ...prev, [saleType]: '' }));
+    } catch (error: any) {
+      setPriceError(error?.response?.data?.message || 'Could not remove the customer price.');
+    }
   };
 
   const loadHistory = async (customer: Customer, range: { from: string; to: string }) => {
@@ -235,6 +326,18 @@ export default function CustomersPage() {
 
   return (
     <div className="-mt-4 space-y-1 sm:-mt-5">
+      {isSuperAdmin && (
+        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Customer view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p></div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change customer branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.filter((branch) => branch.isActive).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
       <section className="grid grid-cols-1 gap-2 md:grid-cols-3">
         <CustomerSummaryCard
           icon={FiUsers}
@@ -267,14 +370,14 @@ export default function CustomersPage() {
 
       <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
         <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">All Customers</h1>
+          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">{activeBranch ? `${activeBranch.name} Customers` : 'All Customers'}</h1>
           <div className="relative min-w-0 flex-1">
             <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
             <input className="input-field h-10 pl-9" placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
-          <button onClick={openCreate} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
+          {canManageCustomers && <button onClick={openCreate} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
             <FiPlus /> Add Customer
-          </button>
+          </button>}
         </div>
         {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
         <div className="overflow-x-auto">
@@ -316,15 +419,20 @@ export default function CustomersPage() {
                   </td>
                   <td className="border border-slate-300 px-2 py-3">
                     <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button title="View details and purchase history" aria-label={`View ${c.name} details`} onClick={() => openHistory(c)} className="text-navy-900 hover:text-black">
+                        <FiEye />
+                      </button>
+                      {canManageCustomers && <>
                       <button title="Price list" onClick={() => openPrices(c)} className="text-navy-900 hover:text-black">
                         <FiTag />
                       </button>
                       <button title="Edit" onClick={() => openEdit(c)} className="text-navy-900 hover:text-black">
                         <FiEdit2 />
                       </button>
-                      <button title="Delete" onClick={() => remove(c)} className="text-navy-900 hover:text-black">
+                      <button title="Delete" disabled={deletingCustomerId === c._id} onClick={() => remove(c)} className="text-navy-900 hover:text-black disabled:cursor-wait disabled:opacity-40">
                         <FiTrash2 />
                       </button>
+                      </>}
                     </div>
                   </td>
                 </tr>
@@ -367,6 +475,17 @@ export default function CustomersPage() {
                 <option value="wholesale">Wholesale</option>
               </select>
             </div>
+            <div>
+              <label className="label-text">Notes</label>
+              <textarea className="input-field" rows={2} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+            </div>
+            {editing && <div>
+              <label className="label-text">Status</label>
+              <select className="input-field" value={form.isActive ? 'active' : 'inactive'} onChange={(e) => setForm({ ...form, isActive: e.target.value === 'active' })}>
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>}
             {form.customerType === 'truck' && <div>
               <label className="label-text">Assigned Truck</label>
               <select required className="input-field" value={form.truck} onChange={(e) => setForm({ ...form, truck: e.target.value })}>
@@ -379,13 +498,14 @@ export default function CustomersPage() {
               </select>
             </div>}
             {formError && <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-600">{formError}</p>}
-            <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Customer'}</button>
+            <button disabled={savingCustomer} className="btn-primary w-full disabled:cursor-wait disabled:opacity-60">{savingCustomer ? 'Saving...' : editing ? 'Save Changes' : 'Create Customer'}</button>
           </form>
         </Modal>
       )}
 
       {priceTarget && (
         <Modal title={`Bar Price: ${priceTarget.name}`} onClose={() => setPriceTarget(null)}>
+          {priceError && <p className="mb-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-600" role="alert">{priceError}</p>}
           <p className="mb-3 text-xs text-navy-800/50">Set the price for 1 bar. The total is calculated automatically when a sale is recorded (bars × price).</p>
           <div className="space-y-3">
             {(['retail', 'wholesale'] as const).map((saleType) => {

@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiKey, FiPower, FiBox, FiCheck } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiKey, FiPower, FiBox, FiCheck, FiSearch, FiGitBranch } from 'react-icons/fi';
 import api from '../../../lib/api';
 import Modal from '../../../components/Modal';
 import { useAuth } from '../../../context/AuthContext';
-import { formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
+import { formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
+import { selectedBranchHeaders } from '../../../lib/branch-fetch';
 
 interface Truck {
   _id: string;
@@ -29,16 +30,21 @@ interface Worker {
 
 const emptyForm = { branch: '', truckName: '', truckNumber: '', driverName: '', phoneNumber: '', loginId: '', password: '' };
 
+const indiaDateISO = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(date);
+
 function last30Days() {
   const date = new Date();
   date.setDate(date.getDate() - 29);
-  return date.toISOString().slice(0, 10);
+  return indiaDateISO(date);
 }
 
 export default function TrucksPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [trucks, setTrucks] = useState<Truck[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -49,33 +55,46 @@ export default function TrucksPage() {
   const [error, setError] = useState('');
   const [truckStock, setTruckStock] = useState<Record<string, number>>({});
   const [loadTarget, setLoadTarget] = useState<Truck | null>(null);
-  const [loadForm, setLoadForm] = useState({ date: new Date().toISOString().slice(0, 10), quantity: '', notes: '' });
+  const [loadForm, setLoadForm] = useState({ date: indiaDateISO(), quantity: '', notes: '' });
   const [tripCheck, setTripCheck] = useState<any>(null);
-  const [dailyTotals, setDailyTotals] = useState({ taken: 0, sold: 0, remaining: 0, salesAmount: 0, pendingAmount: 0 });
+  const [dailyTotals, setDailyTotals] = useState({ taken: 0, sold: 0, remaining: 0, salesAmount: 0, pendingAmount: 0, fuelLitres: 0, fuelCost: 0 });
+  const [fuelByTruck, setFuelByTruck] = useState<Record<string, { litres: number; cost: number }>>({});
   const [assignments, setAssignments] = useState<Record<string, number>>({});
+  const [assignmentDetails, setAssignmentDetails] = useState<Record<string, any>>({});
   const [assignInputs, setAssignInputs] = useState<Record<string, string>>({});
   const [totalInputs, setTotalInputs] = useState<Record<string, string>>({});
   const [savingAssign, setSavingAssign] = useState<string>('');
   const [assignTarget, setAssignTarget] = useState<Truck | null>(null);
   const [historyTarget, setHistoryTarget] = useState<Truck | null>(null);
-  const [historyRange, setHistoryRange] = useState({ from: last30Days(), to: todayISO() });
+  const [historyRange, setHistoryRange] = useState({ from: last30Days(), to: indiaDateISO() });
   const [historyRows, setHistoryRows] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [pageError, setPageError] = useState('');
+  const isSuperAdmin = user?.role === 'super_admin';
+  const canManageTrucks = !isSuperAdmin || Boolean(selectedBranch);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
 
   const load = async () => {
     setLoading(true);
-    const { data } = await api.get('/trucks');
+    setPageError('');
+    try {
+    const { data: truckData } = await api.get('/trucks');
+    const data = Array.isArray(truckData) ? truckData : [];
     setTrucks(data);
     api.get('/workers').then(({ data: workerRows }) => setWorkers(workerRows)).catch(() => setWorkers([]));
     const stockRows = await Promise.all(data.map((truck: Truck) => api.get(`/stock/truck/${truck._id}`).catch(() => ({ data: { totalStock: 0 } }))));
     setTruckStock(Object.fromEntries(data.map((truck: Truck, index: number) => [truck._id, Number(stockRows[index].data.totalStock || 0)])));
-    const today = new Date().toISOString().slice(0, 10);
+    const today = indiaDateISO();
     const tomorrowDate = new Date(); tomorrowDate.setDate(tomorrowDate.getDate() + 1);
-    const tomorrow = tomorrowDate.toISOString().slice(0, 10);
-    const [dailyRows, todaySales, assignRows] = await Promise.all([
+    const tomorrow = indiaDateISO(tomorrowDate);
+    const [dailyRows, todaySales, assignRows, expenseResult] = await Promise.all([
       api.get('/truck-loads/reconciliation', { params: { date: today } }).catch(() => ({ data: [] })),
       api.get('/sales', { params: { from: today, to: tomorrow } }).catch(() => ({ data: [] })),
       api.get('/truck-assignments', { params: { date: today } }).catch(() => ({ data: [] })),
+      fetch('/api/expenses?today=true', { cache: 'no-store', headers: selectedBranchHeaders() })
+        .then(async (response) => response.ok ? response.json() : { records: [] })
+        .catch(() => ({ records: [] })),
     ]);
     const barTotals = dailyRows.data.reduce((totals: any, row: any) => ({
       taken: totals.taken + Number(row.taken || 0),
@@ -86,21 +105,75 @@ export default function TrucksPage() {
       salesAmount: totals.salesAmount + Number(sale.totalAmount || 0),
       pendingAmount: totals.pendingAmount + Number(sale.balanceAmount || 0),
     }), { salesAmount: 0, pendingAmount: 0 });
-    setDailyTotals({ ...barTotals, ...moneyTotals });
-    setAssignments(Object.fromEntries(assignRows.data.map((row: any) => [String(row.truck?._id || row.truck), Number(row.quantity || 0)])));
-    setLoading(false);
+    const visibleTruckIds = new Set(data.map((truck: Truck) => String(truck._id)));
+    const fuelRows = (Array.isArray(expenseResult?.records) ? expenseResult.records : []).filter((record: any) => {
+      const category = String(record.costType || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      const truckId = String(record.truck?._id || record.truck || '');
+      return ['petrol', 'diesel', 'petrol_diesel'].includes(category) && visibleTruckIds.has(truckId);
+    });
+    const truckFuel: Record<string, { litres: number; cost: number }> = fuelRows.reduce((result: Record<string, { litres: number; cost: number }>, record: any) => {
+      const truckId = String(record.truck?._id || record.truck || '');
+      if (!truckId) return result;
+      const current = result[truckId] || { litres: 0, cost: 0 };
+      result[truckId] = {
+        litres: current.litres + Number(record.fuelQuantity || 0),
+        cost: current.cost + Number(record.amount || 0),
+      };
+      return result;
+    }, {} as Record<string, { litres: number; cost: number }>);
+    const fuelTotals = Object.values(truckFuel).reduce((total, fuel) => ({
+      fuelLitres: total.fuelLitres + fuel.litres,
+      fuelCost: total.fuelCost + fuel.cost,
+    }), { fuelLitres: 0, fuelCost: 0 });
+    setFuelByTruck(truckFuel);
+    setDailyTotals({ ...barTotals, ...moneyTotals, ...fuelTotals });
+    setAssignments(Object.fromEntries(assignRows.data.map((row: any) => [String(row.truck?._id || row.truck), Number(row.quantity || 0) + Number(row.pendingQuantity || 0)])));
+    setAssignmentDetails(Object.fromEntries(assignRows.data.map((row: any) => [String(row.truck?._id || row.truck), row])));
+    } catch (loadError: any) {
+      setTrucks([]);
+      setTruckStock({});
+      setFuelByTruck({});
+      setPageError(loadError?.response?.data?.message || loadError?.message || 'Could not load trucks.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
-    load();
-    if (user?.role === 'super_admin') api.get('/branches').then(({ data }) => setBranches(data.filter((branch: any) => branch.isActive)));
-  }, [user?.role]);
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
+    setSelectedBranch(isSuperAdmin ? storedBranch : (user?.branch || ''));
+    if (isSuperAdmin) api.get('/branches')
+      .then(({ data }) => setBranches((Array.isArray(data) ? data : []).filter((branch: any) => branch.isActive)))
+      .catch(() => setBranches([]));
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  useEffect(() => {
+    if (authLoading || selectedBranch === null) return;
+    void load();
+  }, [authLoading, selectedBranch]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem('tii_selected_branch', branch);
+    else window.localStorage.removeItem('tii_selected_branch');
+    window.location.reload();
+  };
 
   const driverWorkers = useMemo(() => workers.filter((w) => w.role === 'Driver').sort((a, b) => a.name.localeCompare(b.name)), [workers]);
+  const visibleTrucks = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return trucks;
+    return trucks.filter((truck) => {
+      const branch = typeof truck.branch === 'object' && truck.branch ? `${truck.branch.name} ${truck.branch.code}` : '';
+      return [truck.truckName, truck.truckNumber, truck.driverName, truck.phoneNumber, truck.loginId, branch]
+        .some((value) => String(value || '').toLowerCase().includes(term));
+    });
+  }, [search, trucks]);
 
   const openCreate = () => {
+    if (!canManageTrucks) return;
     setEditing(null);
-    setForm({ ...emptyForm, branch: branches[0]?._id || '' });
+    setForm({ ...emptyForm, branch: selectedBranch || '' });
     setError('');
     setModalOpen(true);
   };
@@ -125,6 +198,7 @@ export default function TrucksPage() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageTrucks) return;
     setError('');
     const text = (value: unknown) => String(value || '').trim().toLocaleLowerCase();
     const phone = (value: unknown) => String(value || '').replace(/\D/g, '');
@@ -174,7 +248,7 @@ export default function TrucksPage() {
     const quantity = Number(assignments[t._id] || 0) + addQty;
     setSavingAssign(t._id);
     try {
-      await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity });
+      await api.post('/truck-assignments', { truck: t._id, date: indiaDateISO(), quantity });
       setAssignments({ ...assignments, [t._id]: quantity });
       setAssignInputs({ ...assignInputs, [t._id]: '' });
     } finally {
@@ -189,7 +263,7 @@ export default function TrucksPage() {
     if (quantity !== current) {
       setSavingAssign(t._id);
       try {
-        await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity });
+        await api.post('/truck-assignments', { truck: t._id, date: indiaDateISO(), quantity });
         setAssignments({ ...assignments, [t._id]: quantity });
       } finally {
         setSavingAssign('');
@@ -203,9 +277,22 @@ export default function TrucksPage() {
     if (!confirm(`Clear today's assigned bars for "${t.truckName}"?`)) return;
     setSavingAssign(t._id);
     try {
-      await api.post('/truck-assignments', { truck: t._id, date: todayISO(), quantity: 0 });
+      await api.post('/truck-assignments', { truck: t._id, date: indiaDateISO(), quantity: 0 });
       setAssignments({ ...assignments, [t._id]: 0 });
       setTotalInputs((prev) => { const next = { ...prev }; delete next[t._id]; return next; });
+    } finally {
+      setSavingAssign('');
+    }
+  };
+
+  const cancelAssignmentRequest = async (t: Truck) => {
+    const assignment = assignmentDetails[t._id];
+    if (!assignment?._id || Number(assignment.pendingQuantity || 0) <= 0) return;
+    setSavingAssign(t._id);
+    try {
+      const { data } = await api.post(`/truck-assignments/${assignment._id}/cancel`);
+      setAssignmentDetails({ ...assignmentDetails, [t._id]: data });
+      setAssignments({ ...assignments, [t._id]: Number(data.quantity || 0) });
     } finally {
       setSavingAssign('');
     }
@@ -262,94 +349,118 @@ export default function TrucksPage() {
 
   return (
     <div className="space-y-4">
+      {isSuperAdmin && (
+        <section className="flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Truck view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p></div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change truck branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
       <div>
         <div className="mb-2 flex items-center justify-between">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Today&apos;s Truck Summary</p>
-          <span className="pill bg-iceblue-50 text-iceblue-700">{new Date().toLocaleDateString('en-IN')}</span>
+          <span className="pill bg-iceblue-50 text-iceblue-700">{new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}</span>
         </div>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
           <DailyCard label="Bars Taken" value={dailyTotals.taken} />
           <DailyCard label="Bars Sold" value={dailyTotals.sold} />
           <DailyCard label="Remaining" value={dailyTotals.remaining} danger={dailyTotals.remaining < 0} />
           <DailyCard label="Selling Amount" value={formatCurrency(dailyTotals.salesAmount)} />
           <DailyCard label="Pending Amount" value={formatCurrency(dailyTotals.pendingAmount)} danger={dailyTotals.pendingAmount > 0} />
+          <DailyCard label="Fuel Used" value={`${dailyTotals.fuelLitres.toLocaleString('en-IN')} L`} />
+          <DailyCard label="Fuel Cost" value={formatCurrency(dailyTotals.fuelCost)} />
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-display text-lg font-bold text-navy-900">Registered Trucks</h2>
-          <p className="mt-0.5 text-sm text-navy-800/55">{trucks.length} truck(s) registered</p>
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
+          <div className="shrink-0">
+            <h2 className="font-display text-base font-bold text-navy-900">Registered Trucks</h2>
+            <p className="mt-0.5 text-xs text-navy-800/50">{trucks.length} truck{trucks.length === 1 ? '' : 's'}</p>
+          </div>
+          <div className="relative min-w-0 flex-1">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
+            <input className="input-field h-10 pl-9" placeholder="Search truck, number, driver, phone or branch..." value={search} onChange={(event) => setSearch(event.target.value)} />
+          </div>
+          {canManageTrucks && <button onClick={openCreate} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
+            <FiPlus /> Add Truck
+          </button>}
         </div>
-        <button onClick={openCreate} className="btn-primary flex items-center gap-2">
-          <FiPlus /> Add Truck
-        </button>
-      </div>
-
-      <div className="overflow-x-auto border border-black bg-white">
+        {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
+        <div className="overflow-x-auto">
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className="w-full min-w-[980px] table-fixed border-collapse text-left text-xs text-black sm:text-sm">
-            <thead className="bg-slate-100 text-black">
+          <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs sm:text-sm">
+            <thead className="bg-slate-100 text-navy-900">
               <tr>
-                <th className="w-[5%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                {user?.role === 'super_admin' && <th className="w-[10%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Branch</th>}
-                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Truck Name</th>
-                <th className="w-[12%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Truck Number</th>
-                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Driver Name</th>
-                <th className="w-[13%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Phone Number</th>
-                <th className="w-[11%] break-words border border-black px-2 py-2 text-[10px] font-bold uppercase leading-tight">Login ID</th>
-                <th className="w-[8%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Ice Bars</th>
-                <th className="w-[8%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
-                <th className="w-[17%] border border-black px-1 py-2 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                {user?.role === 'super_admin' && <th className="w-[10%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
+                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Name</th>
+                <th className="w-[12%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Number</th>
+                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Driver Name</th>
+                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
+                <th className="w-[11%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Login ID</th>
+                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Ice Bars</th>
+                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Used Today</th>
+                <th className="w-[9%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Cost Today</th>
+                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+                <th className="w-[17%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {trucks.map((t, index) => (
-                <tr key={t._id} className="bg-white text-black hover:bg-slate-100">
-                  <td className="border border-black px-3 py-2 text-center font-medium text-black">{index + 1}</td>
-                  {user?.role === 'super_admin' && <td className="break-words border border-black px-2 py-2 text-black">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
-                  <td className="break-words border border-black px-2 py-2 text-black">
-                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-black underline-offset-2 hover:underline">
+              {visibleTrucks.map((t, index) => (
+                <tr key={t._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                  {user?.role === 'super_admin' && <td className="break-words border border-slate-300 px-2 py-3 text-center text-navy-900">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
+                  <td className="break-words border border-slate-300 px-2 py-3">
+                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
                       {t.truckName}
                     </Link>
                   </td>
-                  <td className="break-words border border-black px-2 py-2 font-medium text-black">{t.truckNumber}</td>
-                  <td className="break-words border border-black px-2 py-2 text-black">{t.driverName || '-'}</td>
-                  <td className="break-all border border-black px-2 py-2 text-black">{t.phoneNumber || '-'}</td>
-                  <td className="break-all border border-black px-2 py-2 font-mono text-xs text-black">{t.loginId || '-'}</td>
-                  <td className="border border-black px-1 py-2 text-center font-bold text-black">{truckStock[t._id] || 0}</td>
-                  <td className="border border-black px-1 py-2 text-center">
-                    <span className="font-medium text-black">
+                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{t.truckNumber}</td>
+                  <td className="break-words border border-slate-300 px-2 py-3 text-navy-900">{t.driverName || '-'}</td>
+                  <td className="break-all border border-slate-300 px-2 py-3 text-navy-900">{t.phoneNumber || '-'}</td>
+                  <td className="break-all border border-slate-300 px-2 py-3 text-center font-mono text-xs text-navy-900">{t.loginId || '-'}</td>
+                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{truckStock[t._id] || 0}</td>
+                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{(fuelByTruck[t._id]?.litres || 0).toLocaleString('en-IN')} L</td>
+                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{formatCurrency(fuelByTruck[t._id]?.cost || 0)}</td>
+                  <td className="border border-slate-300 px-1 py-3 text-center">
+                    <span className={`pill ${t.status ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                       {t.status ? 'Active' : 'Inactive'}
                     </span>
                   </td>
-                  <td className="border border-black px-1 py-2 text-black">
-                    <div className="flex flex-wrap items-center justify-center gap-2">
-                      <button title="Check daily truck account" onClick={() => openTripCheck(t)} className="text-black hover:text-slate-600"><FiBox /></button>
-                      <button title="Edit" onClick={() => openEdit(t)} className="text-black hover:text-slate-600">
+                  <td className="border border-slate-300 px-1 py-3">
+                    {canManageTrucks ? <div className="flex flex-wrap items-center justify-center gap-2">
+                      <button title="Check daily truck account" aria-label={`Check ${t.truckName} daily account`} onClick={() => openTripCheck(t)} className="text-navy-900 hover:text-black"><FiBox /></button>
+                      <button title="Edit" aria-label={`Edit ${t.truckName}`} onClick={() => openEdit(t)} className="text-navy-900 hover:text-black">
                         <FiEdit2 />
                       </button>
-                      <button title="Reset password" onClick={() => setResetTarget(t)} className="text-black hover:text-slate-600">
+                      <button title="Reset password" aria-label={`Reset ${t.truckName} password`} onClick={() => setResetTarget(t)} className="text-navy-900 hover:text-black">
                         <FiKey />
                       </button>
-                      <button title="Toggle status" onClick={() => toggleStatus(t)} className="text-black hover:text-slate-600">
+                      <button title={t.status ? 'Deactivate truck' : 'Activate truck'} aria-label={t.status ? `Deactivate ${t.truckName}` : `Activate ${t.truckName}`} onClick={() => toggleStatus(t)} className="text-navy-900 hover:text-black">
                         <FiPower />
                       </button>
-                      <button title="Delete" onClick={() => remove(t)} className="text-black hover:text-slate-600">
+                      <button title="Delete" aria-label={`Delete ${t.truckName}`} onClick={() => remove(t)} className="text-navy-900 hover:text-black">
                         <FiTrash2 />
                       </button>
-                    </div>
+                    </div> : <span className="block text-center text-navy-800/35">—</span>}
                   </td>
                 </tr>
               ))}
-              {trucks.length === 0 && (
-                <tr><td colSpan={user?.role === 'super_admin' ? 10 : 9} className="border border-black px-4 py-10 text-center text-black">No trucks registered.</td></tr>
+              {visibleTrucks.length === 0 && (
+                <tr><td colSpan={user?.role === 'super_admin' ? 12 : 11} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">{search ? 'No trucks match your search.' : 'No trucks registered.'}</td></tr>
               )}
             </tbody>
           </table>
         )}
-      </div>
+        </div>
+      </section>
 
       {modalOpen && (
         <Modal title={editing ? 'Edit Truck' : 'Add Truck'} onClose={() => setModalOpen(false)}>
@@ -429,6 +540,15 @@ export default function TrucksPage() {
             <div className="rounded-2xl bg-iceblue-50 p-4 text-center">
               <p className="text-xs font-semibold uppercase text-navy-800/45">Assigned Today</p>
               <p className="mt-1 font-display text-3xl font-bold text-navy-900">{assignments[assignTarget._id] || 0} bars</p>
+              {Number(assignmentDetails[assignTarget._id]?.pendingQuantity || 0) > 0 && (
+                <div className="mt-3 rounded-xl bg-amber-50 p-3 text-amber-800">
+                  <p className="font-semibold">Waiting for driver acceptance</p>
+                  <p className="mt-1 text-sm">Pending: {assignmentDetails[assignTarget._id].pendingQuantity} bars</p>
+                  <button type="button" onClick={() => void cancelAssignmentRequest(assignTarget)} disabled={savingAssign === assignTarget._id} className="mt-3 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 disabled:opacity-50">
+                    <FiTrash2 /> {savingAssign === assignTarget._id ? 'Cancelling...' : 'Cancel Request'}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div>

@@ -13,9 +13,8 @@ export default function AdminQuickActions() {
   const closeMenu = useCallback(() => setOpen(false), []);
   useDismissibleMenu(open, menuRef, closeMenu);
 
-  // Sales has its own add-sale floating action. Hiding the shared menu here
-  // prevents two separate "+ / Add Sale" controls from appearing together.
-  if (pathname.startsWith('/admin/sales') || pathname === '/admin/production' || pathname === '/admin/workers') return null;
+  // Sales has its own add-sale floating action. Production uses its own page actions.
+  if (pathname.startsWith('/admin/sales') || pathname === '/admin/production') return null;
 
   return (
     <div ref={menuRef} className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-50 sm:bottom-6 sm:right-6">

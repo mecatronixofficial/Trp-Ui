@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   FiGrid, FiTruck, FiUsers, FiBox, FiShoppingCart,
-  FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign,
+  FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign, FiMonitor,
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import BrandLogo from './BrandLogo';
@@ -18,6 +18,7 @@ const links = [
   { href: '/admin/sales', label: 'Sales', icon: FiShoppingCart },
   { href: '/admin/expenses', label: 'Expenses', icon: FiDollarSign },
   { href: '/admin/reports', label: 'Reports', icon: FiBarChart2 },
+  { href: '/admin/sample', label: 'Sample', icon: FiMonitor },
   { href: '/admin/settings', label: 'Settings', icon: FiSettings },
 ];
 
@@ -35,7 +36,7 @@ export default function Sidebar() {
   const initial = userName.charAt(0).toUpperCase();
 
   return (
-    <aside className="hidden min-h-screen w-[17rem] shrink-0 bg-[#071824] text-white shadow-2xl shadow-navy-900/20 md:flex md:flex-col">
+    <aside className="sticky top-0 hidden h-screen w-[17rem] shrink-0 bg-[#071824] text-white shadow-2xl shadow-navy-900/20 md:flex md:flex-col">
       <div className="border-b border-white/10 px-5 py-5">
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 overflow-hidden rounded-2xl bg-white shadow-lg shadow-black/20">
@@ -85,7 +86,7 @@ export default function Sidebar() {
           </div>
         </div>
         <button
-          onClick={logout}
+          onClick={() => void logout()}
           className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-red-300/20 bg-red-500/10 text-sm font-semibold text-red-100 transition hover:bg-red-500/20"
         >
           <FiLogOut /> Logout

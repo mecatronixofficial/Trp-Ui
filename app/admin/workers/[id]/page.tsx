@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation';
 import { FiArrowLeft, FiCalendar, FiCreditCard, FiPhone, FiTruck, FiUser, FiUserCheck } from 'react-icons/fi';
 import api from '../../../../lib/api';
 import { formatCurrency, formatDate } from '../../../../lib/api';
+import { selectedBranchHeaders } from '../../../../lib/branch-fetch';
 
 interface Worker {
   _id: string;
@@ -13,7 +14,7 @@ interface Worker {
   phoneNumber?: string;
   role?: string;
   notes?: string;
-  truck?: string;
+  truck?: string | { _id: string };
   isActive?: boolean;
   createdAt?: string;
 }
@@ -40,6 +41,38 @@ interface HistoryEntry {
 const indiaToday = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date());
+const indiaDateKey = (value: string | Date) => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date(value));
+const isAdvanceExpense = (entry: any) => ['advance', 'employee_advance', 'advance_employee', 'advance_for_employee']
+  .includes(String(entry?.costType || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+const referenceId = (value: unknown) => {
+  if (value && typeof value === 'object' && '_id' in value) return String((value as { _id: unknown })._id || '');
+  return String(value || '');
+};
+
+async function loadAdvanceRows(workerId: string, activeRange: { from: string; to: string }) {
+  try {
+    const response = await fetch('/api/expenses', { cache: 'no-store', headers: selectedBranchHeaders() });
+    if (!response.ok) return [];
+    const payload = await response.json();
+    return (Array.isArray(payload?.records) ? payload.records : [])
+      .filter((entry: any) => {
+        const date = indiaDateKey(entry.date);
+        return isAdvanceExpense(entry) && String(entry.worker || '') === workerId
+          && (!activeRange.from || date >= activeRange.from) && (!activeRange.to || date <= activeRange.to);
+      })
+      .map((entry: any) => ({
+        _id: entry._id,
+        date: entry.date,
+        amount: Number(entry.amount || 0),
+        purpose: 'Worker Amount',
+        notes: entry.notes || '',
+      }));
+  } catch {
+    return [];
+  }
+}
 
 function currentMonthRange() {
   const month = indiaToday().slice(0, 7);
@@ -68,31 +101,34 @@ export default function WorkerProfilePage() {
     setLoadingHistory(true);
     setError('');
     try {
+      const advancesPromise = loadAdvanceRows(activeWorker._id, activeRange);
       if (activeTruck) {
         const query: Record<string, string> = { truck: activeTruck._id };
         if (activeRange.from) query.from = activeRange.from;
         if (activeRange.to) query.to = activeRange.to;
-        const { data } = await api.get('/driver-expenses', { params: query });
-        setHistory((Array.isArray(data) ? data : []).map((entry: any) => ({
+        const [{ data }, advances] = await Promise.all([api.get('/driver-expenses', { params: query }), advancesPromise]);
+        const buyingRows = (Array.isArray(data) ? data : []).map((entry: any) => ({
           _id: entry._id,
           date: entry.date,
           amount: Number(entry.amount || 0),
           purpose: entry.purpose || 'Driver buying',
           notes: entry.notes || '',
-        })));
+        }));
+        setHistory([...buyingRows, ...advances].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
       } else {
         const query: Record<string, string> = { worker: activeWorker._id };
         if (activeRange.from) query.from = activeRange.from;
         if (activeRange.to) query.to = activeRange.to;
-        const { data } = await api.get('/workers/buying', { params: query });
-        setHistory((Array.isArray(data) ? data : []).map((entry: any) => ({
+        const [{ data }, advances] = await Promise.all([api.get('/workers/buying', { params: query }), advancesPromise]);
+        const buyingRows = (Array.isArray(data) ? data : []).map((entry: any) => ({
           _id: entry._id,
           date: entry.date,
           amount: Number(entry.buyingAmount || 0),
           purpose: 'Daily buying',
           notes: entry.notes || '',
           status: entry.status,
-        })));
+        }));
+        setHistory([...buyingRows, ...advances].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
       }
     } catch (requestError: any) {
       setHistory([]);
@@ -112,9 +148,9 @@ export default function WorkerProfilePage() {
       .then(([workerResponse, truckResponse]) => {
         const workers: Worker[] = Array.isArray(workerResponse.data) ? workerResponse.data : [];
         const trucks: Truck[] = Array.isArray(truckResponse.data) ? truckResponse.data : [];
-        const foundWorker = workers.find((item) => item._id === routeId || String(item.truck || '') === routeId) || null;
+        const foundWorker = workers.find((item) => item._id === routeId || referenceId(item.truck) === routeId) || null;
         const foundTruck = foundWorker?.truck
-          ? trucks.find((item) => item._id === String(foundWorker.truck)) || null
+          ? trucks.find((item) => item._id === referenceId(foundWorker.truck)) || null
           : trucks.find((item) => item._id === routeId) || null;
         setWorker(foundWorker);
         setTruck(foundTruck);
@@ -136,7 +172,7 @@ export default function WorkerProfilePage() {
   const totals = useMemo(() => ({
     entries: history.length,
     amount: history.reduce((sum, entry) => sum + Number(entry.amount || 0), 0),
-    presentDays: history.filter((entry) => !entry.status || entry.status === 'present').length,
+    presentDays: history.filter((entry) => entry.purpose !== 'Worker Amount' && (!entry.status || entry.status === 'present')).length,
   }), [history]);
 
   if (loadingProfile) return <div className="card text-sm text-navy-800/50">Loading worker profile...</div>;
@@ -176,16 +212,16 @@ export default function WorkerProfilePage() {
       <section>
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Selected Period Summary</p>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <SummaryCard label="Buying Entries" value={totals.entries} />
-          <SummaryCard label="Buying Days" value={totals.presentDays} />
-          <SummaryCard label="Total Buying" value={formatCurrency(totals.amount)} danger={totals.amount > 0} />
+          <SummaryCard label="Payment Entries" value={totals.entries} />
+          <SummaryCard label="Entry Days" value={totals.presentDays} />
+          <SummaryCard label="Amount" value={formatCurrency(totals.amount)} danger={totals.amount > 0} />
           <SummaryCard label="Monthly Salary" value={isDriver ? formatCurrency(truck?.monthlySalary || 0) : 'Not set'} />
         </div>
       </section>
 
       <section className="card min-w-0">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div><h3 className="font-display text-xl font-bold text-navy-900">Buying History</h3><p className="mt-1 text-sm text-navy-800/50">Date-based buying records for this worker.</p></div>
+          <div><h3 className="font-display text-xl font-bold text-navy-900">Amount History</h3><p className="mt-1 text-sm text-navy-800/50">Date-based amount records for this worker.</p></div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[9rem_9rem_auto_auto] lg:items-end">
             <div><label className="label-text">From</label><input type="date" className="input-field" value={range.from} onChange={(event) => setRange({ ...range, from: event.target.value })} /></div>
             <div><label className="label-text">To</label><input type="date" className="input-field" value={range.to} onChange={(event) => setRange({ ...range, to: event.target.value })} /></div>
@@ -196,7 +232,7 @@ export default function WorkerProfilePage() {
 
         {error && <p className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700" role="alert">{error}</p>}
 
-        {loadingHistory ? <p className="mt-5 text-sm text-navy-800/50">Loading buying history...</p> : <History records={history} total={totals.amount} isDriver={isDriver} />}
+        {loadingHistory ? <p className="mt-5 text-sm text-navy-800/50">Loading amount history...</p> : <History records={history} total={totals.amount} isDriver={isDriver} />}
       </section>
     </div>
   );
@@ -206,13 +242,13 @@ function History({ records, total, isDriver }: { records: HistoryEntry[]; total:
   return (
     <div className="mt-5 min-w-0">
       <table className="table-base hidden table-fixed md:table">
-        <thead><tr><th className="w-1/5">Date</th><th className="w-1/5">Amount</th><th className="w-1/4">{isDriver ? 'Purpose' : 'Status'}</th><th>Notes</th></tr></thead>
-        <tbody>{records.map((record) => <tr key={record._id}><td className="font-medium text-navy-900">{formatDate(record.date)}</td><td className="font-semibold text-red-500">{formatCurrency(record.amount)}</td><td className="capitalize">{isDriver ? record.purpose : record.status || 'Present'}</td><td className="break-words text-sm text-navy-800/60">{record.notes || '-'}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-navy-800/50">No buying entries for the selected range.</td></tr>}</tbody>
+        <thead><tr><th className="w-1/5">Date</th><th className="w-1/5">Amount</th><th className="w-1/4">{isDriver ? 'Purpose' : 'Type / Status'}</th><th>Notes</th></tr></thead>
+        <tbody>{records.map((record) => <tr key={record._id}><td className="font-medium text-navy-900">{formatDate(record.date)}</td><td className="font-semibold text-red-500">{formatCurrency(record.amount)}</td><td className="capitalize">{record.purpose === 'Worker Amount' ? 'Worker Amount' : isDriver ? record.purpose : record.status || 'Present'}</td><td className="break-words text-sm text-navy-800/60">{record.notes || '-'}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-navy-800/50">No worker amount entries for the selected range.</td></tr>}</tbody>
         {records.length > 0 && <tfoot><tr className="font-semibold"><td>Total</td><td className="text-red-500">{formatCurrency(total)}</td><td /><td /></tr></tfoot>}
       </table>
       <div className="space-y-3 md:hidden">
-        {records.map((record) => <article key={record._id} className="rounded-2xl border border-iceblue-100 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-navy-900">{formatDate(record.date)}</p><p className="mt-1 text-xs capitalize text-navy-800/50">{isDriver ? record.purpose : record.status || 'Present'}</p></div><p className="font-display text-lg font-bold text-red-500">{formatCurrency(record.amount)}</p></div>{record.notes && <p className="mt-3 break-words rounded-xl bg-iceblue-50 px-3 py-2 text-sm text-navy-800/60">{record.notes}</p>}</article>)}
-        {records.length === 0 && <p className="rounded-2xl bg-iceblue-50 px-4 py-8 text-center text-sm text-navy-800/50">No buying entries for the selected range.</p>}
+        {records.map((record) => <article key={record._id} className="rounded-2xl border border-iceblue-100 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-navy-900">{formatDate(record.date)}</p><p className="mt-1 text-xs capitalize text-navy-800/50">{record.purpose === 'Worker Amount' ? 'Worker Amount' : isDriver ? record.purpose : record.status || 'Present'}</p></div><p className="font-display text-lg font-bold text-red-500">{formatCurrency(record.amount)}</p></div>{record.notes && <p className="mt-3 break-words rounded-xl bg-iceblue-50 px-3 py-2 text-sm text-navy-800/60">{record.notes}</p>}</article>)}
+        {records.length === 0 && <p className="rounded-2xl bg-iceblue-50 px-4 py-8 text-center text-sm text-navy-800/50">No worker amount entries for the selected range.</p>}
       </div>
     </div>
   );
