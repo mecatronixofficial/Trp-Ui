@@ -2,10 +2,11 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye, FiDollarSign, FiCheckCircle } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
+import PaymentModal from '../../../components/PaymentModal';
 import { useAuth } from '../../../context/AuthContext';
 
 function last30Days() {
@@ -91,6 +92,11 @@ export default function CustomersPage() {
   const [historyRows, setHistoryRows] = useState<HistoryDay[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [collectionTarget, setCollectionTarget] = useState<Customer | null>(null);
+  const [pendingSales, setPendingSales] = useState<any[]>([]);
+  const [collectionSale, setCollectionSale] = useState<any>(null);
+  const [collectionLoading, setCollectionLoading] = useState(false);
+  const [collectionError, setCollectionError] = useState('');
   const [pageError, setPageError] = useState('');
   const [formError, setFormError] = useState('');
   const [priceError, setPriceError] = useState('');
@@ -324,6 +330,28 @@ export default function CustomersPage() {
     loadHistory(c, historyRange);
   };
 
+  const loadPendingSales = async (customer: Customer) => {
+    setCollectionLoading(true);
+    setCollectionError('');
+    try {
+      const { data } = await api.get('/sales', { params: { customer: customer._id } });
+      setPendingSales((Array.isArray(data) ? data : [])
+        .filter((sale: any) => Number(sale.balanceAmount || 0) > 0)
+        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime()));
+    } catch (error: any) {
+      setPendingSales([]);
+      setCollectionError(error?.response?.data?.message || 'Could not load pending customer bills.');
+    } finally {
+      setCollectionLoading(false);
+    }
+  };
+
+  const openCollection = (customer: Customer) => {
+    setCollectionTarget(customer);
+    setCollectionSale(null);
+    void loadPendingSales(customer);
+  };
+
   return (
     <div className="-mt-4 space-y-1 sm:-mt-5">
       {isSuperAdmin && (
@@ -426,6 +454,11 @@ export default function CustomersPage() {
                       <button title="Price list" onClick={() => openPrices(c)} className="text-navy-900 hover:text-black">
                         <FiTag />
                       </button>
+                      {Number(c.creditBalance || 0) > 0 && (
+                        <button title="Collect pending amount" aria-label={`Collect pending amount from ${c.name}`} onClick={() => openCollection(c)} className="text-emerald-600 transition hover:text-emerald-800">
+                          <FiDollarSign />
+                        </button>
+                      )}
                       <button title="Edit" onClick={() => openEdit(c)} className="text-navy-900 hover:text-black">
                         <FiEdit2 />
                       </button>
@@ -545,6 +578,57 @@ export default function CustomersPage() {
             })}
           </div>
         </Modal>
+      )}
+
+      {collectionTarget && !collectionSale && (
+        <Modal title={`Collect Amount: ${collectionTarget.name}`} onClose={() => setCollectionTarget(null)}>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-4 rounded-2xl bg-emerald-50 p-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-700">Pending amount</p>
+                <p className="mt-1 text-sm font-semibold text-navy-900">{(collectionTarget.customerType || (collectionTarget.truck ? 'truck' : 'local')) === 'truck' ? 'Truck Customer' : 'Local Customer'} · {collectionTarget.phoneNumber || 'No phone'}</p>
+              </div>
+              <p className="shrink-0 font-display text-xl font-bold text-red-600">{formatCurrency(pendingSales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</p>
+            </div>
+
+            {collectionError && <p role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{collectionError}</p>}
+            {collectionLoading ? (
+              <p className="py-8 text-center text-sm text-navy-800/50">Loading pending bills...</p>
+            ) : pendingSales.length === 0 ? (
+              <div className="rounded-2xl bg-emerald-50 px-4 py-8 text-center">
+                <FiCheckCircle className="mx-auto text-2xl text-emerald-600" />
+                <p className="mt-2 text-sm font-semibold text-emerald-700">No pending amount remains.</p>
+              </div>
+            ) : (
+              <div className="max-h-[55vh] space-y-2 overflow-y-auto pr-1">
+                {pendingSales.map((sale) => (
+                  <div key={sale._id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-navy-800/55">{formatDate(sale.date)}</p>
+                      <p className="mt-1 text-sm font-bold text-navy-900">Bill {formatCurrency(sale.totalAmount)}</p>
+                      <p className="text-xs font-semibold text-red-600">Pending {formatCurrency(sale.balanceAmount)}</p>
+                    </div>
+                    <button type="button" onClick={() => setCollectionSale({ ...sale, customer: sale.customer || collectionTarget })} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white transition hover:bg-emerald-700">
+                      <FiDollarSign /> Collect
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {collectionSale && collectionTarget && (
+        <PaymentModal
+          sale={collectionSale}
+          onClose={() => setCollectionSale(null)}
+          onSaved={() => {
+            setCollectionSale(null);
+            void loadPendingSales(collectionTarget);
+            void load(search);
+          }}
+        />
       )}
 
       {historyTarget && (

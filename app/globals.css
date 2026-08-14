@@ -224,3 +224,40 @@ main table td {
     display: none;
   }
 }
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, -8px, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.toast-enter {
+  animation: toast-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes toast-clock {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 100; }
+}
+
+.toast-clock {
+  stroke-dasharray: 100;
+  animation-name: toast-clock;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter {
+    animation: none;
+  }
+
+  .toast-clock {
+    animation: none;
+  }
+}

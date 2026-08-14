@@ -147,6 +147,7 @@ export default function ProductionPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const loadInFlightRef = useRef<Promise<void> | null>(null);
   const loadDayRef = useRef("");
+  const midnightClosingRef = useRef(false);
   const isSuperAdmin = user?.role === "super_admin";
   const canManageProduction = !isSuperAdmin || Boolean(selectedBranch);
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
@@ -298,27 +299,6 @@ export default function ProductionPage() {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [load]);
-
-  useEffect(() => {
-    const moveToCurrentDay = () => {
-      const currentIndiaDay = todayIndiaISO();
-      setActiveDay((previousDay) =>
-        previousDay === currentIndiaDay ? previousDay : currentIndiaDay,
-      );
-    };
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") moveToCurrentDay();
-    };
-
-    const dayWatcher = window.setInterval(moveToCurrentDay, 30_000);
-    window.addEventListener("focus", moveToCurrentDay);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      window.clearInterval(dayWatcher);
-      window.removeEventListener("focus", moveToCurrentDay);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, []);
 
   const activeSessionStartedAt =
     canManageProduction && closings[0]?.status === "open" && closings[0]?.sessionStartedAt
@@ -1005,10 +985,6 @@ export default function ProductionPage() {
     0,
     Number(summary.produced || 0) - totalSoldToday - Number(summary.wasted || 0),
   );
-  const closingBars = Math.max(
-    0,
-    Number(dayClosed ? currentClosing?.lastSessionReturned ?? currentClosing?.returned ?? 0 : currentSessionReturnedBars),
-  );
   const dailyReturnedBars = Math.max(0, Number(currentClosing?.returnedTotal ?? currentClosing?.returned ?? 0));
   const closedProductionBars = Math.max(0, Number(currentClosing?.produced || 0) - dailyReturnedBars);
   const dailyProductionBars = currentClosing
@@ -1020,11 +996,11 @@ export default function ProductionPage() {
   const reportShopSold = dayClosed ? dailyShopSold : shopSoldToday;
   const reportTruckSold = dayClosed ? dailyTruckSold : truckSoldToday;
   const reportTotalSold = reportShopSold + reportTruckSold;
-  const closingBoxes = Math.ceil(closingBars / closingBarsPerBox);
-  const totalBoxCount = Math.max(1, Number(boxInfo?.totalBoxes || 200));
+  const stockAtClosingBars = Math.max(0, Number(dayClosed ? stockByDate[activeDay] || 0 : summary.balance || 0));
+  const closingBoxes = Math.ceil(stockAtClosingBars / closingBarsPerBox);
   const lastTodayProductionRecord = todayProductionRecords[todayProductionRecords.length - 1];
   const calculatedClosingBox = lastTodayProductionRecord
-    ? ((Number(lastTodayProductionRecord.boxClose) - closingBoxes + totalBoxCount) % totalBoxCount) + 1
+    ? Number(lastTodayProductionRecord.boxClose)
     : null;
   const closingBoxNumber = dayClosed && currentClosing?.closingBox != null
     ? Number(currentClosing.closingBox)
@@ -1161,21 +1137,68 @@ export default function ProductionPage() {
     setClosingDay(true);
     setClosingError(null);
     try {
+      const readyBars = Math.max(0, Number(summary.balance || 0));
+      const automaticStockNote = "Automatically moved from ready bars at day closing";
+      const alreadyMoved = stockEntries.some((entry) => (
+        indiaDateKey(entry.date) === activeDay && String(entry.notes || "") === automaticStockNote
+      ));
+      if (readyBars > 0 && !alreadyMoved) {
+        const { data: stockRecord } = await api.post("/stock-entries", {
+          date: activeDay,
+          quantity: readyBars,
+          notes: automaticStockNote,
+        });
+        const savedStock = stockRecord?.record || stockRecord;
+        if (savedStock?._id) setStockEntries((current) => [...current, savedStock]);
+      }
       await api.post("/daily-closing/close", {
         date: activeDay,
         branch: row.branch?._id || row.branch,
       });
       setCloseTarget(null);
-      await load(false, ["closing"]);
+      await load(false, ["stock", "closing"]);
       await fetchNextBox().catch(() => undefined);
+      return true;
     } catch (err: any) {
       setClosingError(
         err?.response?.data || { message: "Could not close today" },
       );
+      return false;
     } finally {
       setClosingDay(false);
     }
   };
+
+  useEffect(() => {
+    const closeAtMidnight = async () => {
+      const currentIndiaDay = todayIndiaISO();
+      if (currentIndiaDay === activeDay || midnightClosingRef.current) return;
+      midnightClosingRef.current = true;
+      try {
+        const needsClosing = canManageProduction && Boolean(openClosing) && !dayClosed;
+        const closed = needsClosing ? await closeDay(openClosing) : true;
+        if (closed) {
+          setActiveDay(currentIndiaDay);
+          setDate(currentIndiaDay);
+          setStockDate(currentIndiaDay);
+          setOutsourceDate(currentIndiaDay);
+        }
+      } finally {
+        midnightClosingRef.current = false;
+      }
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") void closeAtMidnight();
+    };
+    const dayWatcher = window.setInterval(() => void closeAtMidnight(), 30_000);
+    window.addEventListener("focus", closeAtMidnight);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(dayWatcher);
+      window.removeEventListener("focus", closeAtMidnight);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [activeDay, canManageProduction, dayClosed, openClosing]);
 
   const reopenDay = async () => {
     if (!currentClosing || !canManageProduction) return;
@@ -1335,7 +1358,7 @@ export default function ProductionPage() {
         />
         <ProductionSummary
           label="Closing Box"
-          value={!canManageProduction || closingBoxNumber == null ? "-" : `${fmtBars(closingBoxNumber)} (${fmtBars(closingBoxes)} boxes)`}
+          value={!canManageProduction || closingBoxNumber == null ? "-" : fmtBars(closingBoxNumber)}
           icon={<FiBox />}
         />
       </div>
@@ -2597,28 +2620,34 @@ export default function ProductionPage() {
               <div>
                 <p className="font-semibold">{closeTarget.status === "closed" ? "Today is closed. All final figures remain available below." : "Confirm every bar and financial total before closing."}</p>
                 <p className="mt-1 text-sm leading-6">
-                  Closing returns unsold bars and updates the next opening box. Sales, expenses, and production history remain under this date.
+                  Closing moves remaining ready bars into Stock. Opening and closing box readings stay fixed, and the next day starts with zero stock.
                 </p>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
-              <CloseReviewMetric label="Made Bars" value={reportMadeBars} />
-              <CloseReviewMetric label="Production Bars" value={reportProductionBars} />
-              <CloseReviewMetric label="Shop Sold" value={reportShopSold} />
-              <CloseReviewMetric label="Truck Sold" value={reportTruckSold} />
-              <CloseReviewMetric label="Total Sold" value={reportTotalSold} />
-              <CloseReviewMetric label="Shop Wastage" value={dayClosed ? Number(currentClosing?.wastage || 0) : summary.wasted} />
-              <CloseReviewMetric label="Returned Bars" value={reportReturnedBars} />
-              <CloseReviewMetric label={`Boxes (${fmtBars(closingBarsPerBox)} bars each)`} value={closingBoxes} />
-              <CloseReviewMetric label="Closing Box" value={Number(closingBoxNumber || 0)} />
+            <div className="rounded-2xl border border-iceblue-100 bg-white p-3 sm:p-4">
+              <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-iceblue-700">Bar Summary</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <CloseReviewMetric label="Made Bars" value={reportMadeBars} />
+                <CloseReviewMetric label="Production Bars" value={reportProductionBars} />
+                <CloseReviewMetric label="Shop Sold" value={reportShopSold} />
+                <CloseReviewMetric label="Truck Sold" value={reportTruckSold} />
+                <CloseReviewMetric label="Total Sold" value={reportTotalSold} />
+                <CloseReviewMetric label="Shop Wastage" value={dayClosed ? Number(currentClosing?.wastage || 0) : summary.wasted} />
+                <CloseReviewMetric label="Moved to Stock" value={stockAtClosingBars} />
+                <CloseReviewMetric label={`Stock Boxes (${fmtBars(closingBarsPerBox)} bars each)`} value={closingBoxes} />
+                <CloseReviewMetric label="Closing Box" value={Number(closingBoxNumber || 0)} />
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <FinancialMetric label="Sales Count" value={String(financialSummary.salesCount)} />
-              <FinancialMetric label="Total Sales" value={formatCurrency(financialSummary.salesAmount)} />
-              <FinancialMetric label="Collection" value={formatCurrency(financialSummary.collectionAmount)} positive />
-              <FinancialMetric label="Pending" value={formatCurrency(financialSummary.pendingAmount)} danger={financialSummary.pendingAmount > 0} />
-              <FinancialMetric label="Expenses" value={formatCurrency(financialSummary.expenses)} danger={financialSummary.expenses > 0} />
-              <FinancialMetric label="Profit" value={formatCurrency(financialSummary.profit)} positive={financialSummary.profit >= 0} danger={financialSummary.profit < 0} />
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 sm:p-4">
+              <p className="mb-3 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-500">Financial Summary</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <FinancialMetric label="Sales Count" value={String(financialSummary.salesCount)} />
+                <FinancialMetric label="Total Sales" value={formatCurrency(financialSummary.salesAmount)} />
+                <FinancialMetric label="Collection" value={formatCurrency(financialSummary.collectionAmount)} positive />
+                <FinancialMetric label="Pending" value={formatCurrency(financialSummary.pendingAmount)} danger={financialSummary.pendingAmount > 0} />
+                <FinancialMetric label="Expenses" value={formatCurrency(financialSummary.expenses)} danger={financialSummary.expenses > 0} />
+                <FinancialMetric label="Profit" value={formatCurrency(financialSummary.profit)} positive={financialSummary.profit >= 0} danger={financialSummary.profit < 0} />
+              </div>
             </div>
             {closingError && (
               <p className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
@@ -3123,9 +3152,9 @@ function FinancialMetric({
   positive?: boolean;
 }) {
   return (
-    <div className={`rounded-2xl border p-3 ${danger ? "border-red-100 bg-red-50" : positive ? "border-emerald-100 bg-emerald-50" : "border-iceblue-100 bg-iceblue-50/60"}`}>
-      <p className={`text-[10px] font-bold uppercase tracking-wide ${danger ? "text-red-700/65" : positive ? "text-emerald-700/65" : "text-navy-800/45"}`}>{label}</p>
-      <p className={`mt-1 font-display text-lg font-bold tabular-nums ${danger ? "text-red-700" : positive ? "text-emerald-700" : "text-navy-900"}`}>{value}</p>
+    <div className={`flex min-h-[86px] min-w-0 flex-col justify-between rounded-xl border p-3 ${danger ? "border-red-100 bg-red-50" : positive ? "border-emerald-100 bg-emerald-50" : "border-iceblue-100 bg-white"}`}>
+      <p className={`min-h-[2rem] text-[10px] font-bold uppercase leading-4 tracking-wide ${danger ? "text-red-700/65" : positive ? "text-emerald-700/65" : "text-navy-800/45"}`}>{label}</p>
+      <p className={`mt-1 break-words font-display text-lg font-bold tabular-nums ${danger ? "text-red-700" : positive ? "text-emerald-700" : "text-navy-900"}`}>{value}</p>
     </div>
   );
 }
@@ -3288,13 +3317,13 @@ function CloseReviewMetric({
 }) {
   return (
     <div
-      className={`rounded-2xl p-3 ${danger ? "bg-red-50" : "bg-iceblue-50"}`}
+      className={`flex min-h-[86px] min-w-0 flex-col justify-between rounded-xl border p-3 ${danger ? "border-red-100 bg-red-50" : "border-iceblue-100 bg-iceblue-50/60"}`}
     >
-      <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">
+      <p className="min-h-[2rem] text-[10px] font-bold uppercase leading-4 tracking-wide text-navy-800/45">
         {label}
       </p>
       <p
-        className={`mt-1 font-display text-xl font-bold ${danger ? "text-red-600" : "text-navy-900"}`}
+        className={`mt-1 break-words font-display text-xl font-bold tabular-nums ${danger ? "text-red-600" : "text-navy-900"}`}
       >
         {fmtBars(Number(value || 0))}
       </p>

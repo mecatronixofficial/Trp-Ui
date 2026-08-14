@@ -244,6 +244,11 @@ export default function WorkersPage() {
     [peopleSummary],
   );
 
+  const todayWorkerAmount = useMemo(
+    () => recentBuying.reduce((total, row) => total + Number(row.buyingAmount || row.amount || 0), 0),
+    [recentBuying],
+  );
+
   const driverDetailRows = useMemo(() => {
     if (!driverDetailTarget) return [];
     return driverExpenses
@@ -369,9 +374,9 @@ export default function WorkersPage() {
         />
         <WorkerSummaryCard
           icon={FiDollarSign}
-          label="Amount"
-          value={formatCurrency(workerTotal)}
-          helper={`For ${month}`}
+          label="Today's Amount"
+          value={formatCurrency(todayWorkerAmount)}
+          helper="Recorded today"
           tone="amber"
         />
       </section>

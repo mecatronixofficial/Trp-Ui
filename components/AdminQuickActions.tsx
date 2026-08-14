@@ -23,8 +23,8 @@ export default function AdminQuickActions() {
           <Link href="/admin/sales?add=sale" onClick={() => setOpen(false)} className="flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-navy-900 hover:bg-iceblue-50">
             <FiShoppingCart className="text-emerald-600" /> Add Sale
           </Link>
-          <Link href="/admin/trucks?add=truck" onClick={() => setOpen(false)} className="flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-navy-900 hover:bg-iceblue-50">
-            <FiTruck className="text-iceblue-600" /> Add Truck
+          <Link href="/admin/trucks?assign=truck" onClick={() => setOpen(false)} className="flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-semibold text-navy-900 hover:bg-iceblue-50">
+            <FiTruck className="text-iceblue-600" /> Assign Truck
           </Link>
         </div>
       )}

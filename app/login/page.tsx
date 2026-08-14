@@ -206,7 +206,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (authLoading || !user) return;
     setRedirecting(true);
-    router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
+    router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/sample');
   }, [user, authLoading, router]);
 
   useEffect(() => {

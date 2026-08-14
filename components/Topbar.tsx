@@ -27,6 +27,7 @@ import useDismissibleMenu from '../hooks/useDismissibleMenu';
 import BrandLogo from './BrandLogo';
 
 const adminLinks = [
+  ['/admin/sample', 'Entry', FiMonitor],
   ['/admin/dashboard', 'Dashboard', FiGrid],
   ['/admin/trucks', 'Trucks', FiTruck],
   ['/admin/customers', 'Customers', FiUsers],
@@ -35,7 +36,6 @@ const adminLinks = [
   ['/admin/sales', 'Sales', FiShoppingCart],
   ['/admin/expenses', 'Expenses', FiDollarSign],
   ['/admin/reports', 'Reports', FiBarChart2],
-  ['/admin/sample', 'Sample', FiMonitor],
   ['/admin/settings', 'Settings', FiSettings],
 ];
 

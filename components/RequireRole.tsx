@@ -20,7 +20,7 @@ export default function RequireRole({
     if (!user) {
       router.replace('/login');
     } else if (!(Array.isArray(role) ? role.includes(user.role) : user.role === role)) {
-      router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
+      router.replace(user.role === 'truck' ? '/truck/dashboard' : '/admin/sample');
     }
   }, [user, loading, role, router]);
 

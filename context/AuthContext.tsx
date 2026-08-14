@@ -91,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     Cookies.set('tii_user', JSON.stringify(data.user), { expires: 1, sameSite: 'lax' });
     setUser(data.user);
-    router.push(data.user.role === 'truck' ? '/truck/dashboard' : '/admin/dashboard');
+    router.push(data.user.role === 'truck' ? '/truck/dashboard' : '/admin/sample');
   };
 
   const logout = async (options?: { confirmedTruckClose?: boolean }) => {

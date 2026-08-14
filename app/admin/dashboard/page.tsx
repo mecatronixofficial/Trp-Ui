@@ -27,8 +27,6 @@ import {
   FiPackage,
   FiTrendingUp,
   FiUsers,
-  FiChevronDown,
-  FiChevronUp,
   FiArrowUpRight,
   FiArrowDownRight,
 } from 'react-icons/fi';
@@ -47,35 +45,17 @@ const indiaDateKey = (date: string | Date) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date(date));
 
-type StockRange = 'today' | 'weekly' | 'monthly';
-
-function getIndiaPeriod(range: StockRange) {
-  const today = indiaDateKey(new Date());
-  const [year, month, day] = today.split('-').map(Number);
-  const start = new Date(Date.UTC(year, month - 1, day));
-  if (range === 'weekly') start.setUTCDate(start.getUTCDate() - 6);
-  if (range === 'monthly') start.setUTCDate(1);
-  const from = start.toISOString().slice(0, 10);
-  return {
-    from: `${from}T00:00:00.000+05:30`,
-    to: `${today}T23:59:59.999+05:30`,
-  };
-}
-
 export default function AdminDashboardPage() {
   const [data, setData] = useState<any>(null);
   const [profitChart, setProfitChart] = useState<any[]>([]);
   const [dailyClosings, setDailyClosings] = useState<any[]>([]);
-  const [todayClosings, setTodayClosings] = useState<any[]>([]);
   const [reportDate, setReportDate] = useState(todayISO());
   const [closingLoading, setClosingLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [closingError, setClosingError] = useState('');
-  const [employeeExpensesToday, setEmployeeExpensesToday] = useState(0);
   const [todayExpenses, setTodayExpenses] = useState(0);
   const [employeeExpenseRows, setEmployeeExpenseRows] = useState<any[]>([]);
-  const [showSummaryDetails, setShowSummaryDetails] = useState(false);
   const [salesTrendRange, setSalesTrendRange] = useState<'weekly' | 'monthly'>('weekly');
   const [salesTrend, setSalesTrend] = useState<{ date: string; label: string; total: number; count: number }[]>([]);
   const [salesTrendSummary, setSalesTrendSummary] = useState<{ totalAmount: number; totalSales: number; averagePerDay: number } | null>(null);
@@ -84,10 +64,7 @@ export default function AdminDashboardPage() {
   const [selectedPerformanceName, setSelectedPerformanceName] = useState('Today Sales');
   const [todaySalesBars, setTodaySalesBars] = useState<number | null>(null);
   const [todaySales, setTodaySales] = useState<any[]>([]);
-  const [stockRange, setStockRange] = useState<StockRange>('today');
-  const [stockUsedBySize, setStockUsedBySize] = useState<Record<string, number>>({});
-  const [stockRangeLoading, setStockRangeLoading] = useState(false);
-  const [stockRangeError, setStockRangeError] = useState('');
+  const [todayTruckReturns, setTodayTruckReturns] = useState(0);
   const [managementCounts, setManagementCounts] = useState({
     totalCustomers: 0,
     localCustomers: 0,
@@ -96,39 +73,17 @@ export default function AdminDashboardPage() {
   });
 
   useEffect(() => {
-    const period = getIndiaPeriod(stockRange);
-    setStockRangeLoading(true);
-    setStockRangeError('');
-    api.get('/sales', { params: period })
-      .then((response) => {
-        const used = (Array.isArray(response.data) ? response.data : []).reduce((sizes: Record<string, number>, sale: any) => {
-          (Array.isArray(sale.items) ? sale.items : []).forEach((item: any) => {
-            const size = String(item.size || '1');
-            sizes[size] = (sizes[size] || 0) + getItemBarUsed(item);
-          });
-          return sizes;
-        }, {});
-        setStockUsedBySize(used);
-      })
-      .catch((error: any) => {
-        setStockUsedBySize({});
-        setStockRangeError(error?.response?.data?.message || error?.message || 'Could not load used bars.');
-      })
-      .finally(() => setStockRangeLoading(false));
-  }, [stockRange]);
-
-  useEffect(() => {
     (async () => {
       try {
         setLoadError('');
         const today = todayISO();
-        const [dashResult, profitResult, closingResult, customerResult, workerResult, truckResult, salesResult, expenseResult] = await Promise.allSettled([
+        const [dashResult, profitResult, customerResult, workerResult, truckResult, reconciliationResult, salesResult, expenseResult] = await Promise.allSettled([
           api.get('/dashboard/admin'),
           api.get('/dashboard/monthly-profit'),
-          api.get('/daily-closing', { params: { date: today } }),
           api.get('/customers'),
           api.get('/workers'),
           api.get('/trucks'),
+          api.get('/truck-loads/reconciliation', { params: { date: today } }),
           api.get('/sales', {
             params: {
               from: `${today}T00:00:00.000+05:30`,
@@ -147,23 +102,28 @@ export default function AdminDashboardPage() {
         if (dashResult.status === 'rejected') throw dashResult.reason;
         setData(dashResult.value.data);
         setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
-        setTodayClosings(closingResult.status === 'fulfilled' ? closingResult.value.data || [] : []);
         // Use the same branch-scoped expense source as Expenses, Reports and
         // Production so every page reconciles to one daily total.
         setTodayExpenses(expenseResult.status === 'fulfilled'
           ? Number(expenseResult.value?.summary?.totalExpenses || 0)
           : 0);
-        setEmployeeExpensesToday(0);
         setEmployeeExpenseRows([]);
         const customers = customerResult.status === 'fulfilled' && Array.isArray(customerResult.value.data) ? customerResult.value.data : [];
         const workers = workerResult.status === 'fulfilled' && Array.isArray(workerResult.value.data) ? workerResult.value.data : [];
         const trucks = truckResult.status === 'fulfilled' && Array.isArray(truckResult.value.data) ? truckResult.value.data : [];
+        const reconciliations = reconciliationResult.status === 'fulfilled' && Array.isArray(reconciliationResult.value.data) ? reconciliationResult.value.data : [];
+        const truckIds = new Set(trucks.map((truck: any) => String(truck._id || '')));
+        setTodayTruckReturns(reconciliations.reduce((total: number, row: any) => {
+          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
+          if (!truckId || !truckIds.has(truckId) || Number(row.taken || 0) <= 0) return total;
+          return total + Math.max(0, Number(row.returned || 0));
+        }, 0));
         const customerType = (customer: any) => String(customer.customerType || (customer.truck ? 'truck' : 'local')).toLowerCase();
         setManagementCounts({
           totalCustomers: customers.length,
           localCustomers: customers.filter((customer: any) => customerType(customer) === 'local').length,
           truckCustomers: customers.filter((customer: any) => customerType(customer) === 'truck').length,
-          totalWorkers: workers.length + trucks.length,
+          totalWorkers: workers.length,
         });
         if (salesResult.status === 'fulfilled' && Array.isArray(salesResult.value.data)) {
           setTodaySales(salesResult.value.data);
@@ -228,11 +188,6 @@ export default function AdminDashboardPage() {
     closed: total.closed + (row.status === 'closed' ? 1 : 0),
   }), { opening: 0, made: 0, sold: 0, returned: 0, wastage: 0, sales: 0, cost: 0, profit: 0, closed: 0 }), [dailyClosings]);
 
-  const todayClosingTotals = useMemo(() => todayClosings.reduce((total, row) => ({
-    returned: total.returned + Number(row.returned || 0),
-    wastage: total.wastage + Number(row.wastage || 0),
-  }), { returned: 0, wastage: 0 }), [todayClosings]);
-
   const dashboard = useMemo(() => {
     if (!data) return null;
 
@@ -281,7 +236,7 @@ export default function AdminDashboardPage() {
       paymentMix,
       last7DaysSales,
       monthlyProfit,
-      pendingPayments: data.payments?.pendingBills || [],
+      pendingPayments: (data.payments?.pendingBills || []).filter((sale: any) => sale?.date && indiaDateKey(sale.date) === todayISO()),
       recentPayments: data.payments?.recentToday || [],
       truckCustomerRows: Object.entries(data.customers?.truckWise || {}),
       recentCustomers: data.customers?.recent || [],
@@ -297,12 +252,9 @@ export default function AdminDashboardPage() {
   }
   if (!data || !dashboard) return <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-red-700"><p className="font-semibold">Dashboard unavailable</p><p className="mt-2 text-sm">{loadError || 'Could not load dashboard data.'}</p><button type="button" onClick={() => window.location.reload()} className="btn-secondary mt-4">Retry</button></div>;
 
-  const stockTotal = Number(data.pendingStock?.totalClosingStock || 0);
-  const pendingAmount = Number(data.payments?.pendingAmount || 0);
   const todayPendingBills = Number(data.today.balance || 0);
   const todayInHand = Number(data.today.collection || 0) - Number(todayExpenses || 0);
   const todayProfit = todayInHand;
-  const workerBuying = Number(data.today.workerBuying || 0) + employeeExpensesToday;
   const indiaDayOfMonth = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric' }).format(new Date())) || 1;
   const monthlyDailyAverage = Number(data.monthlySales || 0) / indiaDayOfMonth;
   const salesHighlight: 'high' | 'low' = Number(data.today.sales || 0) > 0 && Number(data.today.sales || 0) >= monthlyDailyAverage ? 'high' : 'low';
@@ -314,11 +266,20 @@ export default function AdminDashboardPage() {
     { name: 'Bar Used', value: Math.max(0, dashboard.soldBars), displayValue: `${dashboard.soldBars} bars`, color: '#6366f1' },
     { name: 'Today Expenses', value: Math.max(0, todayExpenses), displayValue: formatCurrency(todayExpenses), color: '#ef4444' },
     { name: 'Today In Hand', value: Math.abs(todayInHand), displayValue: formatCurrency(todayInHand), color: todayInHand < 0 ? '#e11d48' : '#0d9488' },
-    { name: 'Today Returns', value: Math.max(0, todayClosingTotals.returned), displayValue: `${todayClosingTotals.returned} bars`, color: '#f59e0b' },
+    { name: 'Today Returns', value: Math.max(0, todayTruckReturns), displayValue: `${todayTruckReturns} bars`, color: '#f59e0b' },
     { name: 'Today Pending Bills', value: Math.max(0, todayPendingBills), displayValue: formatCurrency(todayPendingBills), color: '#f97316' },
   ];
   const visiblePerformanceMix = performanceMix.filter((row) => row.value > 0);
   const selectedPerformance = performanceMix.find((row) => row.name === selectedPerformanceName) || performanceMix[1];
+  // Keep this summary strictly scoped to today's production cycle. Pending
+  // stock is cumulative inventory and must not be mixed into today's figures.
+  const stockTotalBars = Math.max(0, Number(data.today.production || 0));
+  const stockSoldBars = Math.max(0, Math.min(stockTotalBars, dashboard.soldBars));
+  const stockBalanceBars = Math.max(0, stockTotalBars - stockSoldBars);
+  const todayBarChart = [
+    { name: 'Sold Bars', value: stockSoldBars, color: '#16a34a' },
+    { name: 'Balance Bars', value: stockBalanceBars, color: '#f59e0b' },
+  ].filter((row) => row.value > 0);
 
   return (
     <div className="space-y-4 pb-8">
@@ -455,7 +416,7 @@ export default function AdminDashboardPage() {
           <DashboardSummaryCard
             icon={FiArrowDownRight}
             label="Today Returns"
-            value={todayClosingTotals.returned}
+            value={todayTruckReturns}
             suffix="bars"
             tone="amber"
             href="/admin/reports"
@@ -488,97 +449,6 @@ export default function AdminDashboardPage() {
 
       </div>
     </div>
-
-    {/* More Details Button */}
-    <div className="mt-3 flex justify-center">
-      <button
-        type="button"
-        onClick={() => setShowSummaryDetails((value) => !value)}
-        className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 text-xs font-bold text-navy-900 transition hover:border-blue-200 hover:bg-blue-50"
-      >
-        {showSummaryDetails ? "Hide Details" : "View More Details"}
-
-        {showSummaryDetails ? (
-          <FiChevronUp size={15} />
-        ) : (
-          <FiChevronDown size={15} />
-        )}
-      </button>
-    </div>
-
-    {/* Detailed Metrics */}
-    {showSummaryDetails && (
-      <div className="mt-5 border-t border-slate-100 pt-5">
-
-        <div className="mb-3 flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
-              Additional Information
-            </p>
-
-            <h3 className="mt-0.5 text-sm font-bold text-navy-900">
-              Detailed Metrics
-            </h3>
-          </div>
-        </div>
-
-        <div className="grid auto-rows-fr grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
-
-          <DashboardSummaryCard
-            icon={FiPackage}
-            label="Pending Stock"
-            value={stockTotal}
-            suffix="bars"
-            tone="blue"
-            href="/admin/production"
-          />
-
-          <DashboardSummaryCard
-            icon={FiUsers}
-            label="Worker Buying"
-            value={formatCurrency(workerBuying)}
-            tone="indigo"
-            href="/admin/workers"
-          />
-
-          <DashboardSummaryCard
-            icon={FiClock}
-            label="Pending Bills"
-            value={formatCurrency(pendingAmount)}
-            danger={pendingAmount > 0}
-            tone="red"
-            href="/admin/customers"
-          />
-
-          <DashboardSummaryCard
-            icon={FiDollarSign}
-            label="Old Payments Today"
-            value={formatCurrency(
-              data.payments?.todayCollectedLater || 0
-            )}
-            tone="cyan"
-            href="/admin/sales"
-          />
-
-          <DashboardSummaryCard
-            icon={FiTrendingUp}
-            label="Monthly Sales"
-            value={formatCurrency(data.monthlySales)}
-            tone="emerald"
-            href="/admin/reports"
-          />
-
-          <DashboardSummaryCard
-            icon={FiTrendingUp}
-            label="Yearly Sales"
-            value={formatCurrency(data.yearlySales)}
-            tone="violet"
-            href="/admin/reports"
-          />
-
-        </div>
-      </div>
-    )}
 
 </section>
 
@@ -756,7 +626,7 @@ export default function AdminDashboardPage() {
       <section className="space-y-4">
         <div className="overflow-hidden rounded-[20px] border border-sky-200 bg-white shadow-[0_8px_30px_rgba(15,55,80,0.06)]">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 px-4 py-3 sm:px-5">
-            <div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-600">Today Overview</p><h2 className="font-display text-lg font-bold text-navy-900">Sales Report &amp; Pending Stock</h2></div>
+            <div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-600">Today Overview</p><h2 className="font-display text-lg font-bold text-navy-900">Sales Report &amp; Bar Stock</h2></div>
             <Link href="/admin/sales/all" className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-bold text-navy-900 transition hover:bg-white">View Details</Link>
           </div>
           <div className="grid lg:grid-cols-[minmax(0,3fr)_minmax(300px,2fr)]">
@@ -767,78 +637,77 @@ export default function AdminDashboardPage() {
         </div>
 
         <div className="min-w-0 bg-sky-50/25 p-4 sm:p-5">
-          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-sky-100"><FiPackage className="text-sky-600" /></span> Pending Stock</h3>
-          <div className="mb-3 mt-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Size-wise bars</p>
-            <div className="flex rounded-xl bg-slate-100 p-1">
-              {(['today', 'weekly', 'monthly'] as StockRange[]).map((range) => (
-                <button
-                  key={range}
-                  type="button"
-                  onClick={() => setStockRange(range)}
-                  className={`rounded-lg px-3 py-1.5 text-[10px] font-bold capitalize transition ${stockRange === range ? 'bg-white text-iceblue-700 shadow-sm' : 'text-slate-500 hover:text-navy-900'}`}
-                >
-                  {range}
-                </button>
-              ))}
+          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-sky-100"><FiPackage className="text-sky-600" /></span> Bar Stock Summary</h3>
+          <p className="mb-3 mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Today&apos;s produced, sold and remaining bars</p>
+          <div className="grid gap-3">
+            <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-600 to-blue-700 p-4 text-white shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-100">Today Production</p>
+              <p className="mt-2 font-display text-3xl font-black">{stockTotalBars}</p>
+              <p className="mt-1 text-[10px] font-semibold text-sky-100">Total bars made today</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Sold Bars</p>
+                <p className="mt-2 font-display text-2xl font-black text-emerald-700">{stockSoldBars}</p>
+              </div>
+              <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Balance Bars</p>
+                <p className="mt-2 font-display text-2xl font-black text-amber-700">{stockBalanceBars}</p>
+              </div>
+            </div>
+            <div className="relative h-[190px] rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
+              {todayBarChart.length > 0 ? (
+                <>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={todayBarChart} dataKey="value" nameKey="name" innerRadius={52} outerRadius={76} paddingAngle={3} stroke="transparent">
+                        {todayBarChart.map((row) => <Cell key={row.name} fill={row.color} />)}
+                      </Pie>
+                      <Tooltip formatter={(value: any) => [`${value} bars`]} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total Bars</p>
+                    <p className="font-display text-2xl font-black text-navy-900">{stockTotalBars}</p>
+                  </div>
+                </>
+              ) : <EmptyState text="No production recorded today." />}
             </div>
           </div>
-          {stockRangeError && <p className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-600">{stockRangeError}</p>}
-          {dashboard.stockChart.length === 0 ? (
-            <EmptyState text="No stock data available." />
-          ) : (
-            <>
-            <div className="rounded-2xl border border-sky-100 bg-white p-3 shadow-sm">
-              <div className="relative h-[190px]">
-                <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={dashboard.stockChart} dataKey="quantity" nameKey="size" innerRadius={52} outerRadius={76} paddingAngle={3} stroke="transparent">{dashboard.stockChart.map((stock: any, index: number) => <Cell key={`${stock.size}-${index}`} fill={chartColors[index % chartColors.length]} />)}</Pie><Tooltip formatter={(value: any) => [`${value} bars`, 'Pending']} /></PieChart></ResponsiveContainer>
-                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center"><p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total Pending</p><p className="font-display text-2xl font-black text-navy-900">{dashboard.stockChart.reduce((sum: number, stock: any) => sum + Number(stock.quantity || 0), 0)}</p><span className="text-[9px] font-semibold text-slate-500">bars</span></div>
-              </div>
-              <div className="grid grid-cols-2 gap-2">{dashboard.stockChart.map((stock: any, index: number) => <div key={stock.size} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 shadow-sm"><div className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: chartColors[index % chartColors.length] }} /><span className="text-xs font-semibold text-navy-900">{stock.size}</span></div><span className="text-xs font-black text-sky-700">{stock.quantity}</span></div>)}</div>
-            </div>
-            {false && <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={dashboard.stockChart}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-                <XAxis dataKey="size" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Bar dataKey="quantity" name="Bars" fill="#1ca6d1" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>}
-            </>
-          )}
         </div>
           </div>
         </div>
 
         <div>
-        <Panel title="Pending Customer Payments" icon={FiClock}>
+        <Panel title="Today's Pending Customer Payments" icon={FiClock}>
           {dashboard.pendingPayments.length === 0 ? (
             <EmptyState text="No pending payments." />
           ) : (
-            <div className="overflow-x-auto border-2 border-black bg-white">
-              <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-black">
-                <thead className="bg-slate-100 text-black">
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+              <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-navy-900">
+                <thead className="bg-sky-50 text-navy-900">
                   <tr>
-                    <th className="w-[7%] border-2 border-black px-2 py-2.5 text-center text-[10px] font-bold uppercase">S.No</th>
-                    {['Bill Date', 'Customer', 'Truck', 'Total', 'Paid', 'Balance'].map((heading) => <th key={heading} className={`border-2 border-black px-2 py-2.5 text-[10px] font-bold uppercase ${['Total', 'Paid', 'Balance'].includes(heading) ? 'text-right' : 'text-left'}`}>{heading}</th>)}
+                    <th className="w-[7%] border-b border-r border-slate-200 px-2 py-3 text-center text-[10px] font-bold uppercase">S.No</th>
+                    {['Bill Date', 'Customer', 'Truck', 'Total', 'Paid', 'Balance'].map((heading) => <th key={heading} className={`border-b border-r border-slate-200 px-2 py-3 text-[10px] font-bold uppercase last:border-r-0 ${['Total', 'Paid', 'Balance'].includes(heading) ? 'text-right' : 'text-left'}`}>{heading}</th>)}
                   </tr>
                 </thead>
                 <tbody>
                   {dashboard.pendingPayments.map((sale: any, index: number) => (
-                    <tr key={sale._id} className="bg-white even:bg-slate-50 hover:bg-iceblue-50/70">
-                      <td className="border-2 border-black px-2 py-2.5 text-center font-medium text-black">{index + 1}</td>
-                      <td className="border-2 border-black px-2 py-2.5 text-black">{formatDate(sale.date)}</td>
-                      <td className="break-words border-2 border-black px-2 py-2.5 text-black">
-                        <p className="font-medium">{sale.customer?.name}</p>
-                        <p className="text-xs text-black">{sale.customer?.phoneNumber || 'No phone'}</p>
+                    <tr key={sale._id} className="bg-white even:bg-slate-50/70 hover:bg-sky-50/70">
+                      <td className="border-b border-r border-slate-200 px-2 py-3 text-center font-medium text-slate-500">{index + 1}</td>
+                      <td className="border-b border-r border-slate-200 px-2 py-3 text-slate-600">{formatDate(sale.date)}</td>
+                      <td className="break-words border-b border-r border-slate-200 px-2 py-3">
+                        <p className="font-semibold text-navy-900">{sale.customer?.name}</p>
+                        <p className="text-[10px] text-slate-400">{sale.customer?.phoneNumber || 'No phone'}</p>
                       </td>
-                      <td className="break-words border-2 border-black px-2 py-2.5 text-black">{sale.truck?.truckName || '-'}</td>
-                      <td className="border-2 border-black px-2 py-2.5 text-right text-black">{formatCurrency(sale.totalAmount)}</td>
-                      <td className="border-2 border-black px-2 py-2.5 text-right text-black">{formatCurrency(sale.paidAmount)}</td>
-                      <td className="border-2 border-black px-2 py-2.5 text-right font-semibold text-black">{formatCurrency(sale.balanceAmount)}</td>
+                      <td className="break-words border-b border-r border-slate-200 px-2 py-3 text-slate-600">{sale.truck?.truckName || '-'}</td>
+                      <td className="border-b border-r border-slate-200 px-2 py-3 text-right font-semibold">{formatCurrency(sale.totalAmount)}</td>
+                      <td className="border-b border-r border-slate-200 px-2 py-3 text-right font-semibold text-emerald-600">{formatCurrency(sale.paidAmount)}</td>
+                      <td className="border-b border-slate-200 px-2 py-3 text-right font-bold text-red-600">{formatCurrency(sale.balanceAmount)}</td>
                     </tr>
                   ))}
                 </tbody>
+                <tfoot className="bg-sky-50 font-bold text-navy-900"><tr><td colSpan={4} className="border-r border-slate-200 px-3 py-3 text-right">TOTAL</td><td className="border-r border-slate-200 px-2 py-3 text-right">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="border-r border-slate-200 px-2 py-3 text-right text-emerald-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.paidAmount || 0), 0))}</td><td className="px-2 py-3 text-right text-red-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot>
               </table>
             </div>
           )}

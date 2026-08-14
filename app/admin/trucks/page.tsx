@@ -65,6 +65,7 @@ export default function TrucksPage() {
   const [totalInputs, setTotalInputs] = useState<Record<string, string>>({});
   const [savingAssign, setSavingAssign] = useState<string>('');
   const [assignTarget, setAssignTarget] = useState<Truck | null>(null);
+  const [assignChooserOpen, setAssignChooserOpen] = useState(false);
   const [historyTarget, setHistoryTarget] = useState<Truck | null>(null);
   const [historyRange, setHistoryRange] = useState({ from: last30Days(), to: indiaDateISO() });
   const [historyRows, setHistoryRows] = useState<any[]>([]);
@@ -184,6 +185,12 @@ export default function TrucksPage() {
     window.history.replaceState({}, '', window.location.pathname);
   }, [branches]);
 
+  useEffect(() => {
+    if (loading || new URLSearchParams(window.location.search).get('assign') !== 'truck') return;
+    setAssignChooserOpen(true);
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [loading]);
+
   const openEdit = (t: Truck) => {
     setEditing(t);
     setForm({
@@ -238,7 +245,6 @@ export default function TrucksPage() {
     await api.patch(`/trucks/${resetTarget._id}/reset-password`, { newPassword });
     setResetTarget(null);
     setNewPassword('');
-    alert('Password reset successfully.');
   };
 
   const saveAssignment = async (t: Truck) => {
@@ -531,6 +537,31 @@ export default function TrucksPage() {
             </div>
             <button className="btn-primary w-full">Reset Password</button>
           </form>
+        </Modal>
+      )}
+
+      {assignChooserOpen && (
+        <Modal title="Assign Truck" onClose={() => setAssignChooserOpen(false)}>
+          <div className="space-y-2">
+            <p className="pb-2 text-sm text-navy-800/55">Select a truck to assign today&apos;s bars.</p>
+            {trucks.filter((truck) => truck.status !== false).map((truck) => (
+              <button
+                key={truck._id}
+                type="button"
+                onClick={() => { setAssignChooserOpen(false); setAssignTarget(truck); }}
+                className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-iceblue-300 hover:bg-iceblue-50"
+              >
+                <span>
+                  <span className="block font-semibold text-navy-900">{truck.truckName}</span>
+                  <span className="mt-0.5 block text-xs text-navy-800/45">{truck.truckNumber || truck.driverName || 'Truck'}</span>
+                </span>
+                <span className="text-xs font-bold text-iceblue-700">{assignments[truck._id] || 0} bars</span>
+              </button>
+            ))}
+            {trucks.filter((truck) => truck.status !== false).length === 0 && (
+              <p className="rounded-xl bg-slate-50 px-4 py-8 text-center text-sm text-navy-800/45">No active trucks available.</p>
+            )}
+          </div>
         </Modal>
       )}
 
