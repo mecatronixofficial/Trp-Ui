@@ -18,7 +18,7 @@ const links = [
   { href: '/admin/sales', label: 'Sales', icon: FiShoppingCart },
   { href: '/admin/expenses', label: 'Expenses', icon: FiDollarSign },
   { href: '/admin/reports', label: 'Reports', icon: FiBarChart2 },
-  { href: '/admin/sample', label: 'Sample', icon: FiMonitor },
+  { href: '/admin/sample', label: 'Entry', icon: FiMonitor },
   { href: '/admin/settings', label: 'Settings', icon: FiSettings },
 ];
 

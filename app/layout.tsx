@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AuthProvider } from '../context/AuthContext';
+import ToastProvider from '../components/ToastProvider';
 
 export const metadata: Metadata = {
   title: {
@@ -23,7 +24,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en">
       <body className="font-sans bg-iceblue-50 text-navy-900 antialiased">
-        <AuthProvider>{children}</AuthProvider>
+        <ToastProvider><AuthProvider>{children}</AuthProvider></ToastProvider>
       </body>
     </html>
   );

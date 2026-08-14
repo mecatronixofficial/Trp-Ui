@@ -48,12 +48,11 @@ const getCustomerName = (sale: any) => sale.customer?.name || sale.customerName 
 const getQuantity = (sale: any) => sale.items?.reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0) || 0;
 
 type AssignmentAction = 'accept' | 'reject';
-type DashboardTab = 'overview' | 'sales' | 'trip';
+type DashboardTab = 'overview' | 'trip';
 
 const DASHBOARD_TABS: Array<{ key: DashboardTab; label: string; icon: typeof FiCompass }> = [
   { key: 'overview', label: 'Overview', icon: FiCompass },
-  { key: 'sales', label: 'Sales', icon: FiShoppingCart },
-  { key: 'trip', label: 'Trip', icon: FiTruck },
+  { key: 'trip', label: 'Report', icon: FiTruck },
 ];
 
 interface TruckAssignment {
@@ -99,6 +98,7 @@ export default function TruckDashboardPage() {
   const [savingPayment, setSavingPayment] = useState(false);
   const [paymentForm, setPaymentForm] = useState(createPaymentForm);
   const [saleFormKey, setSaleFormKey] = useState(0);
+  const [saleModalOpen, setSaleModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [wastageForm, setWastageForm] = useState(createWastageForm);
   const [expenseForm, setExpenseForm] = useState(createExpenseForm);
@@ -435,41 +435,76 @@ export default function TruckDashboardPage() {
 
   return (
     <div className="space-y-5 pb-8 xl:space-y-6">
-      <section className="overflow-hidden rounded-[28px] bg-gradient-to-br from-[#071b2b] via-[#0e405a] to-[#22b8dd] p-4 text-white shadow-[0_18px_45px_rgba(7,27,43,0.22)] sm:p-5">
-        <div className="grid gap-3 lg:grid-cols-[45fr_55fr] lg:gap-0">
-          <div className="min-w-0 rounded-2xl border border-white/15 bg-white/[0.08] p-4 backdrop-blur-sm lg:rounded-r-none lg:border-r-0 sm:p-5">
-            <div className="flex items-start gap-3.5">
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white/10 text-xl text-cyan-200 ring-1 ring-white/20"><FiTruck /></span>
-              <div className="min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-100/75">{getGreeting()}, {data?.truck?.driverName || user?.displayName || user?.username || 'Driver'}</p>
-                <p className="mt-1 truncate font-display text-2xl font-bold">{data?.truck?.truckName || 'Truck'}</p>
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  {data?.truck?.truckNumber && <span className="rounded-full bg-white/10 px-2.5 py-1 text-white/80">{data.truck.truckNumber}</span>}
-                  <span className={`inline-flex items-center rounded-full px-2.5 py-1 ${awaitingAdminApproval ? 'bg-amber-400/20 text-amber-100' : 'bg-emerald-400/20 text-emerald-100'}`}><span className="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-300" />{truckOffline ? 'Online · Waiting for Bars' : awaitingAdminApproval ? 'Online · Awaiting Admin' : 'Online'}</span>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-white/65">
-                  {data?.truck?.phoneNumber && <span className="inline-flex items-center gap-1.5"><FiPhone /> {data.truck.phoneNumber}</span>}
-                  <span>{formatDate(indiaDateISO())}</span>
-                </div>
+      <section className="overflow-hidden rounded-2xl border border-iceblue-100 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
+        <div className="flex flex-col gap-3 p-3.5 sm:p-4 lg:flex-row lg:items-center lg:gap-4 lg:p-5">
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-iceblue-400 to-navy-900 text-base text-white shadow-sm"><FiTruck /></span>
+            <div className="min-w-0">
+              <p className="truncate text-[9px] font-bold uppercase tracking-[0.16em] text-iceblue-600">{getGreeting()}, {data?.truck?.driverName || user?.displayName || user?.username || 'Driver'}</p>
+              <p className="truncate font-display text-lg font-black leading-tight text-navy-900 sm:text-xl">{data?.truck?.truckName || 'Truck'}</p>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10px] font-medium text-navy-800/50">
+                {data?.truck?.truckNumber && <span className="font-semibold text-navy-800/70">{data.truck.truckNumber}</span>}
+                {data?.truck?.phoneNumber && <span className="inline-flex items-center gap-1"><FiPhone /> {data.truck.phoneNumber}</span>}
+                <span>{formatDate(indiaDateISO())}</span>
               </div>
             </div>
           </div>
-          <div className="min-w-0 rounded-2xl border border-white/15 bg-white/[0.08] p-4 backdrop-blur-sm lg:rounded-l-none sm:p-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div><p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-100/75">Bars Sold / Taken</p><p className="mt-1 font-display text-4xl font-black sm:text-5xl">{formatBarQuantity(barsSold) || 0}<span className="text-cyan-100/55"> / {formatBarQuantity(barsTaken) || 0}</span></p></div>
-              <div className="flex flex-wrap gap-2">
-                {canRecordTrip && <button type="button" onClick={() => { setError(''); setAmountModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiDollarSign /> {formatCurrency(totalExpense)}</button>}
-                <button type="button" onClick={() => void load()} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiRefreshCcw /> Refresh</button>
-                {canRecordTrip && <button type="button" onClick={() => { setError(''); setWastageModalOpen(true); }} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-white/10 px-3 text-xs font-semibold transition hover:bg-white/20"><FiTrash2 /> Wastage</button>}
-              </div>
+
+          <div className="hidden h-10 w-px bg-iceblue-100 lg:block" />
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-navy-800/45">Bars Sold / Taken</p>
+              <span className="shrink-0 rounded-full bg-iceblue-50 px-2 py-0.5 text-[10px] font-bold text-iceblue-700">{progress}% sold</span>
             </div>
-            <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/20"><div className="h-full rounded-full bg-cyan-100 transition-all" style={{ width: `${progress}%` }} /></div>
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold">
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Returned {formatBarQuantity(data?.todayReturned || 0) || 0}</span>
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Wastage {formatBarQuantity(data?.todayWastage || 0) || 0}</span>
-              <span className="rounded-full bg-white/10 px-2.5 py-1">Remaining {formatBarQuantity(Math.max(0, Number(tripClosing?.remaining || 0))) || 0}</span>
+            <p className="font-display text-2xl font-black leading-tight text-navy-900 sm:text-3xl">{formatBarQuantity(barsSold) || 0}<span className="text-navy-800/30"> / {formatBarQuantity(barsTaken) || 0}</span></p>
+            <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-iceblue-50"><div className="h-full rounded-full bg-gradient-to-r from-iceblue-400 to-navy-900 transition-all" style={{ width: `${progress}%` }} /></div>
+          </div>
+
+          <div className="hidden h-10 w-px bg-iceblue-100 lg:block" />
+
+          <div className="flex shrink-0 items-center justify-between gap-2 lg:flex-col lg:items-end lg:gap-1.5">
+            <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${awaitingAdminApproval ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${awaitingAdminApproval ? 'bg-amber-500' : 'bg-emerald-500'}`} />{truckOffline ? 'Waiting for Bars' : awaitingAdminApproval ? 'Awaiting Admin' : 'Online'}</span>
+            <button type="button" onClick={() => void load()} className="inline-flex h-8 items-center gap-1.5 rounded-full bg-navy-900 px-3.5 text-[11px] font-bold text-white transition hover:bg-iceblue-700"><FiRefreshCcw /> Refresh</button>
+          </div>
+        </div>
+
+        <div className="mx-3.5 h-px bg-iceblue-100 sm:mx-4 lg:mx-5" />
+
+        <div className="p-3.5 sm:p-4 lg:p-5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <button
+              type="button"
+              onClick={() => { if (canRecordTrip) { setError(''); setAmountModalOpen(true); } }}
+              disabled={!canRecordTrip}
+              className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2 text-left transition hover:border-iceblue-200 hover:bg-iceblue-50 disabled:cursor-default disabled:hover:border-iceblue-100 disabled:hover:bg-iceblue-50/50"
+            >
+              <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-navy-800/45"><FiDollarSign /> Amount</p>
+              <p className="mt-0.5 truncate font-display text-base font-bold text-navy-900">{formatCurrency(totalExpense)}</p>
+            </button>
+            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Returned</p>
+              <p className="mt-0.5 font-display text-base font-bold text-navy-900">{formatBarQuantity(data?.todayReturned || 0) || 0}</p>
+            </div>
+            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Wastage</p>
+              <p className="mt-0.5 font-display text-base font-bold text-navy-900">{formatBarQuantity(data?.todayWastage || 0) || 0}</p>
+            </div>
+            <div className="min-w-0 rounded-xl border border-cyan-100 bg-cyan-50/70 px-3 py-2">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-cyan-700/70">Remaining</p>
+              <p className="mt-0.5 font-display text-base font-bold text-cyan-800">{formatBarQuantity(Math.max(0, Number(tripClosing?.remaining || 0))) || 0}</p>
             </div>
           </div>
+
+          {canRecordTrip && (
+            <button
+              type="button"
+              onClick={() => { setError(''); setWastageModalOpen(true); }}
+              className="mt-2 inline-flex h-8 items-center gap-1.5 rounded-full border border-red-100 bg-red-50 px-3.5 text-[11px] font-semibold text-red-600 transition hover:bg-red-100"
+            >
+              <FiTrash2 /> Add Wastage
+            </button>
+          )}
         </div>
       </section>
 
@@ -708,35 +743,32 @@ export default function TruckDashboardPage() {
         </div>
       </Modal>}
 
-      {tripClosing?.driverClosed && (
-        <section className={`rounded-[2rem] border px-5 py-10 text-center shadow-sm sm:px-8 sm:py-14 ${truckOffline ? 'border-iceblue-200 bg-[linear-gradient(135deg,#f0f9ff,#ecfeff)]' : 'border-amber-200 bg-[linear-gradient(135deg,#fffbeb,#e0f2fe)]'}`}>
-          <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-3xl text-3xl ${truckOffline ? 'bg-iceblue-100 text-iceblue-700' : 'bg-amber-100 text-amber-600'}`}>
-            {truckOffline ? <FiPackage /> : <FiClock />}
+      {tripClosing?.driverClosed && !truckOffline && (
+        <section className="rounded-[2rem] border border-amber-200 bg-[linear-gradient(135deg,#fffbeb,#e0f2fe)] px-5 py-10 text-center shadow-sm sm:px-8 sm:py-14">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-amber-100 text-3xl text-amber-600">
+            <FiClock />
           </div>
           <h2 className="mt-5 font-display text-2xl font-bold text-navy-900 sm:text-3xl">
-            {truckOffline ? 'Online — waiting for Admin to assign bars' : 'Closing submitted — waiting for Admin'}
+            Closing submitted — waiting for Admin
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-sm leading-6 text-navy-800/65 sm:text-base">
-            {truckOffline
-              ? 'The previous trip is complete. This truck is Online, and a new trip starts automatically when Admin assigns ice bars.'
-              : 'Remaining bars were recorded as returns. Sales and entries are locked, but the truck stays online until the admin verifies and accepts the closing.'}
+            Remaining bars were recorded as returns. Sales and entries are locked, but the truck stays online until the admin verifies and accepts the closing.
           </p>
           <button type="button" onClick={() => void load()} className="btn-secondary mx-auto mt-5 inline-flex items-center justify-center gap-2">
-            <FiRefreshCcw /> {awaitingAdminApproval ? 'Check Approval Status' : 'Check for Assigned Bars'}
+            <FiRefreshCcw /> Check Approval Status
           </button>
-          {truckOffline && <p className="mt-3 text-xs font-medium text-navy-800/45">This page also checks automatically every 10 seconds.</p>}
         </section>
       )}
 
         <>
           {/* Section tabs — same iceblue/navy palette, split into focused screens instead of one long scroll */}
-          <div className="flex gap-1.5 rounded-2xl bg-iceblue-50/70 p-1.5">
+          <div className="flex w-fit max-w-full gap-1.5 overflow-x-auto rounded-2xl bg-iceblue-50/70 p-1.5">
             {DASHBOARD_TABS.map(({ key, label, icon: TabIcon }) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => setActiveTab(key)}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${
+                className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
                   activeTab === key ? 'bg-navy-900 text-white shadow-sm' : 'text-navy-800/60 hover:bg-white hover:text-navy-900'
                 }`}
               >
@@ -751,45 +783,51 @@ export default function TruckDashboardPage() {
               totalExpense={totalExpense}
               truckOffline={truckOffline}
               recentSales={saleRows.slice(0, 5)}
+              onPay={openPayment}
             />
-          )}
-
-          {activeTab === 'sales' && (
-            <div className={`grid gap-5 ${canRecordTrip ? 'xl:grid-cols-[minmax(380px,0.9fr)_minmax(0,1.1fr)]' : 'grid-cols-1'} xl:items-start`}>
-              {canRecordTrip && <section className="card p-3 transition-shadow hover:shadow-md sm:p-5 xl:sticky xl:top-24">
-                <SaleForm
-                  key={saleFormKey}
-                  fixedTruckId={user?.truck || ''}
-                  onSaved={async () => {
-                    await load();
-                    setSaleFormKey((key) => key + 1);
-                  }}
-                />
-              </section>}
-
-              {!canRecordTrip && (
-                <p className="rounded-2xl border border-iceblue-100 bg-iceblue-50 px-4 py-3 text-sm font-medium text-navy-800/65">
-                  Today&apos;s report is read-only. Admin must assign ice bars to start a new trip and enable sales.
-                </p>
-              )}
-
-              <SalesTable title="Today's Sales" rows={saleRows} onPay={openPayment} empty="No sales recorded today." />
-            </div>
           )}
 
           {activeTab === 'trip' && (
-            <TripTab
-              tripClosing={tripClosing}
-              remainingBars={remainingBars}
-              truckOffline={truckOffline}
-              awaitingAdminApproval={awaitingAdminApproval}
-              trend={trend}
-              trendLoading={trendLoading}
-              trendError={trendError}
-              onRetryTrend={() => void loadTrend()}
-            />
+            <div className="space-y-5">
+              <SalesTable title="Today's Sales" rows={saleRows} onPay={openPayment} empty="No sales recorded today." />
+              <TripTab
+                tripClosing={tripClosing}
+                remainingBars={remainingBars}
+                truckOffline={truckOffline}
+                awaitingAdminApproval={awaitingAdminApproval}
+                trend={trend}
+                trendLoading={trendLoading}
+                trendError={trendError}
+                onRetryTrend={() => void loadTrend()}
+              />
+            </div>
           )}
         </>
+
+      {canRecordTrip && (
+        <button
+          type="button"
+          onClick={() => setSaleModalOpen(true)}
+          className="fixed bottom-5 right-5 z-40 inline-flex h-12 items-center gap-2 rounded-full bg-navy-900 px-5 text-sm font-bold text-white shadow-[0_14px_35px_rgba(7,27,43,0.3)] transition hover:-translate-y-0.5 hover:bg-iceblue-700 sm:bottom-7 sm:right-7"
+          aria-label="Add sale"
+        >
+          <FiPlus className="text-lg" /> Sales
+        </button>
+      )}
+
+      {saleModalOpen && (
+        <Modal title="Add Sale" onClose={() => setSaleModalOpen(false)}>
+          <SaleForm
+            key={saleFormKey}
+            fixedTruckId={user?.truck || ''}
+            onSaved={async () => {
+              await load();
+              setSaleFormKey((key) => key + 1);
+              setSaleModalOpen(false);
+            }}
+          />
+        </Modal>
+      )}
 
       {canRecordTrip && paymentTarget && (
         <Modal title={`Update Payment: ${getCustomerName(paymentTarget)}`} onClose={() => setPaymentTarget(null)}>
@@ -964,19 +1002,22 @@ function TableCard({ title, icon: Icon, count, empty, hasRows, children }: { tit
 function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale: any; name: string; bar: number }[]; onPay: (sale: any) => void; empty: string }) {
   const totalBars = rows.reduce((sum, row) => sum + row.bar, 0);
   const totalAmount = rows.reduce((sum, row) => sum + Number(row.sale.totalAmount || 0), 0);
+  const totalPaid = rows.reduce((sum, row) => sum + Number(row.sale.paidAmount || 0), 0);
+  const totalBalance = rows.reduce((sum, row) => sum + Number(row.sale.balanceAmount || 0), 0);
 
   return (
     <TableCard title={title} icon={FiShoppingCart} count={rows.length} empty={empty} hasRows={rows.length > 0}>
-      {/* Excel-style ledger grid: bordered cells + a totals footer, like a printed sales sheet */}
-      <table className="w-full min-w-[560px] table-fixed border-collapse text-xs">
+      <table className="w-full min-w-[820px] table-fixed border-collapse text-[11px] sm:text-xs lg:text-sm">
         <thead className="bg-slate-100 text-navy-900">
           <tr>
-            <th className="w-[8%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-            <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Customer Name</th>
-            <th className="w-[15%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Time</th>
-            <th className="w-[13%] border border-slate-300 px-2 py-3 text-right text-[10px] font-bold uppercase leading-tight">Bar</th>
-            <th className="w-[20%] border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Amount</th>
-            <th className="w-[14%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+            <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase">#</th>
+            <th className="w-[15%] border border-slate-300 px-2 py-3 text-left text-[10px] font-bold uppercase">Date</th>
+            <th className="w-[22%] border border-slate-300 px-2 py-3 text-left text-[10px] font-bold uppercase">Customer Name</th>
+            <th className="w-[9%] border border-slate-300 px-2 py-3 text-right text-[10px] font-bold uppercase">Bars</th>
+            <th className="w-[14%] border border-slate-300 px-2 py-3 text-right text-[10px] font-bold uppercase">Total Amount</th>
+            <th className="w-[12%] border border-slate-300 px-2 py-3 text-right text-[10px] font-bold uppercase">Paid</th>
+            <th className="w-[12%] border border-slate-300 px-2 py-3 text-right text-[10px] font-bold uppercase">Balance</th>
+            <th className="w-[11%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -984,15 +1025,14 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
             const balance = Number(sale.balanceAmount || 0);
             return (
               <tr key={sale._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                <td className="border border-slate-300 px-3 py-3 font-semibold text-navy-900">{name}</td>
-                <td className="border border-slate-300 px-2 py-3 text-center text-navy-800/60">{formatTime(sale.createdAt || sale.date)}</td>
-                <td className="border border-slate-300 px-2 py-3 text-right text-navy-900">{formatBarQuantity(bar)}</td>
-                <td className="border border-slate-300 px-3 py-3 text-right">
-                  <div className="font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</div>
-                  {balance > 0 && <div className="text-[10px] font-semibold text-red-600">Due {formatCurrency(balance)}</div>}
-                </td>
-                <td className="border border-slate-300 px-2 py-3 text-center">
+                <td className="border border-slate-300 px-1 py-2.5 text-center font-medium text-navy-900">{index + 1}</td>
+                <td className="border border-slate-300 px-2 py-2.5"><p className="font-medium text-navy-900">{formatDate(sale.date)}</p><p className="mt-0.5 text-[10px] text-navy-800/45">{formatTime(sale.createdAt || sale.date)}</p></td>
+                <td className="break-words border border-slate-300 px-2 py-2.5 font-semibold text-navy-900">{name}</td>
+                <td className="border border-slate-300 px-2 py-2.5 text-right text-navy-900">{formatBarQuantity(bar)}</td>
+                <td className="border border-slate-300 px-2 py-2.5 text-right font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</td>
+                <td className="border border-slate-300 px-2 py-2.5 text-right font-medium text-emerald-700">{formatCurrency(sale.paidAmount)}</td>
+                <td className={`border border-slate-300 px-2 py-2.5 text-right font-semibold ${balance > 0 ? 'text-red-600' : 'text-navy-800/55'}`}>{formatCurrency(balance)}</td>
+                <td className="border border-slate-300 px-1 py-2.5 text-center">
                   {balance > 0 ? (
                     <button
                       type="button"
@@ -1011,9 +1051,11 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
         </tbody>
         <tfoot>
           <tr className="bg-slate-100 font-bold text-navy-900">
-            <td className="border border-slate-300 px-2 py-3 text-center" colSpan={3}>Total</td>
+            <td className="border border-slate-300 px-2 py-3 text-right" colSpan={3}>TOTAL</td>
             <td className="border border-slate-300 px-2 py-3 text-right">{formatBarQuantity(totalBars)}</td>
-            <td className="border border-slate-300 px-3 py-3 text-right">{formatCurrency(totalAmount)}</td>
+            <td className="border border-slate-300 px-2 py-3 text-right">{formatCurrency(totalAmount)}</td>
+            <td className="border border-slate-300 px-2 py-3 text-right text-emerald-700">{formatCurrency(totalPaid)}</td>
+            <td className={`border border-slate-300 px-2 py-3 text-right ${totalBalance > 0 ? 'text-red-600' : ''}`}>{formatCurrency(totalBalance)}</td>
             <td className="border border-slate-300 px-2 py-3"></td>
           </tr>
         </tfoot>
@@ -1063,11 +1105,13 @@ function OverviewTab({
   totalExpense,
   truckOffline,
   recentSales,
+  onPay,
 }: {
   data: any;
   totalExpense: number;
   truckOffline: boolean;
   recentSales: { sale: any; name: string; bar: number }[];
+  onPay: (sale: any) => void;
 }) {
   const balanceDue = Number(data?.todayBalance || 0);
   const stats: Array<{ label: string; value: string; icon: React.ComponentType<{ className?: string }>; tone: 'blue' | 'emerald' | 'amber' | 'red' | 'violet' | 'cyan'; danger?: boolean }> = [
@@ -1087,22 +1131,7 @@ function OverviewTab({
         ))}
       </div>
 
-      <section className="card p-4 sm:p-5">
-        <h2 className="flex items-center gap-2 font-display text-base font-semibold text-navy-900">
-          <FiShoppingCart className="text-iceblue-500" /> Latest Sales
-        </h2>
-        {recentSales.length === 0 ? (
-          <p className="mt-3 rounded-2xl bg-iceblue-50/60 px-4 py-8 text-center text-sm text-navy-800/50">No sales recorded today yet.</p>
-        ) : (
-          <div className="mt-3 overflow-x-auto rounded-xl border-2 border-slate-400 bg-white">
-            <table className="w-full min-w-[560px] table-fixed border-collapse text-xs text-black">
-              <thead className="bg-slate-100"><tr><th className="w-[9%] border border-slate-400 px-2 py-2.5 text-center font-bold uppercase">S.No</th><th className="w-[18%] border border-slate-400 px-3 py-2.5 text-left font-bold uppercase">Time</th><th className="w-[31%] border border-slate-400 px-3 py-2.5 text-left font-bold uppercase">Customer</th><th className="w-[17%] border border-slate-400 px-3 py-2.5 text-right font-bold uppercase">Bars</th><th className="w-[25%] border border-slate-400 px-3 py-2.5 text-right font-bold uppercase">Amount</th></tr></thead>
-              <tbody>{recentSales.map(({ sale, name, bar }, index) => <tr key={sale._id} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-400 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-400 px-3 py-2.5">{formatTime(sale.createdAt || sale.date)}</td><td className="border border-slate-400 px-3 py-2.5 font-semibold">{name}</td><td className="border border-slate-400 px-3 py-2.5 text-right font-semibold">{formatBarQuantity(bar)}</td><td className="border border-slate-400 px-3 py-2.5 text-right font-semibold">{formatCurrency(sale.totalAmount)}</td></tr>)}</tbody>
-              <tfoot className="bg-slate-100 font-bold"><tr><td colSpan={3} className="border border-slate-400 px-3 py-2.5 text-right">TOTAL</td><td className="border border-slate-400 px-3 py-2.5 text-right">{formatBarQuantity(recentSales.reduce((sum, row) => sum + row.bar, 0))}</td><td className="border border-slate-400 px-3 py-2.5 text-right">{formatCurrency(recentSales.reduce((sum, row) => sum + Number(row.sale.totalAmount || 0), 0))}</td></tr></tfoot>
-            </table>
-          </div>
-        )}
-      </section>
+      <SalesTable title="Latest Sales" rows={recentSales} onPay={onPay} empty="No sales recorded today yet." />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import Cookies from 'js-cookie';
+import { mutationToast, showToast } from './toast';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api',
@@ -24,8 +25,17 @@ api.interceptors.request.use((config) => {
 });
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    const notification = mutationToast(String(res.config.url || ''), String(res.config.method || 'GET'));
+    if (notification) showToast(notification.message, notification.tone);
+    return res;
+  },
   (err) => {
+    const notification = mutationToast(String(err?.config?.url || ''), String(err?.config?.method || 'GET'));
+    if (notification) {
+      const message = err?.response?.data?.message || 'Action failed. Please try again.';
+      showToast(message, 'danger');
+    }
     if (err?.response?.status === 401 && typeof window !== 'undefined') {
       Cookies.remove('tii_user');
       if (!window.location.pathname.startsWith('/login')) {
