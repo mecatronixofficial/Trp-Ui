@@ -16,6 +16,9 @@ import api, { COST_TYPES, formatBarQuantity, formatCurrency, getItemBarUsed, tod
 import { selectedBranchHeaders } from '../../../lib/branch-fetch';
 import Modal from '../../../components/Modal';
 import SaleForm from '../../../components/SaleForm';
+import { useAuth } from '../../../context/AuthContext';
+
+type BranchOption = { _id: string; name: string; code: string; isActive?: boolean };
 
 const expenseName = (record: any) => COST_TYPES.find((type) => type.value === record.costType)?.label || record.categoryName || record.description || record.costType || 'Expense';
 const indiaDateKey = (value: string | Date) => new Intl.DateTimeFormat('en-CA', {
@@ -23,10 +26,15 @@ const indiaDateKey = (value: string | Date) => new Intl.DateTimeFormat('en-CA', 
 }).format(new Date(value));
 
 export default function AdminEntryPage() {
+  const { user, loading: authLoading } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [branches, setBranches] = useState<BranchOption[]>([]);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [salesData, setSalesData] = useState<any[]>([]);
   const [expensesData, setExpensesData] = useState<any[]>([]);
   const [productionData, setProductionData] = useState<any[]>([]);
   const [stockData, setStockData] = useState<any[]>([]);
+  const [closingStock, setClosingStock] = useState<number | null>(null);
   const [trucks, setTrucks] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<Record<string, number>>({});
   const [saleModalOpen, setSaleModalOpen] = useState(false);
@@ -40,15 +48,33 @@ export default function AdminEntryPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (authLoading) return;
+    const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
+    setSelectedBranch(isSuperAdmin ? storedBranch : user?.branch || '');
+    if (isSuperAdmin) {
+      api.get('/branches')
+        .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
+        .catch(() => setBranches([]));
+    }
+  }, [authLoading, isSuperAdmin, user?.branch]);
+
+  const changeBranch = (branch: string) => {
+    if (branch) window.localStorage.setItem('tii_selected_branch', branch);
+    else window.localStorage.removeItem('tii_selected_branch');
+    window.location.reload();
+  };
+
+  useEffect(() => {
     const load = async () => {
       setLoading(true);
       setError('');
       const today = todayISO();
       try {
-        const [salesResult, productionResult, stockResult, truckResult, assignmentResult, expenseResult] = await Promise.all([
+        const [salesResult, productionResult, stockResult, closingResult, truckResult, assignmentResult, expenseResult] = await Promise.all([
           api.get('/sales', { params: { from: `${today}T00:00:00.000+05:30`, to: `${today}T23:59:59.999+05:30` } }),
           api.get('/production'),
           api.get('/stock-entries'),
+          api.get('/daily-closing', { params: { date: today } }),
           api.get('/trucks'),
           api.get('/truck-assignments', { params: { date: today } }),
           fetch('/api/expenses?today=true', { cache: 'no-store', headers: selectedBranchHeaders() }).then(async (response) => {
@@ -60,6 +86,10 @@ export default function AdminEntryPage() {
         setSalesData(Array.isArray(salesResult.data) ? salesResult.data : []);
         setProductionData((Array.isArray(productionResult.data) ? productionResult.data : []).filter((record: any) => record.date && indiaDateKey(record.date) === today));
         setStockData((Array.isArray(stockResult.data) ? stockResult.data : []).filter((record: any) => record.date && indiaDateKey(record.date) === today));
+        const closedRows = (Array.isArray(closingResult.data) ? closingResult.data : []).filter((record: any) => record.status === 'closed');
+        setClosingStock(closedRows.length
+          ? closedRows.reduce((sum: number, record: any) => sum + Number(record.returnedTotal ?? record.returned ?? 0), 0)
+          : null);
         const truckRows = Array.isArray(truckResult.data) ? truckResult.data : [];
         setTrucks(truckRows);
         setSelectedTruck((current) => current || truckRows.find((truck: any) => truck.status !== false)?._id || '');
@@ -115,25 +145,44 @@ export default function AdminEntryPage() {
   const sortedProduction = [...productionData].sort((a, b) => String(a.createdAt || a._id).localeCompare(String(b.createdAt || b._id)));
   const openBox = sortedProduction[0]?.boxOpen;
   const closeBox = sortedProduction[sortedProduction.length - 1]?.boxClose;
-  const totalStock = stockData.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const totalStock = closingStock ?? stockData.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const overallView = isSuperAdmin && !selectedBranch;
 
   if (loading) return <div className="card py-16 text-center text-sm text-navy-800/50">Loading today&apos;s entries...</div>;
 
   return (
     <div className="space-y-5 pb-8">
-      <section className="overflow-hidden rounded-2xl bg-gradient-to-br from-[#071824] via-sky-950 to-iceblue-700 text-white shadow-lg shadow-navy-900/15">
+      {isSuperAdmin && (
+        <section className="flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Entry view</p>
+              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p>
+              {overallView && <p className="mt-0.5 text-xs text-navy-800/45">Combined entries are read-only. Select a branch to add a sale or assign a truck.</p>}
+            </div>
+          </div>
+          <select className="input-field h-10 sm:max-w-xs" aria-label="Change entry branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
+            <option value="">Overall — all branches</option>
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+          </select>
+        </section>
+      )}
+
+      <section className="overflow-hidden rounded-2xl bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 text-white shadow-sm">
         <div className="flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-iceblue-200">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-100">
               <FiGitBranch /> Entry report
             </div>
             <h1 className="mt-1 font-display text-xl font-bold sm:text-2xl">Today&apos;s Business Summary</h1>
             <p className="mt-1 text-xs text-white/70 sm:text-sm">Sales, expenses, production and final collection balance entries.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => setSaleModalOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50"><FiPlus /> Add Sale</button>
-            <button type="button" onClick={() => { setActionError(''); setAssignModalOpen(true); }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/20"><FiTruck /> Assign Truck</button>
-            <span className="inline-flex h-9 items-center rounded-lg bg-emerald-400/15 px-3 text-xs font-bold text-emerald-100 ring-1 ring-emerald-300/25">Today</span>
+            <button type="button" disabled={overallView} title={overallView ? 'Select a branch first' : undefined} onClick={() => setSaleModalOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-bold text-iceblue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"><FiPlus /> Add Sale</button>
+            <button type="button" disabled={overallView} title={overallView ? 'Select a branch first' : undefined} onClick={() => { setActionError(''); setAssignModalOpen(true); }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"><FiTruck /> Assign Truck</button>
+            <span className="inline-flex h-9 items-center rounded-lg bg-white/15 px-3 text-xs font-bold text-white ring-1 ring-white/20">Today</span>
           </div>
         </div>
       </section>
@@ -156,7 +205,7 @@ export default function AdminEntryPage() {
                 {trucks.filter((truck) => truck.status !== false).map((truck) => <option key={truck._id} value={truck._id}>{truck.truckName}{truck.truckNumber ? ` (${truck.truckNumber})` : ''}</option>)}
               </select>
             </div>
-            {selectedTruck && <div className="rounded-xl bg-iceblue-50 px-4 py-3 text-sm"><span className="text-navy-800/55">Already assigned today</span><strong className="float-right text-navy-900">{formatBarQuantity(assignments[selectedTruck] || 0) || '0'} bars</strong></div>}
+            {selectedTruck && <div className="rounded-xl bg-blue-50 px-4 py-3 text-sm"><span className="text-navy-800/55">Already assigned today</span><strong className="float-right text-navy-900">{formatBarQuantity(assignments[selectedTruck] || 0) || '0'} bars</strong></div>}
             <div>
               <label className="label-text">Bars to Add</label>
               <input type="number" min={0.25} step={0.25} required className="input-field h-12" placeholder="0.25, 0.5, 1..." value={assignQuantity} onChange={(event) => setAssignQuantity(event.target.value)} />
@@ -169,128 +218,126 @@ export default function AdminEntryPage() {
 
       <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
         <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:row-span-2">
-          <div className="flex items-center justify-between gap-3 border-b border-sky-100 bg-sky-50/60 px-4 py-4 sm:px-5">
+          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5 sm:px-5">
             <div className="flex items-center gap-3">
-              <span className="grid h-10 w-10 place-items-center rounded-xl bg-sky-100 text-sky-700"><FiShoppingCart /></span>
+              <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-50 text-iceblue-700"><FiShoppingCart /></span>
               <div>
-                <h2 className="font-display text-lg font-bold text-navy-900">Today&apos;s Sales Report</h2>
-                <p className="mt-0.5 text-xs text-navy-800/45">Customer-wise sales recorded today</p>
+                <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Sales Report</h2>
+                <p className="text-xs text-slate-400">Customer-wise sales recorded today</p>
               </div>
             </div>
-            <span className="rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-sky-700 ring-1 ring-sky-100">{sales.length} sales</span>
+            <span className="text-xs font-semibold text-slate-400">{sales.length} sales</span>
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[520px] border-collapse text-sm">
-              <thead className="bg-slate-100 text-[11px] font-bold uppercase tracking-wide text-navy-900">
-                <tr>
-                  <th className="w-14 border border-slate-300 px-3 py-3 text-center">#</th>
-                  <th className="border border-slate-300 px-3 py-3 text-left">Customer Name</th>
-                  <th className="border border-slate-300 px-3 py-3 text-right">Bars</th>
-                  <th className="border border-slate-300 px-3 py-3 text-right">Amount</th>
+            <table className="w-full min-w-[480px] text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                  <th className="w-12 px-4 py-2.5 text-center">#</th>
+                  <th className="px-4 py-2.5 text-left">Customer Name</th>
+                  <th className="px-4 py-2.5 text-right">Bars</th>
+                  <th className="px-4 py-2.5 text-right">Amount</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {sales.map((sale, index) => (
-                  <tr key={sale.id} className="even:bg-slate-50/70 hover:bg-sky-50/60">
-                    <td className="border border-slate-200 px-3 py-3 text-center text-slate-400">{index + 1}</td>
-                    <td className="border border-slate-200 px-3 py-3 font-semibold text-navy-900">{sale.customer}</td>
-                    <td className="border border-slate-200 px-3 py-3 text-right font-bold">{sale.bars}</td>
-                    <td className="border border-slate-200 px-3 py-3 text-right font-bold text-emerald-700">{formatCurrency(sale.amount)}</td>
+                  <tr key={sale.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 text-center text-slate-400">{index + 1}</td>
+                    <td className="px-4 py-3 font-medium text-navy-900">{sale.customer}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-navy-900">{sale.bars}</td>
+                    <td className="px-4 py-3 text-right font-semibold text-emerald-600">{formatCurrency(sale.amount)}</td>
                   </tr>
                 ))}
-                {sales.length === 0 && <tr><td colSpan={4} className="border border-slate-200 px-4 py-10 text-center text-navy-800/45">No sales recorded today.</td></tr>}
+                {sales.length === 0 && <tr><td colSpan={4} className="px-4 py-10 text-center text-slate-400">No sales recorded today.</td></tr>}
               </tbody>
               <tfoot>
-                <tr className="bg-navy-900 font-bold text-white">
-                  <td colSpan={2} className="border border-navy-800 px-3 py-3 text-right text-xs uppercase tracking-wide">Today Total</td>
-                  <td className="border border-navy-800 px-3 py-3 text-right">{totalBars}</td>
-                  <td className="border border-navy-800 px-3 py-3 text-right">{formatCurrency(totalSales)}</td>
+                <tr className="border-t border-slate-200 bg-slate-50 font-bold">
+                  <td colSpan={2} className="px-4 py-3 text-right text-xs uppercase tracking-wide text-slate-500">Today Total</td>
+                  <td className="px-4 py-3 text-right text-navy-900">{totalBars}</td>
+                  <td className="px-4 py-3 text-right bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{formatCurrency(totalSales)}</td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </article>
 
-        <article className="overflow-hidden rounded-2xl border border-red-100 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-red-100 bg-red-50/60 px-4 py-4">
-            <div className="flex items-center gap-3">
-              <span className="grid h-10 w-10 place-items-center rounded-xl bg-red-100 text-red-600"><FiDollarSign /></span>
-              <div>
-                <h2 className="font-display text-lg font-bold text-navy-900">Today&apos;s Expense Report</h2>
-                <p className="mt-0.5 text-xs text-navy-800/45">Expense name and amount</p>
-              </div>
+        <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3.5">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-red-50 text-red-600"><FiDollarSign /></span>
+            <div>
+              <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Expense Report</h2>
+              <p className="text-xs text-slate-400">Expense name and amount</p>
             </div>
           </div>
           <div className="divide-y divide-slate-100 px-4">
             {expenses.map((expense) => (
               <div key={expense.id} className="flex items-center justify-between gap-4 py-3 text-sm">
-                <span className="font-semibold text-navy-900">{expense.name}</span>
-                <span className="font-bold text-red-600">{formatCurrency(expense.amount)}</span>
+                <span className="font-medium text-navy-900">{expense.name}</span>
+                <span className="font-semibold text-red-600">{formatCurrency(expense.amount)}</span>
               </div>
             ))}
-            {expenses.length === 0 && <p className="py-8 text-center text-sm text-navy-800/45">No expenses recorded today.</p>}
+            {expenses.length === 0 && <p className="py-8 text-center text-sm text-slate-400">No expenses recorded today.</p>}
           </div>
-          <div className="flex items-center justify-between bg-red-50 px-4 py-3 text-sm font-bold">
-            <span className="text-red-700">Total Expenses</span>
-            <span className="text-red-700">{formatCurrency(totalExpenses)}</span>
+          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm font-bold">
+            <span className="text-navy-900">Total Expenses</span>
+            <span className="text-red-600">{formatCurrency(totalExpenses)}</span>
           </div>
         </article>
 
-        <article className="overflow-hidden rounded-2xl border border-cyan-100 bg-white shadow-sm">
-          <div className="flex items-center gap-3 border-b border-cyan-100 bg-cyan-50/60 px-4 py-4">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-cyan-100 text-cyan-700"><FiBox /></span>
+        <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3.5">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-50 text-iceblue-700"><FiBox /></span>
             <div>
-              <h2 className="font-display text-lg font-bold text-navy-900">Today&apos;s Production</h2>
-              <p className="mt-0.5 text-xs text-navy-800/45">Current box-counter report</p>
+              <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Production</h2>
+              <p className="text-xs text-slate-400">Current box-counter report</p>
             </div>
           </div>
           <div className={`grid gap-3 p-4 ${totalStock > 0 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'}`}>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Open Box</p>
-              <p className="mt-2 font-display text-3xl font-bold text-navy-900">{openBox ?? '-'}</p>
+            <div className="rounded-xl bg-slate-50 p-4 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Open Box</p>
+              <p className="mt-2 font-display text-2xl font-bold text-navy-900">{openBox ?? '-'}</p>
             </div>
-            <div className="rounded-xl border border-cyan-100 bg-cyan-50 p-4 text-center">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-cyan-700/70">Close Box</p>
-              <p className="mt-2 font-display text-3xl font-bold text-cyan-700">{closeBox ?? '-'}</p>
+            <div className="rounded-xl bg-slate-50 p-4 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Close Box</p>
+              <p className="mt-2 font-display text-2xl font-bold text-navy-900">{closeBox ?? '-'}</p>
             </div>
             {totalStock > 0 && (
-              <div className="col-span-2 rounded-xl border border-emerald-100 bg-emerald-50 p-4 text-center sm:col-span-1">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700/70">Stock</p>
-                <p className="mt-2 font-display text-3xl font-bold text-emerald-700">{formatBarQuantity(totalStock) || '0'}</p>
-                <p className="mt-1 text-[10px] font-semibold uppercase text-emerald-700/55">bars</p>
+              <div className="col-span-2 rounded-xl bg-slate-50 p-4 text-center sm:col-span-1">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Stock</p>
+                <p className="mt-2 font-display text-2xl font-bold bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{formatBarQuantity(totalStock) || '0'}</p>
+                <p className="mt-1 text-[10px] font-medium uppercase text-slate-400">bars</p>
               </div>
             )}
           </div>
         </article>
       </section>
 
-      <section className="overflow-hidden rounded-3xl border border-emerald-200 bg-white shadow-lg shadow-emerald-900/5">
-        <div className="grid gap-px bg-slate-200 sm:grid-cols-3">
-          <div className="bg-white p-5">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Today Total Sales</p>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+          <div className="p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Today Total Sales</p>
             <p className="mt-2 font-display text-2xl font-bold text-navy-900">{formatCurrency(totalSales)}</p>
           </div>
-          <div className="bg-emerald-50/50 p-5">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700/70">Collection Amount</p>
-            <p className="mt-2 font-display text-2xl font-bold text-emerald-700">{formatCurrency(collectionAmount)}</p>
+          <div className="p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Collection Amount</p>
+            <p className="mt-2 font-display text-2xl font-bold text-emerald-600">{formatCurrency(collectionAmount)}</p>
           </div>
-          <div className="bg-red-50/50 p-5">
-            <p className="text-[10px] font-bold uppercase tracking-wide text-red-600/70">Total Expenses</p>
+          <div className="p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Total Expenses</p>
             <p className="mt-2 font-display text-2xl font-bold text-red-600">− {formatCurrency(totalExpenses)}</p>
           </div>
         </div>
-        <div className="flex flex-col gap-3 bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-5 text-white sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 border-t border-slate-100 bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 px-5 py-5 text-white sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <span className="grid h-11 w-11 place-items-center rounded-xl bg-white/15 text-xl"><FiTrendingUp /></span>
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/15 text-lg"><FiTrendingUp /></span>
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-emerald-100">Final Total</p>
-              <p className="mt-1 text-sm text-white/75">Collection Amount − Total Expenses</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-100">Final Total</p>
+              <p className="mt-1 text-xs text-blue-100/80">Collection Amount − Total Expenses</p>
             </div>
           </div>
           <div className="text-left sm:text-right">
-            <p className="font-display text-3xl font-bold">{formatCurrency(finalTotal)}</p>
-            <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-emerald-100 sm:justify-end"><FiCheckCircle /> Today&apos;s net collection</p>
+            <p className="font-display text-2xl font-bold">{formatCurrency(finalTotal)}</p>
+            <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-100 sm:justify-end"><FiCheckCircle /> Today&apos;s net collection</p>
           </div>
         </div>
       </section>

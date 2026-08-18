@@ -17,7 +17,8 @@ const titles: Record<string, string> = {
   '/admin/expenses': 'Expenses',
   '/admin/reports': 'Reports',
   '/admin/sample': 'Entry',
-  '/admin/settings': 'Settings',
+  '/admin/settings/profile': 'Admin Profile',
+  '/admin/settings/company': 'Company Profile',
 };
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {

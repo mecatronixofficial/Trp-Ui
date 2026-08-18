@@ -4,10 +4,10 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   FiGrid, FiTruck, FiUsers, FiBox, FiShoppingCart,
-  FiBarChart2, FiSettings, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign, FiMonitor,
+  FiBarChart2, FiLogOut, FiUserCheck, FiGitBranch, FiDollarSign, FiMonitor, FiShield, FiUser, FiBriefcase,
 } from 'react-icons/fi';
+import { TbSnowflake } from 'react-icons/tb';
 import { useAuth } from '../context/AuthContext';
-import BrandLogo from './BrandLogo';
 
 const links = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: FiGrid },
@@ -19,7 +19,8 @@ const links = [
   { href: '/admin/expenses', label: 'Expenses', icon: FiDollarSign },
   { href: '/admin/reports', label: 'Reports', icon: FiBarChart2 },
   { href: '/admin/sample', label: 'Entry', icon: FiMonitor },
-  { href: '/admin/settings', label: 'Settings', icon: FiSettings },
+  { href: '/admin/settings/profile', label: 'Admin Profile', icon: FiUser },
+  { href: '/admin/settings/company', label: 'Company Profile', icon: FiBriefcase },
 ];
 
 const superAdminLinks = [
@@ -32,43 +33,34 @@ const superAdminLinks = [
 export default function Sidebar() {
   const pathname = usePathname();
   const { logout, user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const userName = user?.displayName || user?.username || 'User';
   const initial = userName.charAt(0).toUpperCase();
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-[17rem] shrink-0 bg-[#071824] text-white shadow-2xl shadow-navy-900/20 md:flex md:flex-col">
-      <div className="border-b border-white/10 px-5 py-5">
-        <div className="flex items-center gap-3">
-          <div className="h-12 w-12 overflow-hidden rounded-2xl bg-white shadow-lg shadow-black/20">
-            <BrandLogo className="h-full w-full object-cover" />
-          </div>
-          <div className="min-w-0">
-            <p className="truncate font-display font-semibold leading-tight">Tiruppur Ice</p>
-            <p className="text-xs font-medium text-iceblue-200">Since 2000</p>
-          </div>
+    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col bg-gradient-to-b from-navy-900 via-sky-900 to-iceblue-700 text-white md:flex">
+      <div className="flex items-center gap-3 px-5 py-6">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/15">
+          <TbSnowflake className="text-xl" />
+        </div>
+        <div className="min-w-0">
+          <p className="truncate font-display text-base font-bold leading-tight">Tiruppur Ice</p>
+          <p className="text-xs text-iceblue-100/80">Since 2000</p>
         </div>
       </div>
 
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-5">
-        <p className="px-3 pb-3 text-[11px] font-bold uppercase tracking-[0.18em] text-iceblue-200/70">Admin Menu</p>
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
         {(user?.role === 'super_admin' ? superAdminLinks : links).map(({ href, label, icon: Icon }) => {
           const active = pathname?.startsWith(href);
           return (
             <Link
               key={href}
               href={href}
-              className={`group relative flex h-12 items-center gap-3 rounded-2xl px-3 text-sm font-semibold transition ${
-                active
-                  ? 'bg-white text-navy-900 shadow-xl shadow-black/20'
-                  : 'text-iceblue-100 hover:bg-white/10 hover:text-white'
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+                active ? 'bg-white text-iceblue-700' : 'text-iceblue-100/80 hover:bg-white/10 hover:text-white'
               }`}
             >
-              {active && <span className="absolute -left-3 top-1/2 h-8 w-1 -translate-y-1/2 rounded-r-full bg-iceblue-300" />}
-              <span className={`flex h-8 w-8 items-center justify-center rounded-xl transition ${
-                active ? 'bg-iceblue-50 text-iceblue-700' : 'bg-white/10 text-iceblue-200 group-hover:bg-white/15 group-hover:text-white'
-              }`}>
-                <Icon className="text-lg" />
-              </span>
+              <Icon className="shrink-0 text-lg" />
               <span className="truncate">{label}</span>
             </Link>
           );
@@ -76,18 +68,23 @@ export default function Sidebar() {
       </nav>
 
       <div className="border-t border-white/10 px-4 py-4">
-        <div className="mb-3 flex items-center gap-3 rounded-2xl bg-white/10 px-3 py-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white text-sm font-bold text-navy-900">
+        <div className="mb-2 flex items-center gap-3 px-1">
+          <span className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${isSuperAdmin ? 'bg-gradient-to-br from-amber-400 to-amber-600' : 'bg-white/15'}`}>
             {initial}
+            {isSuperAdmin && (
+              <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-white text-amber-600 ring-1 ring-amber-200">
+                <FiShield size={9} />
+              </span>
+            )}
           </span>
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white">{userName}</p>
-            <p className="text-xs capitalize text-iceblue-200/80">{user?.role || 'account'}</p>
+            <p className="truncate text-sm font-medium leading-tight">{userName}</p>
+            <p className={`truncate text-xs ${isSuperAdmin ? 'font-bold text-amber-200' : 'capitalize text-iceblue-100/80'}`}>{isSuperAdmin ? 'Super Admin' : (user?.role || 'account')}</p>
           </div>
         </div>
         <button
           onClick={() => void logout()}
-          className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border border-red-300/20 bg-red-500/10 text-sm font-semibold text-red-100 transition hover:bg-red-500/20"
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-xl text-sm font-medium text-iceblue-100/80 transition hover:bg-white/10 hover:text-white"
         >
           <FiLogOut /> Logout
         </button>

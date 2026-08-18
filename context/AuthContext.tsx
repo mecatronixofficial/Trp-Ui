@@ -12,6 +12,8 @@ export interface AuthUser {
   branch?: string | null;
   truck?: string | null;
   displayName?: string;
+  phoneNumber?: string | null;
+  email?: string | null;
 }
 
 interface AuthContextValue {
@@ -19,6 +21,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: (options?: { confirmedTruckClose?: boolean }) => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const indiaDateISO = () => new Intl.DateTimeFormat('en-CA', {
@@ -49,40 +52,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  const fetchProfile = async (active: () => boolean) => {
+    try {
+      const { data } = await api.get('/auth/me');
+      if (!active()) return;
+      const currentUser = {
+        id: data.id || data.userId,
+        username: data.username,
+        role: data.role,
+        truck: data.truck,
+        displayName: data.displayName,
+        phoneNumber: data.phoneNumber,
+        email: data.email,
+        branch: data.branch,
+      };
+      if (currentUser.role !== 'super_admin') {
+        window.localStorage.removeItem('tii_selected_branch');
+      }
+      setUser(currentUser);
+      Cookies.set('tii_user', JSON.stringify(currentUser), { expires: 1, sameSite: 'lax' });
+    } catch {
+      if (!active()) return;
+      Cookies.remove('tii_user');
+      setUser(null);
+    }
+  };
+
   useEffect(() => {
     let active = true;
-
-    api
-      .get('/auth/me')
-      .then(({ data }) => {
-        if (!active) return;
-        const currentUser = {
-          id: data.id || data.userId,
-          username: data.username,
-          role: data.role,
-          truck: data.truck,
-          displayName: data.displayName,
-          branch: data.branch,
-        };
-        if (currentUser.role !== 'super_admin') {
-          window.localStorage.removeItem('tii_selected_branch');
-        }
-        setUser(currentUser);
-        Cookies.set('tii_user', JSON.stringify(currentUser), { expires: 1, sameSite: 'lax' });
-      })
-      .catch(() => {
-        if (!active) return;
-        Cookies.remove('tii_user');
-        setUser(null);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-
+    fetchProfile(() => active).finally(() => {
+      if (active) setLoading(false);
+    });
     return () => {
       active = false;
     };
   }, []);
+
+  const refreshUser = () => fetchProfile(() => true);
 
   const login = async (username: string, password: string) => {
     const { data } = await api.post('/auth/login', { username, password });
@@ -151,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login');
   };
 
-  return <AuthContext.Provider value={{ user, loading, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, login, logout, refreshUser }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

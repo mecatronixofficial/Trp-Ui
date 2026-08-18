@@ -1,5 +1,22 @@
 [
   {
+    "_id": "1786807589017-8642346085e94",
+    "date": "2026-08-15T00:00:00.000Z",
+    "costType": "advance_for_employee",
+    "amount": 300,
+    "notes": "",
+    "worker": "6a7d83860f105b653edc7b8c",
+    "workerName": "siva",
+    "branch": "6a587e87fba174b8a1126dc2",
+    "branchName": "",
+    "truck": "",
+    "truckName": "",
+    "fuelQuantity": 0,
+    "description": "",
+    "createdAt": "2026-08-15T15:26:29.017Z",
+    "updatedAt": "2026-08-15T15:26:29.017Z"
+  },
+  {
     "_id": "1786704487101-ab48aa1064ca58",
     "date": "2026-08-14T00:00:00.000Z",
     "costType": "petrol_diesel",

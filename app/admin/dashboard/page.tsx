@@ -24,14 +24,16 @@ import {
   FiCheckCircle,
   FiClock,
   FiDollarSign,
+  FiGrid,
   FiPackage,
   FiTrendingUp,
+  FiTruck,
   FiUsers,
   FiArrowUpRight,
   FiArrowDownRight,
 } from 'react-icons/fi';
 import api from '../../../lib/api';
-import { formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
+import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
 import { selectedBranchHeaders } from '../../../lib/branch-fetch';
 import DashboardLoader from '../../../components/DashboardLoader';
 
@@ -133,7 +135,7 @@ export default function AdminDashboardPage() {
           setTodaySalesBars(bars);
         }
       } catch (error: any) {
-        setLoadError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the API at http://localhost:4000. Please start or restart the backend server.' : error?.message) || 'Could not load dashboard data.');
+        setLoadError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the application service. Please try again.' : error?.message) || 'Could not load dashboard data.');
       } finally {
         setLoading(false);
       }
@@ -271,11 +273,11 @@ export default function AdminDashboardPage() {
   ];
   const visiblePerformanceMix = performanceMix.filter((row) => row.value > 0);
   const selectedPerformance = performanceMix.find((row) => row.name === selectedPerformanceName) || performanceMix[1];
-  // Keep this summary strictly scoped to today's production cycle. Pending
-  // stock is cumulative inventory and must not be mixed into today's figures.
-  const stockTotalBars = Math.max(0, Number(data.today.production || 0));
-  const stockSoldBars = Math.max(0, Math.min(stockTotalBars, dashboard.soldBars));
-  const stockBalanceBars = Math.max(0, stockTotalBars - stockSoldBars);
+  const openingStockBars = Math.max(0, Number(data.barStock?.openingStock || 0));
+  const newProductionBars = Math.max(0, Number(data.barStock?.newProduction ?? data.today.production ?? 0));
+  const stockTotalBars = Math.max(0, Number(data.barStock?.totalAvailable ?? openingStockBars + newProductionBars));
+  const stockSoldBars = Math.max(0, Number(data.barStock?.sold ?? dashboard.soldBars));
+  const stockBalanceBars = Math.max(0, Number(data.barStock?.balance ?? stockTotalBars - stockSoldBars));
   const todayBarChart = [
     { name: 'Sold Bars', value: stockSoldBars, color: '#16a34a' },
     { name: 'Balance Bars', value: stockBalanceBars, color: '#f59e0b' },
@@ -283,6 +285,17 @@ export default function AdminDashboardPage() {
 
   return (
     <div className="space-y-4 pb-8">
+      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-r from-navy-900 via-sky-900 to-iceblue-700 text-white shadow-lg shadow-iceblue-900/10">
+        <div className="flex items-center gap-3 px-4 py-5 sm:px-6">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-xl ring-1 ring-white/15"><FiGrid /></span>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100/80">Overview</p>
+            <h1 className="mt-0.5 font-display text-xl font-bold sm:text-2xl">Dashboard</h1>
+            <p className="mt-1 text-sm text-iceblue-50/80">Today&apos;s production, sales, collection and stock at a glance.</p>
+          </div>
+        </div>
+      </section>
+
       <section>
 
     {/* Today Overview - one card, summary grid on the left, donut on the right, equal widths */}
@@ -594,7 +607,7 @@ export default function AdminDashboardPage() {
 
         <Panel title="Truck-wise Sales Today" icon={FiBox}>
           {dashboard.truckRows.length === 0 ? (
-            <EmptyState text="No truck sales recorded today." />
+            <EmptyState icon={FiTruck} text="No truck sales recorded today." />
           ) : (
             <>
             <div className="overflow-x-auto rounded-lg border border-slate-300">
@@ -638,21 +651,23 @@ export default function AdminDashboardPage() {
 
         <div className="min-w-0 bg-sky-50/25 p-4 sm:p-5">
           <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-sky-100"><FiPackage className="text-sky-600" /></span> Bar Stock Summary</h3>
-          <p className="mb-3 mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Today&apos;s produced, sold and remaining bars</p>
+          <p className="mb-3 mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Opening stock + new production, sold and remaining bars</p>
           <div className="grid gap-3">
-            <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-sky-600 to-blue-700 p-4 text-white shadow-sm">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-100">Today Production</p>
-              <p className="mt-2 font-display text-3xl font-black">{stockTotalBars}</p>
-              <p className="mt-1 text-[10px] font-semibold text-sky-100">Total bars made today</p>
+            <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-navy-900 via-sky-900 to-iceblue-700 p-4 text-white shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-100">Total Available Bars</p>
+              <p className="mt-2 font-display text-3xl font-black">{formatBarQuantity(stockTotalBars) || '0'}</p>
+              <p className="mt-1 text-[10px] font-semibold text-sky-100">
+                Opening {formatBarQuantity(openingStockBars) || '0'} + New production {formatBarQuantity(newProductionBars) || '0'}
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Sold Bars</p>
-                <p className="mt-2 font-display text-2xl font-black text-emerald-700">{stockSoldBars}</p>
+                <p className="mt-2 font-display text-2xl font-black text-emerald-700">{formatBarQuantity(stockSoldBars) || '0'}</p>
               </div>
               <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
                 <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Balance Bars</p>
-                <p className="mt-2 font-display text-2xl font-black text-amber-700">{stockBalanceBars}</p>
+                <p className="mt-2 font-display text-2xl font-black text-amber-700">{formatBarQuantity(stockBalanceBars) || '0'}</p>
               </div>
             </div>
             <div className="relative h-[190px] rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
@@ -668,7 +683,7 @@ export default function AdminDashboardPage() {
                   </ResponsiveContainer>
                   <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
                     <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total Bars</p>
-                    <p className="font-display text-2xl font-black text-navy-900">{stockTotalBars}</p>
+                    <p className="font-display text-2xl font-black text-navy-900">{formatBarQuantity(stockTotalBars) || '0'}</p>
                   </div>
                 </>
               ) : <EmptyState text="No production recorded today." />}
@@ -926,10 +941,15 @@ function Panel({ title, icon: Icon, children }: { title: string; icon: any; chil
   );
 }
 
-function EmptyState({ text }: { text: string }) {
+function EmptyState({ text, icon: Icon }: { text?: string; icon?: any }) {
   return (
-    <div className="grid min-h-[220px] place-items-center rounded-xl border border-dashed border-iceblue-100 bg-iceblue-50/50 px-4 text-center">
-      <p className="text-sm font-medium text-navy-800/50">{text}</p>
+    <div className="grid min-h-[220px] place-items-center gap-3 rounded-xl border border-dashed border-iceblue-100 bg-iceblue-50/50 px-4 text-center">
+      {Icon && (
+        <span className="grid h-14 w-14 place-items-center rounded-2xl bg-iceblue-100/70 text-2xl text-iceblue-400">
+          <Icon />
+        </span>
+      )}
+      {text && <p className="text-sm font-medium text-navy-800/50">{text}</p>}
     </div>
   );
 }
