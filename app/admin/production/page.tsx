@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   FiActivity,
   FiAlertCircle,
@@ -66,6 +67,7 @@ const indiaDateKey = (date: string | Date) =>
 const todayIndiaISO = () => indiaDateKey(new Date());
 
 export default function ProductionPage() {
+  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const [activeDay, setActiveDay] = useState(todayIndiaISO());
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -149,6 +151,7 @@ export default function ProductionPage() {
   const loadInFlightRef = useRef<Promise<void> | null>(null);
   const loadDayRef = useRef("");
   const midnightClosingRef = useRef(false);
+  const autoOpenProductionRef = useRef(false);
   const isSuperAdmin = user?.role === "super_admin";
   const canManageProduction = !isSuperAdmin || Boolean(selectedBranch);
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
@@ -644,6 +647,16 @@ export default function ProductionPage() {
       );
     }
   };
+
+  // Lets other pages (e.g. the Entry summary page's "Add Production" button)
+  // deep-link here and open this same Add Production card automatically.
+  useEffect(() => {
+    if (authLoading || selectedBranch === null || autoOpenProductionRef.current) return;
+    if (new URLSearchParams(window.location.search).get("openProduction") !== "1") return;
+    autoOpenProductionRef.current = true;
+    router.replace("/admin/production");
+    if (canManageProduction) void openModal();
+  }, [authLoading, selectedBranch, canManageProduction, router]);
 
   const openEdit = async (record: any) => {
     setError("");

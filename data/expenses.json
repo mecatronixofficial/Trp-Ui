@@ -1,5 +1,22 @@
 [
   {
+    "_id": "1787056109774-23f6fa6c01302",
+    "date": "2026-08-18T00:00:00.000Z",
+    "costType": "snacks",
+    "amount": 100,
+    "notes": "Tea",
+    "worker": "",
+    "workerName": "",
+    "branch": "6a84339b2e5a87a0b81a29f9",
+    "branchName": "",
+    "truck": "",
+    "truckName": "",
+    "fuelQuantity": 0,
+    "description": "Tea",
+    "createdAt": "2026-08-18T12:28:29.774Z",
+    "updatedAt": "2026-08-18T12:28:29.774Z"
+  },
+  {
     "_id": "1786807589017-8642346085e94",
     "date": "2026-08-15T00:00:00.000Z",
     "costType": "advance_for_employee",
