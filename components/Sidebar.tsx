@@ -56,7 +56,7 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
-              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition ${
+              className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${href === '/admin/sample' ? 'font-bold' : 'font-medium'} ${
                 active ? 'bg-white text-iceblue-700' : 'text-iceblue-100/80 hover:bg-white/10 hover:text-white'
               }`}
             >

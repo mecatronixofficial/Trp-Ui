@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   FiBox,
   FiCheckCircle,
@@ -11,6 +12,11 @@ import {
   FiPlus,
   FiTruck,
   FiCheck,
+  FiCalendar,
+  FiRefreshCw,
+  FiArrowUpRight,
+  FiArrowDownRight,
+  FiBarChart2,
 } from 'react-icons/fi';
 import api, { COST_TYPES, formatBarQuantity, formatCurrency, getItemBarUsed, todayISO } from '../../../lib/api';
 import { selectedBranchHeaders } from '../../../lib/branch-fetch';
@@ -26,6 +32,7 @@ const indiaDateKey = (value: string | Date) => new Intl.DateTimeFormat('en-CA', 
 }).format(new Date(value));
 
 export default function AdminEntryPage() {
+  const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const isSuperAdmin = user?.role === 'super_admin';
   const [branches, setBranches] = useState<BranchOption[]>([]);
@@ -145,202 +152,835 @@ export default function AdminEntryPage() {
   const sortedProduction = [...productionData].sort((a, b) => String(a.createdAt || a._id).localeCompare(String(b.createdAt || b._id)));
   const openBox = sortedProduction[0]?.boxOpen;
   const closeBox = sortedProduction[sortedProduction.length - 1]?.boxClose;
-  const totalStock = closingStock ?? stockData.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const producedToday = productionData.reduce((sum, record) => sum + Number(record.totalBars || 0), 0);
+  const movedToStock = stockData.reduce((sum, record) => sum + Number(record.quantity || 0), 0);
+  const assignedBars = Object.values(assignments).reduce((sum, value) => sum + Number(value || 0), 0);
+  // Live shop balance: what's been produced today, minus what was moved to
+  // stock, assigned to trucks, or sold — so adding a sale (or production)
+  // immediately reflects here. Once the day is closed, daily-closing's
+  // returned total is the authoritative figure instead.
+  const liveStock = Math.max(0, producedToday - movedToStock - assignedBars - totalBars);
+  const totalStock = closingStock ?? liveStock;
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
   const overallView = isSuperAdmin && !selectedBranch;
 
-  if (loading) return <div className="card py-16 text-center text-sm text-navy-800/50">Loading today&apos;s entries...</div>;
+  if (loading) {
+    return (
+      <div className="flex min-h-[320px] items-center justify-center rounded-3xl border border-[#d7edf5] bg-white">
+        <div className="text-center">
+          <FiRefreshCw className="mx-auto mb-3 animate-spin text-2xl text-[#187f9d]" />
+          <p className="text-sm font-semibold text-[#64808f]">Loading today&apos;s entries...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const todayLabel = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  }).format(new Date());
+
+  const pendingCollection = Math.max(totalSales - collectionAmount, 0);
 
   return (
-    <div className="space-y-5 pb-8">
-      {isSuperAdmin && (
-        <section className="flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
+    <div className="space-y-4 sm:space-y-5">
+      {/* Top toolbar */}
+        <section className="rounded-2xl border border-[#1a6d8d]/20 bg-gradient-to-r from-[#0a1d2b] via-[#0c4a6e] to-[#13698a] px-3 py-4 text-white shadow-[0_18px_45px_-28px_rgba(10,29,43,0.75)] sm:rounded-[28px] sm:px-6 sm:py-5">
+          <div className="flex flex-col gap-3 sm:gap-4 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Entry view</p>
-              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p>
-              {overallView && <p className="mt-0.5 text-xs text-navy-800/45">Combined entries are read-only. Select a branch to add a sale or assign a truck.</p>}
+              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-cyan-100/80">
+                <FiGitBranch className="text-cyan-100" />
+                Entry Report
+              </div>
+              <h1 className="mt-1 text-lg font-bold tracking-tight text-white sm:text-2xl">
+                Today&apos;s Business Summary
+              </h1>
+              <p className="mt-1 max-w-2xl text-xs leading-5 text-white/75 sm:text-sm">
+                Sales, collection, expenses, production and truck entries.
+              </p>
+            </div>
+
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+              <div className="col-span-2 inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-semibold text-white backdrop-blur-sm sm:col-auto sm:h-11 sm:text-sm">
+                <FiCalendar />
+                {todayLabel}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setRefreshKey((key) => key + 1)}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-white px-3 text-xs font-bold text-[#0c4a6e] shadow-sm transition hover:bg-[#eaf9fd] sm:h-11 sm:w-auto sm:px-4 sm:text-sm"
+              >
+                Refresh
+                <FiRefreshCw />
+              </button>
+
+              <button
+                type="button"
+                disabled={overallView}
+                title={overallView ? 'Select a branch first' : undefined}
+                onClick={() => setSaleModalOpen(true)}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white backdrop-blur-sm transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:w-auto sm:px-4 sm:text-sm"
+              >
+                <FiPlus />
+                Add Sale
+              </button>
+
+              <button
+                type="button"
+                disabled={overallView}
+                title={overallView ? 'Select a branch first' : undefined}
+                onClick={() => {
+                  setActionError('');
+                  setAssignModalOpen(true);
+                }}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white backdrop-blur-sm transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:w-auto sm:px-4 sm:text-sm"
+              >
+                <FiTruck />
+                Assign Truck
+              </button>
+
+              <button
+                type="button"
+                disabled={overallView}
+                title={overallView ? 'Select a branch first' : undefined}
+                onClick={() => router.push('/admin/production?openProduction=1')}
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 text-xs font-bold text-white backdrop-blur-sm transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50 sm:h-11 sm:w-auto sm:px-4 sm:text-sm"
+              >
+                <FiBox />
+                Add Production
+              </button>
             </div>
           </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change entry branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all branches</option>
-            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
         </section>
-      )}
 
-      <section className="overflow-hidden rounded-2xl bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 text-white shadow-sm">
-        <div className="flex flex-col gap-3 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-blue-100">
-              <FiGitBranch /> Entry report
-            </div>
-            <h1 className="mt-1 font-display text-xl font-bold sm:text-2xl">Today&apos;s Business Summary</h1>
-            <p className="mt-1 text-xs text-white/70 sm:text-sm">Sales, expenses, production and final collection balance entries.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={overallView} title={overallView ? 'Select a branch first' : undefined} onClick={() => setSaleModalOpen(true)} className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-white px-3 text-xs font-bold text-iceblue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"><FiPlus /> Add Sale</button>
-            <button type="button" disabled={overallView} title={overallView ? 'Select a branch first' : undefined} onClick={() => { setActionError(''); setAssignModalOpen(true); }} className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-white/20 bg-white/10 px-3 text-xs font-bold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"><FiTruck /> Assign Truck</button>
-            <span className="inline-flex h-9 items-center rounded-lg bg-white/15 px-3 text-xs font-bold text-white ring-1 ring-white/20">Today</span>
-          </div>
-        </div>
-      </section>
-
-      {error && <p role="alert" className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">{error}</p>}
-
-      {saleModalOpen && (
-        <Modal title="Add Sale" onClose={() => setSaleModalOpen(false)}>
-          <SaleForm trucks={trucks} onSaved={() => { setSaleModalOpen(false); setRefreshKey((key) => key + 1); }} />
-        </Modal>
-      )}
-
-      {assignModalOpen && (
-        <Modal title="Assign Bars to Truck" onClose={() => setAssignModalOpen(false)}>
-          <form onSubmit={saveAssignment} className="space-y-4">
-            <div>
-              <label className="label-text">Truck</label>
-              <select required className="input-field h-12" value={selectedTruck} onChange={(event) => setSelectedTruck(event.target.value)}>
-                <option value="">Select truck</option>
-                {trucks.filter((truck) => truck.status !== false).map((truck) => <option key={truck._id} value={truck._id}>{truck.truckName}{truck.truckNumber ? ` (${truck.truckNumber})` : ''}</option>)}
-              </select>
-            </div>
-            {selectedTruck && <div className="rounded-xl bg-blue-50 px-4 py-3 text-sm"><span className="text-navy-800/55">Already assigned today</span><strong className="float-right text-navy-900">{formatBarQuantity(assignments[selectedTruck] || 0) || '0'} bars</strong></div>}
-            <div>
-              <label className="label-text">Bars to Add</label>
-              <input type="number" min={0.25} step={0.25} required className="input-field h-12" placeholder="0.25, 0.5, 1..." value={assignQuantity} onChange={(event) => setAssignQuantity(event.target.value)} />
-            </div>
-            {actionError && <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-600">{actionError}</p>}
-            <button type="submit" disabled={savingAssignment} className="btn-primary flex h-12 w-full items-center justify-center gap-2 disabled:opacity-50"><FiCheck /> {savingAssignment ? 'Assigning...' : 'Assign Bars'}</button>
-          </form>
-        </Modal>
-      )}
-
-      <section className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
-        <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:row-span-2">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3.5 sm:px-5">
+        {/* Branch selector */}
+        {isSuperAdmin && (
+          <section className="flex flex-col gap-3 rounded-2xl border border-[#d7edf5] bg-white/95 px-3 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-4">
             <div className="flex items-center gap-3">
-              <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-50 text-iceblue-700"><FiShoppingCart /></span>
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#eaf8fc] text-[#0f6d8c]">
+                <FiGitBranch />
+              </span>
               <div>
-                <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Sales Report</h2>
-                <p className="text-xs text-slate-400">Customer-wise sales recorded today</p>
+                <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-[#8aa3af]">Entry View</p>
+                <p className="font-semibold text-[#0a2436]">
+                  {activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}
+                </p>
+                {overallView && (
+                  <p className="mt-0.5 text-xs text-white/65">
+                    Combined entries are read-only. Select a branch to add a sale or assign a truck.
+                  </p>
+                )}
               </div>
             </div>
-            <span className="text-xs font-semibold text-slate-400">{sales.length} sales</span>
-          </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[480px] text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                  <th className="w-12 px-4 py-2.5 text-center">#</th>
-                  <th className="px-4 py-2.5 text-left">Customer Name</th>
-                  <th className="px-4 py-2.5 text-right">Bars</th>
-                  <th className="px-4 py-2.5 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sales.map((sale, index) => (
-                  <tr key={sale.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 text-center text-slate-400">{index + 1}</td>
-                    <td className="px-4 py-3 font-medium text-navy-900">{sale.customer}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-navy-900">{sale.bars}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-600">{formatCurrency(sale.amount)}</td>
-                  </tr>
+            <select
+              className="h-11 w-full rounded-xl border border-[#d7edf5] bg-white px-3 text-sm font-semibold text-[#29495c] outline-none transition focus:border-[#2d9fba] focus:ring-4 focus:ring-[#d7f1f7] sm:max-w-xs"
+              aria-label="Change entry branch"
+              value={selectedBranch || ''}
+              onChange={(event) => changeBranch(event.target.value)}
+            >
+              <option value="">Overall — all branches</option>
+              {branches
+                .filter((branch) => branch.isActive !== false)
+                .map((branch) => (
+                  <option key={branch._id} value={branch._id}>
+                    {branch.name} ({branch.code})
+                  </option>
                 ))}
-                {sales.length === 0 && <tr><td colSpan={4} className="px-4 py-10 text-center text-slate-400">No sales recorded today.</td></tr>}
-              </tbody>
-              <tfoot>
-                <tr className="border-t border-slate-200 bg-slate-50 font-bold">
-                  <td colSpan={2} className="px-4 py-3 text-right text-xs uppercase tracking-wide text-slate-500">Today Total</td>
-                  <td className="px-4 py-3 text-right text-navy-900">{totalBars}</td>
-                  <td className="px-4 py-3 text-right bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{formatCurrency(totalSales)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </article>
+            </select>
+          </section>
+        )}
 
-        <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3.5">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-red-50 text-red-600"><FiDollarSign /></span>
-            <div>
-              <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Expense Report</h2>
-              <p className="text-xs text-slate-400">Expense name and amount</p>
-            </div>
-          </div>
-          <div className="divide-y divide-slate-100 px-4">
-            {expenses.map((expense) => (
-              <div key={expense.id} className="flex items-center justify-between gap-4 py-3 text-sm">
-                <span className="font-medium text-navy-900">{expense.name}</span>
-                <span className="font-semibold text-red-600">{formatCurrency(expense.amount)}</span>
-              </div>
-            ))}
-            {expenses.length === 0 && <p className="py-8 text-center text-sm text-slate-400">No expenses recorded today.</p>}
-          </div>
-          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-sm font-bold">
-            <span className="text-navy-900">Total Expenses</span>
-            <span className="text-red-600">{formatCurrency(totalExpenses)}</span>
-          </div>
-        </article>
+        {error && (
+          <p
+            role="alert"
+            className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-600"
+          >
+            {error}
+          </p>
+        )}
 
-        <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3.5">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-blue-50 text-iceblue-700"><FiBox /></span>
-            <div>
-              <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Production</h2>
-              <p className="text-xs text-slate-400">Current box-counter report</p>
-            </div>
-          </div>
-          <div className={`grid gap-3 p-4 ${totalStock > 0 ? 'grid-cols-2 sm:grid-cols-3' : 'grid-cols-2'}`}>
-            <div className="rounded-xl bg-slate-50 p-4 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Open Box</p>
-              <p className="mt-2 font-display text-2xl font-bold text-navy-900">{openBox ?? '-'}</p>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-4 text-center">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Close Box</p>
-              <p className="mt-2 font-display text-2xl font-bold text-navy-900">{closeBox ?? '-'}</p>
-            </div>
-            {totalStock > 0 && (
-              <div className="col-span-2 rounded-xl bg-slate-50 p-4 text-center sm:col-span-1">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Stock</p>
-                <p className="mt-2 font-display text-2xl font-bold bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{formatBarQuantity(totalStock) || '0'}</p>
-                <p className="mt-1 text-[10px] font-medium uppercase text-slate-400">bars</p>
-              </div>
-            )}
-          </div>
-        </article>
-      </section>
+        {/* Compact summary cards */}
+        <section className="mx-auto grid w-full max-w-[1450px] gap-3 sm:gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {/* Sale */}
+         <article className="relative min-h-[185px] overflow-hidden rounded-2xl border border-[#cfe5ee] bg-white shadow-[0_14px_35px_-26px_rgba(10,74,110,0.55)] sm:h-[185px]">
+  {/* Left Accent */}
+  <div className="absolute bottom-0 left-0 top-0 w-1.5 bg-gradient-to-b from-[#0a1d2b] via-[#0c4a6e] to-[#1f90ad]" />
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="grid divide-y divide-slate-100 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-          <div className="p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Today Total Sales</p>
-            <p className="mt-2 font-display text-2xl font-bold text-navy-900">{formatCurrency(totalSales)}</p>
-          </div>
-          <div className="p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Collection Amount</p>
-            <p className="mt-2 font-display text-2xl font-bold text-emerald-600">{formatCurrency(collectionAmount)}</p>
-          </div>
-          <div className="p-5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Total Expenses</p>
-            <p className="mt-2 font-display text-2xl font-bold text-red-600">− {formatCurrency(totalExpenses)}</p>
-          </div>
-        </div>
-        <div className="flex flex-col gap-3 border-t border-slate-100 bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 px-5 py-5 text-white sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/15 text-lg"><FiTrendingUp /></span>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-blue-100">Final Total</p>
-              <p className="mt-1 text-xs text-blue-100/80">Collection Amount − Total Expenses</p>
-            </div>
-          </div>
-          <div className="text-left sm:text-right">
-            <p className="font-display text-2xl font-bold">{formatCurrency(finalTotal)}</p>
-            <p className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-100 sm:justify-end"><FiCheckCircle /> Today&apos;s net collection</p>
-          </div>
-        </div>
-      </section>
+  <div className="flex h-full flex-col justify-between p-3 pl-4 sm:p-4 sm:pl-5">
+    {/* Top */}
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-sm font-bold text-[#123247]">
+          Sale
+        </p>
+
+        <p className="mt-4 text-xs font-medium text-[#64808f]">
+          {todayLabel}
+        </p>
+
+        <p className="mt-1 text-xl font-extrabold leading-none text-[#091f2f] sm:text-2xl">
+          {formatCurrency(totalSales)}
+        </p>
+      </div>
+
+      {/* Bigger Sale Icon */}
+      <div className="relative">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[#0c4a6e] to-[#1f90ad] text-white shadow-[0_8px_20px_-8px_rgba(12,74,110,0.75)] sm:h-12 sm:w-12 sm:rounded-2xl">
+          <FiShoppingCart className="h-5 w-5 sm:h-6 sm:w-6" />
+        </span>
+
+        <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-white bg-[#39b8d2]" />
+      </div>
     </div>
+
+    {/* Bottom */}
+    <div className="flex items-center justify-between gap-2 sm:gap-3">
+      {/* Bars Sold */}
+      <div className="flex min-w-0 flex-1 items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2.5 py-2 sm:min-w-[125px] sm:px-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Bars Sold
+          </p>
+
+          <p className="mt-0.5 text-base font-extrabold text-[#123247]">
+            {formatBarQuantity(totalBars) || '0'}
+          </p>
+        </div>
+
+        <span className="h-7 w-1 rounded-full bg-[#1f90ad]" />
+      </div>
+
+      {/* Mini Chart */}
+      <div className="flex h-10 shrink-0 items-end gap-1 rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2 py-2 sm:gap-1.5 sm:px-3">
+        {[12, 18, 15, 22, 19, 26, 23].map((height, index) => (
+          <span
+            key={index}
+            className="w-2 rounded-t-sm bg-gradient-to-t from-[#0c4a6e] to-[#2f9fba] sm:w-2.5"
+            style={{ height: `${height}px` }}
+          />
+        ))}
+      </div>
+    </div>
+  </div>
+</article>
+
+          {/* Production */}
+          <article className="relative min-h-[185px] overflow-hidden rounded-2xl border border-[#cfe5ee] bg-white shadow-[0_14px_35px_-26px_rgba(10,74,110,0.55)] sm:h-[185px]">
+  {/* Left Accent */}
+  <div className="absolute bottom-0 left-0 top-0 w-1.5 bg-gradient-to-b from-[#0a1d2b] via-[#0c4a6e] to-[#1f90ad]" />
+
+  <div className="flex h-full flex-col justify-between p-3 pl-4 sm:p-4 sm:pl-5">
+    {/* Top */}
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-sm font-bold text-[#123247]">
+          Production
+        </p>
+
+        <p className="mt-4 text-xs font-medium text-[#64808f]">
+          {todayLabel}
+        </p>
+
+        <div className="mt-1 flex items-end gap-1.5">
+          <p className="text-2xl font-extrabold leading-none text-[#091f2f]">
+            {formatBarQuantity(producedToday) || '0'}
+          </p>
+
+          <span className="pb-0.5 text-xs font-semibold text-[#8aa3af]">
+            bars
+          </span>
+        </div>
+      </div>
+
+      {/* Bigger FiBox */}
+      <div className="relative">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[#0c4a6e] to-[#1f90ad] text-white shadow-[0_8px_20px_-8px_rgba(12,74,110,0.75)] sm:h-12 sm:w-12 sm:rounded-2xl">
+          <FiBox className="h-5 w-5 sm:h-6 sm:w-6" />
+        </span>
+
+        <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-white bg-[#39b8d2]" />
+      </div>
+    </div>
+
+    {/* Bottom */}
+    <div className="grid grid-cols-2 gap-2 sm:gap-2.5">
+      {/* Open Box */}
+      <div className="flex items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2.5 py-2 sm:px-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Open Box
+          </p>
+
+          <p className="mt-0.5 text-base font-extrabold text-[#123247]">
+            {openBox ?? '-'}
+          </p>
+        </div>
+
+        <span className="h-7 w-1 rounded-full bg-[#1f90ad]" />
+      </div>
+
+      {/* Close Box */}
+      <div className="flex items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2.5 py-2 sm:px-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Close Box
+          </p>
+
+          <p className="mt-0.5 text-base font-extrabold text-[#123247]">
+            {closeBox ?? '-'}
+          </p>
+        </div>
+
+        <span className="h-7 w-1 rounded-full bg-[#0c4a6e]" />
+      </div>
+    </div>
+  </div>
+</article>
+
+          {/* Expense / Collection */}
+        <article className="relative min-h-[185px] overflow-hidden rounded-2xl border border-[#cfe5ee] bg-white shadow-[0_14px_35px_-26px_rgba(10,74,110,0.55)] sm:h-[185px] md:col-span-2 xl:col-span-1">
+  {/* Left Accent */}
+  <div className="absolute bottom-0 left-0 top-0 w-1.5 bg-gradient-to-b from-[#0a1d2b] via-[#0c4a6e] to-[#1f90ad]" />
+
+  <div className="flex h-full flex-col justify-between p-3 pl-4 sm:p-4 sm:pl-5">
+    {/* Top */}
+    <div className="flex items-start justify-between gap-3">
+      <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4">
+        <div>
+          <p className="text-sm font-bold text-[#123247]">
+            Expense
+          </p>
+
+          <div className="mt-4 flex items-end gap-1.5">
+            <p className="text-2xl font-extrabold leading-none text-[#091f2f]">
+              {formatCurrency(totalExpenses)}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-bold text-[#123247]">
+            Collection
+          </p>
+
+          <div className="mt-4 flex items-end gap-1.5">
+            <p className="text-2xl font-extrabold leading-none text-[#091f2f]">
+              {formatCurrency(collectionAmount)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Bigger Chart Icon */}
+      <div className="relative">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[#0c4a6e] to-[#1f90ad] text-white shadow-[0_8px_20px_-8px_rgba(12,74,110,0.75)] sm:h-12 sm:w-12 sm:rounded-2xl">
+          <FiBarChart2 className="h-5 w-5 sm:h-6 sm:w-6" />
+        </span>
+
+        <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-white bg-[#39b8d2]" />
+      </div>
+    </div>
+
+    {/* Bottom */}
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-2.5">
+      {/* Expense */}
+      <div className="flex items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2.5 py-2 sm:px-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Expense
+          </p>
+
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <FiArrowDownRight className="text-sm text-red-500" />
+
+            <p className="text-base font-extrabold text-[#123247]">
+              {formatCurrency(totalExpenses)}
+            </p>
+          </div>
+        </div>
+
+        <span className="h-7 w-1 rounded-full bg-red-400" />
+      </div>
+
+      {/* Collection */}
+      <div className="flex items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-2.5 py-2 sm:px-3">
+        <div>
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Collection
+          </p>
+
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <FiArrowUpRight className="text-sm text-[#187f9d]" />
+
+            <p className="text-base font-extrabold text-[#123247]">
+              {formatCurrency(collectionAmount)}
+            </p>
+          </div>
+        </div>
+
+        <span className="h-7 w-1 rounded-full bg-[#0c4a6e]" />
+      </div>
+    </div>
+  </div>
+</article>
+        </section>
+
+        {/* Secondary summary - matching the screenshot's wide cards */}
+        <section className="grid gap-3 sm:gap-4 xl:grid-cols-2">
+  {/* Sales Collection */}
+  <article className="relative overflow-hidden rounded-2xl border border-[#cfe5ee] bg-white shadow-[0_14px_35px_-26px_rgba(10,74,110,0.55)]">
+    {/* Left Accent */}
+    <div className="absolute bottom-0 left-0 top-0 w-1.5 bg-gradient-to-b from-[#0a1d2b] via-[#0c4a6e] to-[#1f90ad]" />
+
+    <div className="p-4 pl-5 sm:p-5 sm:pl-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 sm:gap-4">
+        <div>
+          <h2 className="text-base font-bold text-[#123247]">
+            Sales Collection
+          </h2>
+
+          <p className="mt-1 text-xs font-medium text-[#8aa3af]">
+            Today&apos;s receivable summary
+          </p>
+        </div>
+
+        {/* Bigger Icon */}
+        <div className="relative">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[#0c4a6e] to-[#1f90ad] text-white shadow-[0_8px_20px_-8px_rgba(12,74,110,0.75)] sm:h-12 sm:w-12 sm:rounded-2xl">
+            <FiTrendingUp className="h-5 w-5 sm:h-6 sm:w-6" />
+          </span>
+
+          <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-white bg-[#39b8d2]" />
+        </div>
+      </div>
+
+      {/* Total Sales */}
+      <div className="mt-5 flex flex-col items-start gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Total Sales
+          </p>
+
+          <p className="mt-1 text-xl font-extrabold leading-none text-[#091f2f] sm:text-2xl">
+            {formatCurrency(totalSales)}
+          </p>
+        </div>
+
+        <div className="w-full rounded-xl bg-[#f4fbfe] px-3 py-2 text-left sm:w-auto sm:text-right">
+          <p className="text-[9px] font-bold uppercase tracking-wide text-[#8aa3af]">
+            Sales Count
+          </p>
+
+          <p className="mt-0.5 text-lg font-extrabold text-[#123247]">
+            {sales.length}
+          </p>
+        </div>
+      </div>
+
+      {/* Progress */}
+      <div className="mt-5">
+        <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold">
+          <span className="text-[#64808f]">
+            Collection Progress
+          </span>
+
+          <span className="text-[#13698a]">
+            {totalSales > 0
+              ? `${Math.min(
+                  Math.round((collectionAmount / totalSales) * 100),
+                  100
+                )}%`
+              : '0%'}
+          </span>
+        </div>
+
+        <div className="h-2 overflow-hidden rounded-full bg-[#e7f3f8]">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-[#0c4a6e] to-[#2f9fba] transition-all duration-300"
+            style={{
+              width:
+                totalSales > 0
+                  ? `${Math.min(
+                      (collectionAmount / totalSales) * 100,
+                      100
+                    )}%`
+                  : '0%',
+            }}
+          />
+        </div>
+      </div>
+
+      {/* Bottom */}
+      <div className="mt-5 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3">
+        {/* Collected */}
+        <div className="flex items-center justify-between rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-3 py-2.5">
+          <div>
+            <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[#187f9d]">
+              Collected
+            </p>
+
+            <p className="mt-1 text-base font-extrabold text-[#123247]">
+              {formatCurrency(collectionAmount)}
+            </p>
+          </div>
+
+          <span className="h-8 w-1 rounded-full bg-[#1f90ad]" />
+        </div>
+
+        {/* Pending */}
+        <div className="flex items-center justify-between rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2.5">
+          <div>
+            <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-amber-600">
+              Pending
+            </p>
+
+            <p className="mt-1 text-base font-extrabold text-[#123247]">
+              {formatCurrency(pendingCollection)}
+            </p>
+          </div>
+
+          <span className="h-8 w-1 rounded-full bg-amber-400" />
+        </div>
+      </div>
+    </div>
+  </article>
+
+ {/* Net total */}
+        <section className="rounded-2xl border border-[#1a6d8d]/20 bg-gradient-to-r from-[#0a1d2b] via-[#0c4a6e] to-[#13698a] p-4 text-white shadow-[0_20px_48px_-30px_rgba(10,29,43,0.75)] sm:rounded-3xl sm:p-5">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/10 text-lg text-white sm:h-12 sm:w-12 sm:rounded-2xl sm:text-xl">
+                <FiTrendingUp />
+              </span>
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-cyan-100/85">Final Total</p>
+                <h3 className="mt-1 text-base font-bold text-white sm:text-lg">Today&apos;s net collection</h3>
+                <p className="mt-0.5 text-xs text-[#8aa3af]">Collection Amount − Total Expenses</p>
+              </div>
+            </div>
+
+            <div className="sm:text-right">
+              <p className={`text-2xl font-bold tracking-tight sm:text-3xl ${finalTotal < 0 ? 'text-rose-200' : 'text-white'}`}>
+                {formatCurrency(finalTotal)}
+              </p>
+              <p className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-white/65">
+                <FiCheckCircle />
+                Updated for today
+              </p>
+            </div>
+          </div>
+        </section>
+
+  {/* Operations Overview */}
+  <article className="relative overflow-hidden rounded-2xl border border-[#cfe5ee] bg-white shadow-[0_14px_35px_-26px_rgba(10,74,110,0.55)]">
+    {/* Left Accent */}
+    <div className="absolute bottom-0 left-0 top-0 w-1.5 bg-gradient-to-b from-[#0a1d2b] via-[#0c4a6e] to-[#1f90ad]" />
+
+    <div className="p-4 pl-5 sm:p-5 sm:pl-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 sm:gap-4">
+        <div>
+          <h2 className="text-base font-bold text-[#123247]">
+            Operations Overview
+          </h2>
+
+          <p className="mt-1 text-xs font-medium text-[#8aa3af]">
+            Production, expense and net collection
+          </p>
+        </div>
+
+        {/* Bigger Icon */}
+        <div className="relative">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-[#0c4a6e] to-[#1f90ad] text-white shadow-[0_8px_20px_-8px_rgba(12,74,110,0.75)] sm:h-12 sm:w-12 sm:rounded-2xl">
+            <FiBox className="h-5 w-5 sm:h-6 sm:w-6" />
+          </span>
+
+          <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-white bg-[#39b8d2]" />
+        </div>
+      </div>
+
+      {/* Main visual bar */}
+      <div className="mt-4 rounded-xl border border-[#dcecf2] bg-[#f7fcfe] p-3 sm:mt-6">
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+            Today Overview
+          </p>
+
+          <p
+            className={`text-sm font-extrabold ${
+              finalTotal < 0 ? 'text-red-600' : 'text-[#13698a]'
+            }`}
+          >
+            {formatCurrency(finalTotal)}
+          </p>
+        </div>
+
+        <div className="mt-3 flex h-2 overflow-hidden rounded-full bg-[#e7f3f8]">
+          <div className="h-full flex-1 bg-[#1f90ad]" />
+          <div className="h-full flex-1 bg-amber-400" />
+          <div className="h-full flex-1 bg-orange-400" />
+          <div className="h-full flex-1 bg-red-400" />
+        </div>
+      </div>
+
+      {/* Bottom Metrics */}
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:mt-5 sm:grid-cols-4 sm:gap-3">
+        {/* Stock */}
+        <div className="rounded-xl border border-[#dcecf2] bg-[#f7fcfe] px-3 py-3">
+          <div className="mb-2 h-2.5 w-2.5 rounded-full bg-[#1f90ad]" />
+
+          <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#8aa3af]">
+            Stock
+          </p>
+
+          <p className="mt-1 text-sm font-extrabold text-[#123247]">
+            {formatBarQuantity(totalStock) || '0'} bars
+          </p>
+        </div>
+
+        {/* Expenses */}
+        <div className="rounded-xl border border-amber-100 bg-amber-50/50 px-3 py-3">
+          <div className="mb-2 h-2.5 w-2.5 rounded-full bg-amber-400" />
+
+          <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#8aa3af]">
+            Expenses
+          </p>
+
+          <p className="mt-1 text-sm font-extrabold text-[#123247]">
+            {formatCurrency(totalExpenses)}
+          </p>
+        </div>
+
+        {/* Assigned */}
+        <div className="rounded-xl border border-orange-100 bg-orange-50/50 px-3 py-3">
+          <div className="mb-2 h-2.5 w-2.5 rounded-full bg-orange-400" />
+
+          <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#8aa3af]">
+            Assigned
+          </p>
+
+          <p className="mt-1 text-sm font-extrabold text-[#123247]">
+            {formatBarQuantity(
+              Object.values(assignments).reduce(
+                (sum, value) => sum + Number(value || 0),
+                0
+              )
+            ) || '0'}{' '}
+            bars
+          </p>
+        </div>
+
+        {/* Net */}
+        <div
+          className={`rounded-xl border px-3 py-3 ${
+            finalTotal < 0
+              ? 'border-red-100 bg-red-50/60'
+              : 'border-[#dcecf2] bg-[#f7fcfe]'
+          }`}
+        >
+          <div
+            className={`mb-2 h-2.5 w-2.5 rounded-full ${
+              finalTotal < 0 ? 'bg-red-500' : 'bg-[#0c4a6e]'
+            }`}
+          />
+
+          <p className="text-[9px] font-bold uppercase tracking-[0.1em] text-[#8aa3af]">
+            Net
+          </p>
+
+          <p
+            className={`mt-1 text-sm font-extrabold ${
+              finalTotal < 0 ? 'text-red-600' : 'text-[#123247]'
+            }`}
+          >
+            {formatCurrency(finalTotal)}
+          </p>
+        </div>
+      </div>
+    </div>
+  </article>
+</section>
+
+        {/* Detailed reports */}
+        <section className="grid items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(340px,0.7fr)]">
+          <article className="overflow-hidden rounded-2xl border border-[#d7edf5] bg-white shadow-[0_16px_45px_-32px_rgba(12,74,110,0.42)] sm:rounded-3xl">
+            <div className="flex flex-col items-start gap-3 border-b border-[#e4f2f7] px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-4">
+              <div className="flex items-center gap-3">
+                <span className="grid h-10 w-10 place-items-center rounded-xl bg-[#eaf8fc] text-[#0f6d8c]">
+                  <FiShoppingCart />
+                </span>
+                <div>
+                  <h2 className="font-bold text-[#0a2436]">Today&apos;s Sales Report</h2>
+                  <p className="text-xs text-[#8aa3af]">Customer-wise sales recorded today</p>
+                </div>
+              </div>
+              <span className="rounded-full bg-[#e7f3f8] px-3 py-1 text-xs font-bold text-[#64808f]">
+                {sales.length} sales
+              </span>
+            </div>
+
+            <div className="overflow-x-auto overscroll-x-contain">
+              <table className="w-full min-w-[520px] text-sm sm:min-w-[560px]">
+                <thead>
+                  <tr className="border-b border-[#e4f2f7] bg-[#f4fbfe] text-[11px] font-bold uppercase tracking-[0.12em] text-[#8aa3af]">
+                    <th className="w-12 px-3 py-3 text-center sm:w-14 sm:px-5">#</th>
+                    <th className="px-3 py-3 text-left sm:px-5">Customer</th>
+                    <th className="px-3 py-3 text-right sm:px-5">Bars</th>
+                    <th className="px-3 py-3 text-right sm:px-5">Amount</th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-[#e4f2f7]">
+                  {sales.map((sale, index) => (
+                    <tr key={sale.id} className="transition hover:bg-[#f4fbfe]/80">
+                      <td className="px-3 py-4 text-center text-[#8aa3af] sm:px-5">{index + 1}</td>
+                      <td className="px-3 py-4 font-semibold text-[#123247] sm:px-5">{sale.customer}</td>
+                      <td className="px-3 py-4 text-right font-bold text-[#29495c] sm:px-5">
+                        {formatBarQuantity(sale.bars) || '0'}
+                      </td>
+                      <td className="px-3 py-4 text-right font-bold text-[#0f6d8c] sm:px-5">
+                        {formatCurrency(sale.amount)}
+                      </td>
+                    </tr>
+                  ))}
+
+                  {sales.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-3 py-10 text-center text-[#8aa3af] sm:px-5 sm:py-12">
+                        No sales recorded today.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+
+                <tfoot>
+                  <tr className="border-t border-[#d7edf5] bg-[#f4fbfe] font-bold">
+                    <td colSpan={2} className="px-3 py-4 text-right text-xs uppercase tracking-[0.12em] text-[#64808f] sm:px-5">
+                      Today Total
+                    </td>
+                    <td className="px-3 py-4 text-right text-[#0a2436] sm:px-5">{formatBarQuantity(totalBars) || '0'}</td>
+                    <td className="px-3 py-4 text-right text-[#0f6d8c] sm:px-5">{formatCurrency(totalSales)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </article>
+
+          <article className="overflow-hidden rounded-2xl border border-[#d7edf5] bg-white shadow-[0_16px_45px_-32px_rgba(12,74,110,0.42)] sm:rounded-3xl">
+            <div className="flex items-center gap-3 border-b border-[#e4f2f7] px-4 py-3.5 sm:px-5 sm:py-4">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-red-50 text-red-500">
+                <FiDollarSign />
+              </span>
+              <div>
+                <h2 className="font-bold text-[#0a2436]">Today&apos;s Expense Report</h2>
+                <p className="text-xs text-[#8aa3af]">Expense name and amount</p>
+              </div>
+            </div>
+
+            <div className="divide-y divide-[#e4f2f7] px-4 sm:px-5">
+              {expenses.map((expense) => (
+                <div key={expense.id} className="flex items-start justify-between gap-3 py-4 text-sm sm:items-center sm:gap-4">
+                  <span className="min-w-0 break-words font-semibold text-[#29495c]">{expense.name}</span>
+                  <span className="shrink-0 font-bold text-red-500">{formatCurrency(expense.amount)}</span>
+                </div>
+              ))}
+
+              {expenses.length === 0 && (
+                <p className="py-10 text-center text-sm text-[#8aa3af]">No expenses recorded today.</p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-[#e4f2f7] bg-[#f4fbfe] px-4 py-4 text-sm font-bold sm:px-5">
+              <span className="text-[#123247]">Total Expenses</span>
+              <span className="text-red-500">{formatCurrency(totalExpenses)}</span>
+            </div>
+          </article>
+        </section>
+
+       
+
+        {/* Existing modals - functionality unchanged */}
+        {saleModalOpen && (
+          <Modal title="Add Sale" onClose={() => setSaleModalOpen(false)}>
+            <SaleForm
+              trucks={trucks}
+              onSaved={() => {
+                setSaleModalOpen(false);
+                setRefreshKey((key) => key + 1);
+              }}
+            />
+          </Modal>
+        )}
+
+        {assignModalOpen && (
+          <Modal title="Assign Bars to Truck" onClose={() => setAssignModalOpen(false)}>
+            <form onSubmit={saveAssignment} className="space-y-4">
+              <div>
+                <label className="label-text">Truck</label>
+                <select
+                  required
+                  className="input-field h-12"
+                  value={selectedTruck}
+                  onChange={(event) => setSelectedTruck(event.target.value)}
+                >
+                  <option value="">Select truck</option>
+                  {trucks
+                    .filter((truck) => truck.status !== false)
+                    .map((truck) => (
+                      <option key={truck._id} value={truck._id}>
+                        {truck.truckName}
+                        {truck.truckNumber ? ` (${truck.truckNumber})` : ''}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              {selectedTruck && (
+                <div className="rounded-xl border border-[#d7edf5] bg-[#eefafe] px-4 py-3 text-sm">
+                  <span className="text-[#64808f]">Already assigned today</span>
+                  <strong className="float-right text-[#0a2436]">
+                    {formatBarQuantity(assignments[selectedTruck] || 0) || '0'} bars
+                  </strong>
+                </div>
+              )}
+
+              <div>
+                <label className="label-text">Bars to Add</label>
+                <input
+                  type="number"
+                  min={0.25}
+                  step={0.25}
+                  required
+                  className="input-field h-12"
+                  placeholder="0.25, 0.5, 1..."
+                  value={assignQuantity}
+                  onChange={(event) => setAssignQuantity(event.target.value)}
+                />
+              </div>
+
+              {actionError && (
+                <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-600">
+                  {actionError}
+                </p>
+              )}
+
+              <button
+                type="submit"
+                disabled={savingAssignment}
+                className="btn-primary flex h-12 w-full items-center justify-center gap-2 disabled:opacity-50"
+              >
+                <FiCheck />
+                {savingAssignment ? 'Assigning...' : 'Assign Bars'}
+              </button>
+            </form>
+          </Modal>
+        )}
+
+      </div>
   );
 }
