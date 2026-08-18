@@ -4,7 +4,9 @@ import Cookies from 'js-cookie';
 import { mutationToast, showToast } from './toast';
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api',
+  // Keep browser requests on the application origin. The server proxy forwards
+  // them to the configured backend and makes its session cookie work on Vercel.
+  baseURL: '/api/backend',
   withCredentials: true,
 });
 

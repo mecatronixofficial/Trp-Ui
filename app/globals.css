@@ -240,14 +240,14 @@ main table td {
   animation: toast-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-@keyframes toast-clock {
-  from { stroke-dashoffset: 0; }
-  to { stroke-dashoffset: 100; }
+@keyframes toast-bar {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
 }
 
-.toast-clock {
-  stroke-dasharray: 100;
-  animation-name: toast-clock;
+.toast-bar {
+  transform-origin: left;
+  animation-name: toast-bar;
   animation-timing-function: linear;
   animation-fill-mode: forwards;
 }
@@ -257,7 +257,7 @@ main table td {
     animation: none;
   }
 
-  .toast-clock {
+  .toast-bar {
     animation: none;
   }
 }

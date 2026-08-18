@@ -10,7 +10,6 @@ export const metadata: Metadata = {
   },
   description: 'Ice bar production, sales & profit management',
   applicationName: 'Tiruppur Ice',
-  icons: { icon: '/tiruppur-ice-logo.png', apple: '/tiruppur-ice-logo.png' },
   formatDetection: { telephone: false },
 };
 

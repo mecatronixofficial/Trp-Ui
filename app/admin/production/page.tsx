@@ -25,6 +25,7 @@ import { formatBarQuantity, formatCurrency } from "../../../lib/api";
 import useDismissibleMenu from "../../../hooks/useDismissibleMenu";
 import { useAuth } from "../../../context/AuthContext";
 import { selectedBranchHeaders } from "../../../lib/branch-fetch";
+import { getOpeningProductionStock } from "../../../lib/production-stock";
 
 type BoxInfo = { nextOpen: number; totalBoxes: number; barsPerBox: number };
 type BranchOption = { _id: string; name: string; code: string; isActive?: boolean };
@@ -310,9 +311,22 @@ export default function ProductionPage() {
 
   const summary = useMemo(() => {
     const today = activeDay;
-    const produced = records
+    const madeToday = records
       .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
+    // Once a daily-closing record exists for today, it is the authoritative
+    // source for the balance carried into the (possibly reopened) session —
+    // getOpeningProductionStock only looks at stock entries dated *before*
+    // today, so it can never see a same-day reopen's closing balance and
+    // falls back to stale, unrelated older stock instead.
+    const todaysClosing = closings[0];
+    const carriedStock = todaysClosing
+      ? Math.max(0, Number(todaysClosing.openingBalance || 0))
+      : getOpeningProductionStock(stockEntries, today, indiaDateKey, undefined, records);
+    const openingStock = madeToday > 0
+      ? carriedStock
+      : 0;
+    const produced = madeToday + openingStock;
     const shopSold = sales
       .filter((sale) => indiaDateKey(sale.date) === today && !sale.truck && isCurrentSessionEntry(sale))
       .reduce(
@@ -329,7 +343,7 @@ export default function ProductionPage() {
         (row) => indiaDateKey(row.date) === today && row.reason !== "unsold" && !row.truck && isCurrentSessionEntry(row),
       )
       .reduce((sum, row) => sum + getItemBarUsed(row), 0);
-    const stocked = stockEntries
+    const movedToStock = stockEntries
       .filter((row) => indiaDateKey(row.date) === today && isCurrentSessionEntry(row))
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     const outsourced = outsourceEntries
@@ -340,13 +354,16 @@ export default function ProductionPage() {
       .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
     // Main Shop receives what remains after factory wastage, stock movement,
     // and truck distribution. Shop Ready is its live balance after shop sales.
-    const shopTotal = Math.max(0, produced + outsourced - wasted - stocked - assigned);
+    const shopTotal = Math.max(0, produced + outsourced - wasted - movedToStock - assigned);
     const finalTotal = Math.max(0, shopTotal - shopSold);
     return {
+      madeToday,
+      openingStock,
       produced,
       sold: shopSold,
       wasted,
-      stocked,
+      stocked: madeToday > 0 ? movedToStock : carriedStock + movedToStock,
+      movedToStock,
       outsourced,
       assigned,
       shopSold,
@@ -362,6 +379,7 @@ export default function ProductionPage() {
     outsourceEntries,
     truckAssignments,
     truckLoads,
+    closings,
     activeDay,
     activeSessionStartedAt,
   ]);
@@ -424,6 +442,12 @@ export default function ProductionPage() {
       .reduce((sum, row) => sum + getItemBarUsed(row), 0),
     [wastage, activeDay],
   );
+  const sessionNonReturnWastage = useMemo(
+    () => wastage
+      .filter((row) => indiaDateKey(row.date) === activeDay && row.reason !== "unsold" && isCurrentSessionEntry(row))
+      .reduce((sum, row) => sum + getItemBarUsed(row), 0),
+    [wastage, activeDay, activeSessionStartedAt],
+  );
   const financialSummary = useMemo(() => {
     const salesAmount = todaysSales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0);
     const collectionAmount = todaysSales.reduce((sum, sale) => sum + Number(sale.paidAmount || 0), 0);
@@ -450,6 +474,12 @@ export default function ProductionPage() {
       const produced = records
         .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
         .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
+      const openingStock = produced > 0
+        ? (closing
+            ? Math.max(0, Number(closing.openingBalance || 0))
+            : getOpeningProductionStock(stockEntries, activeDay, indiaDateKey, branch._id, records))
+        : 0;
+      const availableProduction = produced + openingStock;
       const branchSales = sales.filter((sale) => indiaDateKey(sale.date) === activeDay && belongsToBranch(sale));
       const liveBranchSales = closing?.status === "closed" ? branchSales : branchSales.filter(inActiveSession);
       const shopSold = liveBranchSales
@@ -483,12 +513,16 @@ export default function ProductionPage() {
       );
       const branchProductionBars = closing
         ? Math.max(0, Number(closing.produced || 0) - Number(closing.returnedTotal ?? closing.returned ?? 0))
-        : produced;
+        : availableProduction;
       return {
         ...branch,
         produced: branchProductionBars,
+        // Whole day's production history for this branch, across every
+        // close/reopen session — matches the single-branch "Produced Today"
+        // tile, not just the current session's own new production.
+        madeToday: Number(closing?.produced || 0),
         sold: dailySold,
-        ready: closing?.status === "closed" ? 0 : Math.max(0, produced + outsourced - sessionWasted - stocked - assigned - shopSold),
+        ready: closing?.status === "closed" ? 0 : Math.max(0, availableProduction + outsourced - sessionWasted - stocked - assigned - shopSold),
         wasted: dailyWasted,
         expenses,
         profit: collection - expenses,
@@ -643,6 +677,9 @@ export default function ProductionPage() {
       (close >= open ? close - open : boxInfo.totalBoxes - open + close) + 1;
     return { boxesProduced, barsProduced: boxesProduced * boxInfo.barsPerBox };
   }, [boxInfo, boxClose]);
+  const openingStockForEntry = editing
+    ? 0
+    : getOpeningProductionStock(stockEntries, date, indiaDateKey, undefined, records);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -699,6 +736,17 @@ export default function ProductionPage() {
   };
 
   const openStockModal = () => {
+    const existing = stockEntries.find((entry) => indiaDateKey(entry.date) === activeDay) || null;
+    if (existing) {
+      setStockError("");
+      setStockEditing(existing);
+      setStockDate(String(existing.date).slice(0, 10));
+      setStockQuantity(String(existing.quantity || ""));
+      setStockNotes(existing.notes || "");
+      setStockModalOpen(true);
+      return;
+    }
+
     setStockError("");
     setStockEditing(null);
     setStockDate(activeDay);
@@ -973,31 +1021,37 @@ export default function ProductionPage() {
   const todayProductionRecords = records
     .filter((record) => indiaDateKey(record.date) === activeDay && (dayClosed || isCurrentSessionEntry(record)))
     .sort((a, b) => String(a.createdAt || a._id).localeCompare(String(b.createdAt || b._id)));
-  const todayProductionRecord = todayProductionRecords[0];
-  const closingBarsPerBox = Math.max(
-    1,
-    Number(todayProductionRecord?.barsPerBoxUsed || boxInfo?.barsPerBox || 2),
-  );
   // All made bars that were neither sold nor wasted are returned at closing.
   // Keep this formula aligned with DailyClosingService so the preview and the
   // saved closing report always use the same bar and box totals.
   const currentSessionReturnedBars = Math.max(
     0,
-    Number(summary.produced || 0) - totalSoldToday - Number(summary.wasted || 0),
+    Number(summary.produced || 0) - totalSoldToday - sessionNonReturnWastage,
   );
   const dailyReturnedBars = Math.max(0, Number(currentClosing?.returnedTotal ?? currentClosing?.returned ?? 0));
-  const closedProductionBars = Math.max(0, Number(currentClosing?.produced || 0) - dailyReturnedBars);
-  const dailyProductionBars = currentClosing
-    ? Math.max(0, Number(currentClosing.produced || 0) - dailyReturnedBars)
-    : Number(summary.produced || 0);
-  const reportMadeBars = dayClosed ? Number(currentClosing?.produced || 0) : Number(summary.produced || 0);
-  const reportReturnedBars = dayClosed ? dailyReturnedBars : currentSessionReturnedBars;
-  const reportProductionBars = Math.max(0, reportMadeBars - reportReturnedBars);
+  // Production Bars is a running total of bars actually made today, across
+  // every close/reopen session — currentClosing.produced already accumulates
+  // that (production.sumBySizeInRange spans the whole day, not just this
+  // session), so it must stand alone: adding openingBalance back in double
+  // counts a same-day carried balance that is already part of this total.
+  const closedProductionBars = Math.max(0, Number(currentClosing?.produced || 0));
+  // "Produced Today" is only ever displayed for the live (not-closed) case
+  // below, and should be the whole day's production history — every batch
+  // made today across every close/reopen session, not just this session's
+  // (summary.madeToday resets to 0 right after a reopen, which is correct
+  // for the Shop Ready/return math but wrong for this display).
+  const dailyProductionBars = Number(currentClosing?.produced || 0);
+  const reportMadeBars = dayClosed ? Number(currentClosing?.produced || 0) : Number(summary.madeToday || 0);
+  // Same running total as closedProductionBars above, kept live (not just for
+  // an already-closed day) so the close-confirmation preview matches it too.
+  const reportProductionBars = Math.max(0, Number(currentClosing?.produced || 0));
   const reportShopSold = dayClosed ? dailyShopSold : shopSoldToday;
   const reportTruckSold = dayClosed ? dailyTruckSold : truckSoldToday;
   const reportTotalSold = reportShopSold + reportTruckSold;
-  const stockAtClosingBars = Math.max(0, Number(dayClosed ? stockByDate[activeDay] || 0 : summary.balance || 0));
-  const closingBoxes = Math.ceil(stockAtClosingBars / closingBarsPerBox);
+  // DailyClosing keeps the cumulative stock across close/reopen sessions and
+  // is the authoritative closed-day report value. This also displays legacy
+  // days correctly when StockEntry contains only the final session's balance.
+  const stockAtClosingBars = Math.max(0, Number(dayClosed ? dailyReturnedBars : currentSessionReturnedBars));
   const lastTodayProductionRecord = todayProductionRecords[todayProductionRecords.length - 1];
   const calculatedClosingBox = lastTodayProductionRecord
     ? Number(lastTodayProductionRecord.boxClose)
@@ -1024,7 +1078,12 @@ export default function ProductionPage() {
   const liveSummary = !canManageProduction
     ? {
         ...summary,
-        produced: overallBranchRows.reduce((sum, branch) => sum + branch.produced, 0),
+        // "Produced Today" should read as just today's new production for an
+        // open branch (closed branches keep their net closed-report figure).
+        produced: overallBranchRows.reduce(
+          (sum, branch) => sum + (branch.status === "closed" ? branch.produced : branch.madeToday),
+          0,
+        ),
         sold: overallBranchRows.reduce((sum, branch) => sum + branch.sold, 0),
         shopSold: overallBranchRows.reduce((sum, branch) => sum + branch.sold, 0),
         shopTotal: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
@@ -1137,20 +1196,6 @@ export default function ProductionPage() {
     setClosingDay(true);
     setClosingError(null);
     try {
-      const readyBars = Math.max(0, Number(summary.balance || 0));
-      const automaticStockNote = "Automatically moved from ready bars at day closing";
-      const alreadyMoved = stockEntries.some((entry) => (
-        indiaDateKey(entry.date) === activeDay && String(entry.notes || "") === automaticStockNote
-      ));
-      if (readyBars > 0 && !alreadyMoved) {
-        const { data: stockRecord } = await api.post("/stock-entries", {
-          date: activeDay,
-          quantity: readyBars,
-          notes: automaticStockNote,
-        });
-        const savedStock = stockRecord?.record || stockRecord;
-        if (savedStock?._id) setStockEntries((current) => [...current, savedStock]);
-      }
       await api.post("/daily-closing/close", {
         date: activeDay,
         branch: row.branch?._id || row.branch,
@@ -1342,7 +1387,7 @@ export default function ProductionPage() {
           danger={liveSummary.wasted > 0}
         />
         <ProductionSummary
-          label="Moved to Stock"
+          label="Stock"
           value={fmtBars(liveSummary.stocked)}
           icon={<FiBox />}
         />
@@ -2222,7 +2267,7 @@ export default function ProductionPage() {
                 <tr className="bg-slate-100 font-bold text-navy-900">
                   <td colSpan={isSuperAdmin && !selectedBranch ? 5 : 4} className="border-r border-t border-slate-300 px-3 py-3 text-right text-xs uppercase tracking-wide">Daily Total ({soldProductionBatchRows.length} sold batch{soldProductionBatchRows.length === 1 ? "" : "es"})</td>
                   <td className="border-r border-t border-slate-300 px-2 py-3 text-right">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.totalBars || 0), 0))}</td>
-                  <td className="border-r border-t border-slate-300 px-2 py-3 text-right">{fmtBars(Number(stockByDate[activeDay] || 0))}</td>
+                  <td className="border-r border-t border-slate-300 px-2 py-3 text-right">{fmtBars(Number(dayClosed ? dailyReturnedBars : stockByDate[activeDay] || 0))}</td>
                   <td className="border-r border-t border-slate-300 px-2 py-3 text-right text-emerald-700">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.soldBars || 0), 0))}</td>
                   <td className="border-t border-slate-300" />
                 </tr>
@@ -2463,7 +2508,7 @@ export default function ProductionPage() {
               disabled={operationsLocked}
               className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-navy-900 hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <FiBox className="text-blue-600" />{" "}
+              <FiBox className="text-iceblue-700" />{" "}
               {todaysStock ? "Edit Stock" : "Add Stock"}
             </button>
             <button
@@ -2498,7 +2543,7 @@ export default function ProductionPage() {
               disabled={operationsLocked || trucks.length === 0}
               className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-semibold text-navy-900 hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <FiTruck className="text-iceblue-600" /> Add Truck
+              <FiTruck className="text-iceblue-600" /> Assign Truck
             </button>
             <button
               type="button"
@@ -2620,7 +2665,7 @@ export default function ProductionPage() {
               <div>
                 <p className="font-semibold">{closeTarget.status === "closed" ? "Today is closed. All final figures remain available below." : "Confirm every bar and financial total before closing."}</p>
                 <p className="mt-1 text-sm leading-6">
-                  Closing moves remaining ready bars into Stock. Opening and closing box readings stay fixed, and the next day starts with zero stock.
+                  Closing moves remaining ready bars into Stock. When the next production starts, that stock is added to Production and Stock returns to zero.
                 </p>
               </div>
             </div>
@@ -2633,8 +2678,7 @@ export default function ProductionPage() {
                 <CloseReviewMetric label="Truck Sold" value={reportTruckSold} />
                 <CloseReviewMetric label="Total Sold" value={reportTotalSold} />
                 <CloseReviewMetric label="Shop Wastage" value={dayClosed ? Number(currentClosing?.wastage || 0) : summary.wasted} />
-                <CloseReviewMetric label="Moved to Stock" value={stockAtClosingBars} />
-                <CloseReviewMetric label={`Stock Boxes (${fmtBars(closingBarsPerBox)} bars each)`} value={closingBoxes} />
+                <CloseReviewMetric label="Stock" value={stockAtClosingBars} />
                 <CloseReviewMetric label="Closing Box" value={Number(closingBoxNumber || 0)} />
               </div>
             </div>
@@ -3026,6 +3070,11 @@ export default function ProductionPage() {
                   <span className="font-semibold">{preview.barsProduced}</span>{" "}
                   ({boxInfo?.barsPerBox} bars/box)
                 </p>
+                {openingStockForEntry > 0 && (
+                  <p className="mt-1 font-semibold text-iceblue-800">
+                    Production after adding {fmtBars(openingStockForEntry)} stock bars: {fmtBars(preview.barsProduced + openingStockForEntry)}
+                  </p>
+                )}
               </div>
             )}
             <div>

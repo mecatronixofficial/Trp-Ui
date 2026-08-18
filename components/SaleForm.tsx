@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { FiCheckCircle, FiPlus, FiSearch, FiTrash2, FiUser, FiUserPlus } from 'react-icons/fi';
 import api from '../lib/api';
 import { PAYMENT_MODES, formatBarQuantity, formatCurrency, getItemBarUsed } from '../lib/api';
+import { isQuarterBarQuantity, toSaleApiItems } from '../lib/sale-items';
+import { getOpeningProductionStock } from '../lib/production-stock';
 
 interface SaleFormProps {
   trucks?: { _id: string; truckName: string }[]; // only needed for admin (truck picker)
@@ -219,10 +221,20 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         }
         const sessionStartedAt = closing?.sessionStartedAt ? new Date(closing.sessionStartedAt).getTime() : 0;
         const inCurrentSession = (row: any) => !sessionStartedAt || new Date(row.createdAt || row.date).getTime() >= sessionStartedAt;
-        const produced = (Array.isArray(productionRows.data) ? productionRows.data : [])
+        const allProductionRows = Array.isArray(productionRows.data) ? productionRows.data : [];
+        const produced = allProductionRows
           .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.totalBars || 0), 0);
-        const stocked = (Array.isArray(stockRows.data) ? stockRows.data : [])
+        const allStockRows = Array.isArray(stockRows.data) ? stockRows.data : [];
+        // Once a daily-closing record exists for today, it is the authoritative
+        // source for stock carried into a (possibly reopened) session — same
+        // fix as the production page's summary calculation.
+        const openingStock = produced > 0
+          ? (closing
+              ? Math.max(0, Number(closing.openingBalance || 0))
+              : getOpeningProductionStock(allStockRows, today, indiaDateKey, undefined, allProductionRows))
+          : 0;
+        const stocked = allStockRows
           .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);
         const outsourced = (Array.isArray(outsourceRows.data) ? outsourceRows.data : [])
@@ -240,7 +252,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           .filter((row: any) => indiaDateKey(row.date) === today && !row.truck && row.reason !== 'unsold' && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + getItemBarUsed(row), 0);
 
-        setAvailableStock(Math.max(0, produced - stocked + outsourced - assigned - shopSold - wasted));
+        setAvailableStock(Math.max(0, produced + openingStock - stocked + outsourced - assigned - shopSold - wasted));
       })
       .catch(() => { if (active) setAvailableStock(0); });
 
@@ -258,6 +270,10 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       setError('No price is set for this customer. Ask admin to set the bar price first.');
       return;
     }
+    if (items.some((item) => item.quantity !== '' && !isQuarterBarQuantity(item.quantity))) {
+      setError('Ice bar quantity must be 0.25 or more and use 0.25 steps (for example 0.25, 0.50, 0.75, 1).');
+      return;
+    }
     if (totalAmount <= 0) {
       setError('Enter an item quantity and make sure this customer has a valid bar price.');
       return;
@@ -271,11 +287,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         saleType,
         items: items
           .filter((i) => Number(i.quantity) > 0)
-          .map((i) => {
-            const quantity = Number(i.quantity);
-            const linePrice = Number(i.pricePerBar);
-            return { size: '1', quantity, pricePerBar: quantity ? linePrice / quantity : 0 };
-          }),
+          .flatMap((i) => toSaleApiItems(i.quantity, i.pricePerBar)),
         paymentMode,
         paidAmount: Number(paidAmount) || 0,
         totalAmount,
@@ -401,14 +413,19 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
                   {selectedCustomer.phoneNumber || 'No phone'} · {selectedCustomer.address || 'No address'}
                 </p>
               </div>
+              <div className="shrink-0 text-right">
+                <p className="text-[10px] font-semibold uppercase text-navy-800/45">Balance</p>
+                <p className="mt-1 text-xs font-semibold text-red-600">
+                  {formatCurrency(selectedCustomer.creditBalance || 0)}
+                </p>
+              </div>
             </div>
-            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
               <InfoPill
                 label="Type"
                 value={getCustomerTruckId(selectedCustomer) ? 'Truck Customer' : selectedCustomer.defaultSaleType === 'wholesale' ? 'Wholesale' : 'Local / Retail'}
               />
               <InfoPill label="Truck" value={typeof selectedCustomer.truck === 'object' && selectedCustomer.truck ? selectedCustomer.truck.truckName : 'Local'} />
-              <InfoPill label="Balance" value={formatCurrency(selectedCustomer.creditBalance || 0)} danger={Number(selectedCustomer.creditBalance || 0) > 0} />
             </div>
           </div>
         )}
@@ -428,7 +445,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
             <div key={idx} className="rounded-2xl border border-iceblue-100 bg-iceblue-50/60 p-3">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-12 sm:items-center">
                 <input
-                  type="number" min={0.25} step={0.25} placeholder="Bar Used e.g. 0.25, 1.25" required
+                  type="number" min={0.25} step={0.25} inputMode="decimal" placeholder="0.25, 0.50, 0.75, 1..." required
                   disabled={priceLocked}
                   className={`input-field h-11 disabled:cursor-not-allowed disabled:opacity-50 ${isDriver ? 'sm:col-span-8' : 'sm:col-span-4'}`}
                   value={item.quantity}

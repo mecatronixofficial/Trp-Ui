@@ -6,21 +6,22 @@ import { usePathname } from 'next/navigation';
 import {
   FiBarChart2,
   FiBox,
+  FiDollarSign,
+  FiGitBranch,
   FiGrid,
   FiLogOut,
   FiMenu,
+  FiMonitor,
   FiMoon,
-  FiNavigation,
-  FiSettings,
+  FiBriefcase,
+  FiShield,
   FiShoppingCart,
   FiSun,
   FiTruck,
+  FiUser,
   FiUserCheck,
   FiUsers,
   FiX,
-  FiGitBranch,
-  FiDollarSign,
-  FiMonitor,
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
 import useDismissibleMenu from '../hooks/useDismissibleMenu';
@@ -36,11 +37,18 @@ const adminLinks = [
   ['/admin/sales', 'Sales', FiShoppingCart],
   ['/admin/expenses', 'Expenses', FiDollarSign],
   ['/admin/reports', 'Reports', FiBarChart2],
-  ['/admin/settings', 'Settings', FiSettings],
+  ['/admin/settings/profile', 'Admin Profile', FiUser],
+  ['/admin/settings/company', 'Company Profile', FiBriefcase],
 ];
 
 const truckLinks = [
   ['/truck/dashboard', 'Dashboard', FiTruck],
+];
+
+const quickLinks = [
+  { href: '/admin/production', label: 'Production', icon: FiBox, alwaysVisible: false },
+  { href: '/admin/sales', label: 'Sales', icon: FiShoppingCart, alwaysVisible: false },
+  { href: '/admin/trucks', label: 'Trucks', icon: FiTruck, alwaysVisible: true },
 ];
 
 const superAdminLinks = [
@@ -60,11 +68,18 @@ export default function Topbar({ title }: { title: string }) {
   useDismissibleMenu(open, menuRef, closeMenu);
   const pathname = usePathname();
   const { logout, user } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
   const links = pathname?.startsWith('/admin')
     ? (user?.role === 'super_admin' ? superAdminLinks : adminLinks)
     : truckLinks;
   const isAdminArea = pathname?.startsWith('/admin');
-  const menuLinks = isAdminArea ? links.filter(([href]) => href !== '/admin/trucks' && href !== '/admin/settings') : links;
+  // Trucks and Admin Profile already have their own dedicated icon in the
+  // header (quickLinks / the account chip), so hide them from the dropdown
+  // to avoid a duplicate entry. Company Profile has no such shortcut, so it
+  // stays in the list — otherwise it would be unreachable.
+  const menuLinks = isAdminArea
+    ? links.filter(([href]) => href !== '/admin/trucks' && href !== '/admin/settings/profile')
+    : links;
   const activeArea = pathname?.startsWith('/admin') ? 'Admin Desk' : 'Driver App';
   const hour = now?.getHours() ?? 0;
   const TimeIcon = hour >= 18 || hour < 6 ? FiMoon : FiSun;
@@ -72,6 +87,7 @@ export default function Topbar({ title }: { title: string }) {
   const dateLabel = now?.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) || '';
   const userName = user?.displayName || user?.username || 'Admin';
   const userInitial = userName.charAt(0).toUpperCase();
+  const roleLabel = String(user?.role || 'account').replace('_', ' ');
 
   useEffect(() => {
     setNow(new Date());
@@ -92,58 +108,70 @@ export default function Topbar({ title }: { title: string }) {
     window.location.reload();
   };
 
+  const accountChip = (
+    <>
+      <span className={`relative grid h-9 w-9 place-items-center rounded-full text-sm font-semibold text-white ${isSuperAdmin ? 'bg-gradient-to-br from-amber-400 to-amber-600' : 'bg-blue-600'}`}>
+        {userInitial}
+        {isSuperAdmin && (
+          <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-white text-amber-600 ring-1 ring-amber-200">
+            <FiShield size={9} />
+          </span>
+        )}
+      </span>
+      <div className="hidden max-w-28 leading-tight 2xl:block">
+        <p className="truncate text-xs font-semibold text-slate-900">{userName}</p>
+        <p className={`mt-0.5 text-[9px] font-bold uppercase tracking-wide ${isSuperAdmin ? 'text-amber-600' : 'text-slate-400 font-medium'}`}>{isSuperAdmin ? 'Super Admin' : roleLabel}</p>
+      </div>
+    </>
+  );
+
   return (
-    <header ref={menuRef} className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur-xl">
-      <div className="flex min-h-[74px] items-center justify-between gap-3 px-3 sm:px-5 md:px-8">
-        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+    <header ref={menuRef} className="sticky top-0 z-30 px-3 pt-3 sm:px-5 md:px-8 md:pt-4">
+      <div className="relative flex h-16 items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 shadow-sm sm:px-4">
+        <div className="flex min-w-0 items-center gap-3">
           <button
-            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border transition ${open ? 'border-navy-900 bg-navy-900 text-white shadow-lg shadow-navy-900/20' : 'border-slate-200 bg-slate-50 text-navy-900 hover:border-iceblue-300 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
+            type="button"
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 ${
+              open ? 'bg-blue-600 text-white' : 'bg-blue-50 text-iceblue-700 hover:bg-blue-100'
+            }`}
             onClick={() => setOpen(!open)}
             aria-label="Toggle navigation"
+            aria-expanded={open}
           >
-            {open ? <FiX size={21} /> : <FiMenu size={21} />}
+            {open ? <FiX size={20} /> : <FiMenu size={20} />}
           </button>
 
-          <div className="hidden h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-[#071824] shadow-md shadow-navy-900/15 sm:block">
-            <BrandLogo className="h-full w-full object-cover" />
+          <div className="hidden h-10 w-10 shrink-0 overflow-hidden rounded-xl sm:block">
+            <BrandLogo alt="Business logo" className="h-full w-full object-cover" />
           </div>
 
-          <span className="hidden h-9 w-px bg-slate-200 sm:block" />
-
           <div className="min-w-0 leading-tight">
-            <div className="flex items-center gap-2">
-              <span className="hidden h-2 w-2 rounded-full bg-emerald-500 ring-4 ring-emerald-50 sm:block" />
-              <p className="truncate text-[10px] font-extrabold uppercase tracking-[0.18em] text-slate-400">{activeArea}</p>
-            </div>
-            <h1 className="mt-1 truncate font-display text-base font-bold text-navy-900 sm:text-lg">{title}</h1>
+            <p className="truncate text-[10px] font-semibold uppercase tracking-wide bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{activeArea}</p>
+            <h1 className="truncate font-display text-sm font-bold text-slate-900 sm:text-base">{title}</h1>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-          {isAdminArea && (
-            <>
-              <Link
-                href="/admin/trucks"
-                title="Trucks"
-                aria-label="Trucks"
-                className={`flex h-10 w-10 items-center justify-center rounded-xl border transition ${pathname?.startsWith('/admin/trucks') ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-200 bg-white text-slate-500 hover:border-iceblue-200 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
-              >
-                <FiTruck />
-              </Link>
-              <Link
-                href="/admin/settings"
-                title="Settings"
-                aria-label="Settings"
-                className={`hidden h-10 w-10 items-center justify-center rounded-xl border transition sm:flex ${pathname?.startsWith('/admin/settings') ? 'border-navy-900 bg-navy-900 text-white' : 'border-slate-200 bg-white text-slate-500 hover:border-iceblue-200 hover:bg-iceblue-50 hover:text-iceblue-700'}`}
-              >
-                <FiSettings />
-              </Link>
-            </>
-          )}
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          {isAdminArea && quickLinks.map(({ href, label, icon: Icon, alwaysVisible }) => (
+            <Link
+              key={href}
+              href={href}
+              title={label}
+              aria-label={label}
+              className={`${alwaysVisible ? 'flex' : 'hidden md:flex'} h-10 w-10 items-center justify-center rounded-xl transition ${
+                pathname?.startsWith(href)
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              <Icon />
+            </Link>
+          ))}
+
           {user?.role === 'super_admin' && (
             <select
               aria-label="Select dashboard branch"
-              className="hidden h-11 max-w-52 rounded-xl border border-slate-200 bg-slate-50 px-3 text-xs font-bold text-navy-900 outline-none ring-0 transition focus:border-iceblue-400 xl:block"
+              className="hidden h-10 max-w-52 rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 xl:block"
               value={selectedBranch}
               onChange={(event) => changeBranch(event.target.value)}
             >
@@ -151,90 +179,103 @@ export default function Topbar({ title }: { title: string }) {
               {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
             </select>
           )}
-          <div className="hidden h-11 items-center gap-2 rounded-xl bg-navy-900 px-3 text-white lg:flex">
-            <TimeIcon className="text-iceblue-300" />
+
+          <div className="hidden items-center gap-1.5 px-2 lg:flex">
+            <TimeIcon className="text-blue-500" />
             <div className="leading-none">
-              <p className="text-xs font-bold">{timeLabel}</p>
-              <p className="mt-1 text-[9px] font-semibold uppercase tracking-wide text-iceblue-200/70">{dateLabel}</p>
+              <p className="text-xs font-semibold text-slate-700">{timeLabel}</p>
+              <p className="mt-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400">{dateLabel}</p>
             </div>
           </div>
 
-          <div className="hidden items-center gap-2 border-l border-slate-200 pl-2 md:flex">
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-iceblue-500 to-sky-700 text-sm font-black text-white shadow-sm">{userInitial}</span>
-            <div className="hidden max-w-28 leading-tight 2xl:block">
-              <p className="truncate text-xs font-bold text-navy-900">{userName}</p>
-              <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-slate-400">{String(user?.role || 'account').replace('_', ' ')}</p>
+          {isAdminArea ? (
+            <Link
+              href="/admin/settings/profile"
+              title="Account settings"
+              aria-label="Account settings"
+              className={`hidden items-center gap-2 rounded-xl px-2 py-1 transition md:flex ${
+                pathname?.startsWith('/admin/settings') ? 'bg-blue-50' : 'hover:bg-slate-50'
+              }`}
+            >
+              {accountChip}
+            </Link>
+          ) : (
+            <div className="hidden items-center gap-2 rounded-xl px-2 py-1 md:flex">
+              {accountChip}
             </div>
-          </div>
+          )}
 
           <button
+            type="button"
             onClick={() => void logout()}
-            className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-500 transition hover:border-red-200 hover:bg-red-100"
+            className="flex h-10 w-10 items-center justify-center rounded-xl text-red-500 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
             aria-label="Logout"
             title="Logout"
           >
             <FiLogOut />
           </button>
         </div>
-      </div>
 
-      {open && (
-        <div className="absolute left-3 top-[66px] z-50 w-[300px] max-w-[calc(100vw-1.5rem)] rounded-2xl border border-slate-200 bg-white p-2.5 shadow-2xl shadow-navy-900/20 sm:left-5 md:left-8">
-          <div className="mb-2 flex items-center justify-between gap-2 rounded-xl bg-gradient-to-r from-[#071824] to-sky-900 px-3 py-2.5 text-white">
-            <div><p className="text-[9px] font-bold uppercase tracking-[0.16em] text-iceblue-200/70">Navigation</p><p className="mt-1 text-sm font-bold">{activeArea}</p></div>
-            <div className="flex items-center gap-1.5 rounded-lg bg-white/10 px-2 py-1.5 text-right">
-              <TimeIcon className="text-iceblue-200" />
-              <div>
-                <p className="text-xs font-bold leading-none">{timeLabel}</p>
-                <p className="mt-0.5 text-[9px] font-medium text-iceblue-100/70">{dateLabel}</p>
+        {open && (
+          <div className="absolute left-0 top-[calc(100%+0.5rem)] z-50 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg">
+                  <BrandLogo alt="" className="h-full w-full object-cover" />
+                </div>
+                <p className="truncate text-[10px] font-semibold uppercase tracking-wide bg-gradient-to-br from-navy-900 via-navy-800 to-iceblue-700 bg-clip-text text-transparent">{activeArea}</p>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-slate-500">
+                <TimeIcon className="text-blue-500" />
+                {timeLabel}
               </div>
             </div>
-          </div>
 
-          {user?.role === 'super_admin' && (
-            <div className="mb-2 rounded-xl border border-iceblue-100 bg-iceblue-50 p-2">
-              <label className="mb-1 block text-[11px] font-bold uppercase tracking-wide text-navy-800/50">View Branch</label>
-              <select className="input-field h-9 bg-white text-xs" value={selectedBranch} onChange={(event) => changeBranch(event.target.value)}>
-                <option value="">Overall — all branches</option>
-                {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-              </select>
+            {user?.role === 'super_admin' && (
+              <div className="border-b border-slate-100 px-4 py-3">
+                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">View Branch</label>
+                <select className="input-field h-9 rounded-xl bg-white text-xs" value={selectedBranch} onChange={(event) => changeBranch(event.target.value)}>
+                  <option value="">Overall — all branches</option>
+                  {branches.map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
+                </select>
+              </div>
+            )}
+
+            <p className="px-4 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{isAdminArea ? 'Admin Menu' : 'Driver Menu'}</p>
+            <div className="max-h-[55vh] space-y-0.5 overflow-y-auto p-2">
+              {menuLinks.map(([href, label, Icon]) => {
+                const active = pathname?.startsWith(href as string);
+                const LinkIcon = Icon as typeof FiGrid;
+
+                return (
+                  <Link
+                    key={href as string}
+                    href={href as string}
+                    onClick={() => setOpen(false)}
+                    className={`flex h-11 items-center gap-2.5 rounded-xl px-3 text-xs font-semibold transition ${
+                      active ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    <LinkIcon className="shrink-0 text-base" />
+                    {label as string}
+                  </Link>
+                );
+              })}
             </div>
-          )}
 
-          <p className="mb-2 px-3 text-[10px] font-bold uppercase tracking-[0.18em] text-navy-800/45">{isAdminArea ? 'Admin Menu' : 'Driver Menu'}</p>
-          <div className="max-h-[55vh] space-y-0.5 overflow-y-auto pr-0.5">
-            {menuLinks.map(([href, label, Icon]) => {
-              const active = pathname?.startsWith(href as string);
-              const LinkIcon = Icon as typeof FiGrid;
-
-              return (
-                <Link
-                  key={href as string}
-                  href={href as string}
-                  onClick={() => setOpen(false)}
-                  className={`flex h-10 items-center gap-2 rounded-xl px-2.5 text-xs font-semibold transition ${
-                    active ? 'bg-gradient-to-r from-navy-900 to-sky-900 text-white shadow-lg shadow-navy-900/15' : 'text-navy-800 hover:bg-iceblue-50'
-                  }`}
-                >
-                  <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${active ? 'bg-white/15' : 'bg-iceblue-50 text-iceblue-700'}`}>
-                    <LinkIcon className="text-base" />
-                  </span>
-                  {label as string}
-                  {active && <FiNavigation className="ml-auto text-white/70" />}
-                </Link>
-              );
-            })}
+            <div className="border-t border-slate-100 p-2">
+              <button
+                type="button"
+                onClick={() => void logout()}
+                className="flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-xs font-semibold text-red-500 transition hover:bg-red-50"
+              >
+                <FiLogOut className="text-base" />
+                Logout
+              </button>
+            </div>
           </div>
-
-          <button
-            onClick={() => void logout()}
-            className="mt-2 flex h-9 w-full items-center gap-2 rounded-xl bg-red-50 px-2.5 text-left text-xs font-semibold text-red-500"
-          >
-            <FiLogOut className="text-lg" />
-            Logout
-          </button>
-        </div>
-      )}
+        )}
+      </div>
     </header>
   );
 }

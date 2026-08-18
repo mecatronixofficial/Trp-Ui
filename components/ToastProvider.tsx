@@ -6,11 +6,11 @@ import { mutationToast, showToast, TOAST_EVENT, type ToastDetail, type ToastTone
 
 type ToastItem = ToastDetail & { id: number; duration: number };
 
-const accents: Record<ToastTone, { icon: string; close: string; color: string }> = {
-  success: { icon: 'bg-emerald-400 text-[#06265d]', close: 'text-emerald-400 hover:bg-emerald-400/10', color: '#34d399' },
-  update: { icon: 'bg-sky-400 text-[#06265d]', close: 'text-sky-400 hover:bg-sky-400/10', color: '#38bdf8' },
-  danger: { icon: 'bg-red-500 text-[#06265d]', close: 'text-red-400 hover:bg-red-400/10', color: '#ef4444' },
-  warning: { icon: 'bg-amber-400 text-[#06265d]', close: 'text-amber-400 hover:bg-amber-400/10', color: '#fbbf24' },
+const accents: Record<ToastTone, { icon: string; bar: string; color: string }> = {
+  success: { icon: 'bg-emerald-50 text-emerald-600', bar: 'bg-emerald-500', color: '#10b981' },
+  update: { icon: 'bg-blue-50 text-iceblue-700', bar: 'bg-blue-500', color: '#2563eb' },
+  danger: { icon: 'bg-red-50 text-red-600', bar: 'bg-red-500', color: '#ef4444' },
+  warning: { icon: 'bg-amber-50 text-amber-600', bar: 'bg-amber-500', color: '#d97706' },
 };
 
 export default function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -58,22 +58,20 @@ export default function ToastProvider({ children }: { children: React.ReactNode 
 
   return <>
     {children}
-    <div className="pointer-events-none fixed right-3 top-3 z-[9999] flex w-[calc(100%-1.5rem)] max-w-md flex-col gap-3 sm:right-6 sm:top-6" aria-live="polite" aria-atomic="true">
+    <div className="pointer-events-none fixed right-3 top-3 z-[9999] flex w-[calc(100%-1.5rem)] max-w-sm flex-col gap-2.5 sm:right-6 sm:top-6" aria-live="polite" aria-atomic="true">
       {items.map((item) => {
         const Icon = item.tone === 'success' ? FiCheckCircle : item.tone === 'update' ? FiInfo : FiAlertCircle;
         const accent = accents[item.tone];
-        return <div key={item.id} role="status" className="toast-enter pointer-events-auto relative flex min-h-[56px] w-fit min-w-[220px] max-w-full self-end items-center gap-3 overflow-hidden rounded-lg border border-white/10 bg-[#06265d] px-4 py-2.5 text-white shadow-[0_14px_35px_rgba(2,23,62,0.25)] sm:max-w-md">
-          <span className="relative flex h-10 w-10 shrink-0 items-center justify-center">
-            <svg className="absolute inset-0 h-10 w-10 -rotate-90" viewBox="0 0 40 40" aria-hidden="true">
-              <circle cx="20" cy="20" r="18" fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth="2" />
-              <circle className="toast-clock" cx="20" cy="20" r="18" pathLength="100" fill="none" stroke={accent.color} strokeWidth="2.5" strokeLinecap="round" style={{ animationDuration: `${item.duration}ms` }} />
-            </svg>
-            <span className={`flex h-8 w-8 items-center justify-center rounded-full ${accent.icon}`}>
-              <Icon className="h-4 w-4 stroke-[3]" />
-            </span>
+        return <div key={item.id} role="status" className="toast-enter pointer-events-auto relative flex w-fit min-w-[240px] max-w-full self-end items-start gap-3 overflow-hidden rounded-2xl bg-white py-3 pl-4 pr-3 text-gray-900 shadow-xl shadow-black/10 ring-1 ring-black/5 sm:max-w-sm">
+          <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accent.color }} aria-hidden="true" />
+          <span className={`relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${accent.icon}`}>
+            <Icon className="h-4 w-4 stroke-[2.5]" />
           </span>
-          <p className="min-w-0 flex-1 text-[15px] font-medium leading-6 tracking-[0.01em] sm:text-base">{item.message}</p>
-          <button type="button" onClick={() => remove(item.id)} className={`-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors ${accent.close}`} aria-label="Close notification"><FiX className="h-6 w-6 stroke-[2.25]" /></button>
+          <p className="min-w-0 flex-1 pt-1 text-sm font-medium leading-5 text-gray-800">{item.message}</p>
+          <button type="button" onClick={() => remove(item.id)} className="-mr-1 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600" aria-label="Close notification"><FiX className="h-4 w-4 stroke-[2.5]" /></button>
+          <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gray-100">
+            <span className={`toast-bar block h-full ${accent.bar}`} style={{ animationDuration: `${item.duration}ms` }} />
+          </span>
         </div>;
       })}
     </div>
