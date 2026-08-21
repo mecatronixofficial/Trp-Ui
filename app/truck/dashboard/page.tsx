@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   FiAlertCircle,
   FiCheckCircle,
@@ -11,10 +12,12 @@ import {
   FiPhone,
   FiPlus,
   FiRefreshCcw,
+  FiSearch,
   FiShoppingCart,
   FiTrash2,
   FiTrendingUp,
   FiTruck,
+  FiUserPlus,
   FiXCircle,
 } from 'react-icons/fi';
 import Modal from '../../../components/Modal';
@@ -33,8 +36,9 @@ const indiaDateISO = (date = new Date()) =>
   }).format(date);
 
 const createPaymentForm = () => ({ date: indiaDateISO(), amount: '', paymentMode: 'cash', notes: '' });
-const createExpenseForm = () => ({ date: indiaDateISO(), amount: '', purpose: '', notes: '' });
+const createExpenseForm = () => ({ date: indiaDateISO(), costType: '', customCategory: '', amount: '', fuelQuantity: '', notes: '' });
 const createWastageForm = () => ({ date: indiaDateISO(), size: '1', quantity: '', reason: 'broken', notes: '' });
+const createCustomerForm = () => ({ name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', price: '', notes: '' });
 
 const getErrorMessage = (error: unknown, fallback: string) => {
   if (typeof error !== 'object' || error === null || !('response' in error)) return fallback;
@@ -46,13 +50,16 @@ const getErrorMessage = (error: unknown, fallback: string) => {
 
 const getCustomerName = (sale: any) => sale.customer?.name || sale.customerName || 'Customer';
 const getQuantity = (sale: any) => sale.items?.reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0) || 0;
+const referenceId = (value: any) => String(value?._id || value || '');
+const saleTruckId = (sale: any) => referenceId(sale?.truck || sale?.truckId);
 
 type AssignmentAction = 'accept' | 'reject';
-type DashboardTab = 'overview' | 'trip';
+type DashboardTab = 'overview' | 'trip' | 'customers';
 
 const DASHBOARD_TABS: Array<{ key: DashboardTab; label: string; icon: typeof FiCompass }> = [
   { key: 'overview', label: 'Overview', icon: FiCompass },
   { key: 'trip', label: 'Report', icon: FiTruck },
+  { key: 'customers', label: 'Customer History', icon: FiClock },
 ];
 
 interface TruckAssignment {
@@ -76,6 +83,7 @@ const getGreeting = () => {
 };
 
 export default function TruckDashboardPage() {
+  const router = useRouter();
   const { user, logout } = useAuth();
   const [data, setData] = useState<any>(null);
   const [sales, setSales] = useState<any[]>([]);
@@ -99,10 +107,24 @@ export default function TruckDashboardPage() {
   const [paymentForm, setPaymentForm] = useState(createPaymentForm);
   const [saleFormKey, setSaleFormKey] = useState(0);
   const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [error, setError] = useState('');
   const [wastageForm, setWastageForm] = useState(createWastageForm);
   const [expenseForm, setExpenseForm] = useState(createExpenseForm);
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
+  const [customerHistory, setCustomerHistory] = useState<any[]>([]);
+  const [customerHistoryLoading, setCustomerHistoryLoading] = useState(false);
+  const [customerHistoryError, setCustomerHistoryError] = useState('');
+  const [customerListOpen, setCustomerListOpen] = useState(false);
+  const [customerCreateOpen, setCustomerCreateOpen] = useState(false);
+  const [customerList, setCustomerList] = useState<any[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerListLoading, setCustomerListLoading] = useState(false);
+  const [customerForm, setCustomerForm] = useState(createCustomerForm);
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerError, setCustomerError] = useState('');
+  const customerSearchBoxRef = useRef<HTMLDivElement>(null);
+  const customerSearchRequestRef = useRef(0);
   const [trend, setTrend] = useState<any>(null);
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendError, setTrendError] = useState('');
@@ -121,6 +143,70 @@ export default function TruckDashboardPage() {
     };
   } | null>(null);
   const [logoutPending, setLogoutPending] = useState(false);
+
+  const loadCustomers = useCallback(async (search = '') => {
+    const requestId = ++customerSearchRequestRef.current;
+    setCustomerListLoading(true);
+    setCustomerError('');
+    try {
+      const { data: rows } = await api.get('/customers', { params: search.trim() ? { search: search.trim() } : {} });
+      if (requestId === customerSearchRequestRef.current) setCustomerList(Array.isArray(rows) ? rows : []);
+    } catch (err: unknown) {
+      if (requestId === customerSearchRequestRef.current) {
+        setCustomerList([]);
+        setCustomerError(getErrorMessage(err, 'Could not load customers.'));
+      }
+    } finally {
+      if (requestId === customerSearchRequestRef.current) setCustomerListLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!customerListOpen) return;
+    const timer = window.setTimeout(() => void loadCustomers(customerSearch), 250);
+    return () => window.clearTimeout(timer);
+  }, [customerListOpen, customerSearch, loadCustomers]);
+
+  useEffect(() => {
+    const closeCustomerResults = (event: PointerEvent) => {
+      if (!customerSearchBoxRef.current?.contains(event.target as Node)) setCustomerListOpen(false);
+    };
+    document.addEventListener('pointerdown', closeCustomerResults);
+    return () => document.removeEventListener('pointerdown', closeCustomerResults);
+  }, []);
+
+  const saveCustomer = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const price = Number(customerForm.price);
+    if (!Number.isFinite(price) || price <= 0) {
+      setCustomerError('Enter a price greater than zero.');
+      return;
+    }
+    setCustomerSaving(true);
+    setCustomerError('');
+    try {
+      const createdCustomerName = customerForm.name.trim();
+      const driverName = data?.truck?.driverName || user?.displayName || user?.username || 'Driver';
+      const { price: _price, ...customerFields } = customerForm;
+      await api.post('/customers', {
+        ...customerFields,
+        customerType: 'truck',
+        truck: data?.truck?._id || user?.truck,
+        isActive: true,
+        ...(customerForm.defaultSaleType === 'wholesale' ? { wholesalePrice: price } : { retailPrice: price }),
+        notes: `[Created by: ${driverName}]\n[Customer price: ${customerForm.defaultSaleType}=${price}]${customerForm.notes ? `\n${customerForm.notes}` : ''}`,
+      });
+      setCustomerForm(createCustomerForm());
+      setCustomerCreateOpen(false);
+      setCustomerListOpen(true);
+      setCustomerSearch(createdCustomerName);
+      await loadCustomers(createdCustomerName);
+    } catch (err: unknown) {
+      setCustomerError(getErrorMessage(err, err instanceof Error ? err.message : 'Could not create customer.'));
+    } finally {
+      setCustomerSaving(false);
+    }
+  };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -277,6 +363,38 @@ export default function TruckDashboardPage() {
       })),
     [sales],
   );
+  const customerHistoryRows = useMemo(() => customerHistory.map((sale) => ({
+    sale,
+    name: getCustomerName(sale),
+    bar: getQuantity(sale),
+  })), [customerHistory]);
+  const pendingCustomerRows = useMemo(
+    () => customerHistoryRows.filter((row) => Number(row.sale.balanceAmount || 0) > 0),
+    [customerHistoryRows],
+  );
+
+  const loadCustomerHistory = useCallback(async () => {
+    const truckId = referenceId(data?.truck?._id || user?.truck);
+    if (!truckId) return;
+    setCustomerHistoryLoading(true);
+    setCustomerHistoryError('');
+    try {
+      const { data: rows } = await api.get('/sales');
+      const salesRows = Array.isArray(rows) ? rows : [];
+      setCustomerHistory(salesRows
+        .filter((sale) => saleTruckId(sale) === truckId)
+        .sort((a, b) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime()));
+    } catch (err: unknown) {
+      setCustomerHistory([]);
+      setCustomerHistoryError(getErrorMessage(err, 'Could not load customer history.'));
+    } finally {
+      setCustomerHistoryLoading(false);
+    }
+  }, [data?.truck?._id, user?.truck]);
+
+  useEffect(() => {
+    if (activeTab === 'customers') void loadCustomerHistory();
+  }, [activeTab, loadCustomerHistory]);
 
   const remainingBars = Number(tripClosing?.remaining || 0);
   const awaitingAdminApproval = Boolean(tripClosing?.driverClosed && !tripClosing?.checked);
@@ -294,7 +412,16 @@ export default function TruckDashboardPage() {
     return () => window.clearInterval(timer);
   }, [pendingAssignment, load]);
   const progress = barsTaken > 0 ? Math.max(0, Math.min(100, Math.round((barsSold / barsTaken) * 100))) : 0;
-  const totalExpense = useMemo(() => expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0), [expenses]);
+  const driverAmount = useMemo(() => expenses
+    .filter((row) => ['advance_for_employee', 'advance_for_emp', 'advance_employee', 'employee_advance', 'worker_amount'].includes(String(row.costType || row.purpose || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')))
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0), [expenses]);
+  const expenseAmount = useMemo(() => expenses.reduce((sum, row) => sum + Number(row.amount || 0), 0) - driverAmount, [driverAmount, expenses]);
+  const totalExpense = expenseAmount + driverAmount;
+  const totalCollection = Number(data?.todayCollection ?? sales.reduce((sum, sale) => sum + Number(sale.paidAmount || 0), 0));
+  const driverBalanceAmount = useMemo(
+    () => totalCollection - expenseAmount - driverAmount,
+    [driverAmount, expenseAmount, totalCollection],
+  );
 
   const respondToAssignment = async (action: AssignmentAction) => {
     if (!pendingAssignment || assignmentAction) return;
@@ -377,6 +504,7 @@ export default function TruckDashboardPage() {
       setPaymentTarget(null);
       setPaymentForm(createPaymentForm());
       await load();
+      if (activeTab === 'customers') await loadCustomerHistory();
     } catch (err: unknown) {
       setError(getErrorMessage(err, 'Could not update payment.'));
     } finally {
@@ -386,10 +514,28 @@ export default function TruckDashboardPage() {
 
   const saveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    const category = expenseForm.costType === 'custom' ? expenseForm.customCategory.trim() : expenseForm.costType;
+    if (!category) { setError('Select or enter an expense category.'); return; }
+    const fuelQuantity = Number(expenseForm.fuelQuantity);
+    if (expenseForm.costType === 'petrol_diesel' && (!Number.isFinite(fuelQuantity) || fuelQuantity <= 0)) {
+      setError('Enter fuel consumed in litres.');
+      return;
+    }
     setSavingExpense(true);
     setError('');
     try {
-      await api.post('/driver-expenses', { ...expenseForm, amount: Number(expenseForm.amount) });
+      await api.post('/driver-expenses', {
+        date: expenseForm.date,
+        amount: Number(expenseForm.amount),
+        purpose: category === 'advance_for_employee' ? 'Worker Amount' : category === 'petrol_diesel' ? 'Petrol / Diesel' : category === 'other_expenses' ? 'Other Expenses' : category === 'food' ? 'Food' : category,
+        costType: category,
+        fuelQuantity: expenseForm.costType === 'petrol_diesel' ? fuelQuantity : 0,
+        notes: expenseForm.notes,
+        truck: data?.truck?._id || user?.truck,
+        truckName: data?.truck?.truckName || '',
+        driverName: data?.truck?.driverName || user?.displayName || user?.username || 'Driver',
+        workerName: category === 'advance_for_employee' ? data?.truck?.driverName || user?.displayName || user?.username || 'Driver' : '',
+      });
       setExpenseForm(createExpenseForm());
       setAmountModalOpen(false);
       await load();
@@ -434,7 +580,7 @@ export default function TruckDashboardPage() {
   }
 
   return (
-    <div className="space-y-5 pb-8 xl:space-y-6">
+    <div className="min-w-0 space-y-4 pb-24 sm:space-y-5 sm:pb-20 xl:space-y-6">
       <section className="overflow-hidden rounded-2xl border border-iceblue-100 bg-white shadow-[0_10px_28px_rgba(15,23,42,0.06)]">
         <div className="flex flex-col gap-3 p-3.5 sm:p-4 lg:flex-row lg:items-center lg:gap-4 lg:p-5">
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -463,7 +609,7 @@ export default function TruckDashboardPage() {
 
           <div className="hidden h-10 w-px bg-iceblue-100 lg:block" />
 
-          <div className="flex shrink-0 items-center justify-between gap-2 lg:flex-col lg:items-end lg:gap-1.5">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 lg:shrink-0 lg:flex-col lg:items-end lg:gap-1.5">
             <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold ${awaitingAdminApproval ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}><span className={`mr-1.5 h-1.5 w-1.5 rounded-full ${awaitingAdminApproval ? 'bg-amber-500' : 'bg-emerald-500'}`} />{truckOffline ? 'Waiting for Bars' : awaitingAdminApproval ? 'Awaiting Admin' : 'Online'}</span>
             <button type="button" onClick={() => void load()} className="inline-flex h-8 items-center gap-1.5 rounded-full bg-navy-900 px-3.5 text-[11px] font-bold text-white transition hover:bg-iceblue-700"><FiRefreshCcw /> Refresh</button>
           </div>
@@ -472,25 +618,30 @@ export default function TruckDashboardPage() {
         <div className="mx-3.5 h-px bg-iceblue-100 sm:mx-4 lg:mx-5" />
 
         <div className="p-3.5 sm:p-4 lg:p-5">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-1.5 min-[360px]:gap-2 sm:grid-cols-6">
             <button
               type="button"
               onClick={() => { if (canRecordTrip) { setError(''); setAmountModalOpen(true); } }}
               disabled={!canRecordTrip}
-              className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2 text-left transition hover:border-iceblue-200 hover:bg-iceblue-50 disabled:cursor-default disabled:hover:border-iceblue-100 disabled:hover:bg-iceblue-50/50"
+              className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-2 py-2 text-left transition hover:border-iceblue-200 hover:bg-iceblue-50 disabled:cursor-default disabled:hover:border-iceblue-100 disabled:hover:bg-iceblue-50/50 min-[360px]:px-3"
             >
-              <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-navy-800/45"><FiDollarSign /> Amount</p>
-              <p className="mt-0.5 truncate font-display text-base font-bold text-navy-900">{formatCurrency(totalExpense)}</p>
+              <p className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide text-navy-800/45"><FiPlus /> Expense</p>
+              <p className="mt-0.5 truncate font-display text-base font-bold text-navy-900">{formatCurrency(expenseAmount)}</p>
             </button>
-            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2">
+            <div className="min-w-0 rounded-xl border border-violet-100 bg-violet-50/60 px-2 py-2 min-[360px]:px-3"><p className="text-[9px] font-bold uppercase tracking-wide text-violet-700/70">Driver Amount</p><p className="mt-0.5 truncate font-display text-base font-bold text-violet-700">{formatCurrency(driverAmount)}</p></div>
+            <div className="min-w-0 rounded-xl border border-emerald-100 bg-emerald-50/60 px-2 py-2 min-[360px]:px-3">
+              <p className="text-[9px] font-bold uppercase tracking-wide text-emerald-700/70">Balance Amount</p>
+              <p className={`mt-0.5 truncate font-display text-base font-bold ${driverBalanceAmount < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatCurrency(driverBalanceAmount)}</p>
+            </div>
+            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-2 py-2 min-[360px]:px-3">
               <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Returned</p>
               <p className="mt-0.5 font-display text-base font-bold text-navy-900">{formatBarQuantity(data?.todayReturned || 0) || 0}</p>
             </div>
-            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-3 py-2">
+            <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50/50 px-2 py-2 min-[360px]:px-3">
               <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Wastage</p>
               <p className="mt-0.5 font-display text-base font-bold text-navy-900">{formatBarQuantity(data?.todayWastage || 0) || 0}</p>
             </div>
-            <div className="min-w-0 rounded-xl border border-cyan-100 bg-cyan-50/70 px-3 py-2">
+            <div className="min-w-0 rounded-xl border border-cyan-100 bg-cyan-50/70 px-2 py-2 min-[360px]:px-3">
               <p className="text-[9px] font-bold uppercase tracking-wide text-cyan-700/70">Remaining</p>
               <p className="mt-0.5 font-display text-base font-bold text-cyan-800">{formatBarQuantity(Math.max(0, Number(tripClosing?.remaining || 0))) || 0}</p>
             </div>
@@ -730,6 +881,7 @@ export default function TruckDashboardPage() {
             <AmountBox label="Total Sales" value={tripClosing.salesAmount} />
             <AmountBox label="Collection" value={tripClosing.collectedAmount} />
             <AmountBox label="Pending" value={tripClosing.pendingAmount} danger={tripClosing.pendingAmount > 0} />
+            <AmountBox label="Expenses Amount" value={tripClosing.expenseAmount} />
             <AmountBox label="Driver Amount" value={tripClosing.driverAmount} />
           </div>
           {remainingBars > 0 && <p className="rounded-xl bg-emerald-50 px-3 py-3 text-sm font-semibold text-emerald-700">When you confirm, {formatBarQuantity(remainingBars)} remaining bar(s) will be recorded as Unsold Returns and the closing will be sent to admin.</p>}
@@ -762,29 +914,68 @@ export default function TruckDashboardPage() {
 
         <>
           {/* Section tabs — same iceblue/navy palette, split into focused screens instead of one long scroll */}
-          <div className="flex w-fit max-w-full gap-1.5 overflow-x-auto rounded-2xl bg-iceblue-50/70 p-1.5">
-            {DASHBOARD_TABS.map(({ key, label, icon: TabIcon }) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setActiveTab(key)}
-                className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
-                  activeTab === key ? 'bg-navy-900 text-white shadow-sm' : 'text-navy-800/60 hover:bg-white hover:text-navy-900'
-                }`}
-              >
-                <TabIcon className={activeTab === key ? 'text-iceblue-300' : 'text-navy-800/40'} /> {label}
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex w-full max-w-full gap-1 overflow-x-auto rounded-2xl bg-iceblue-50/70 p-1 min-[360px]:gap-1.5 min-[360px]:p-1.5 lg:w-fit">
+              {DASHBOARD_TABS.map(({ key, label, icon: TabIcon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setActiveTab(key)}
+                  className={`flex shrink-0 items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-xs font-semibold transition min-[390px]:px-4 min-[390px]:text-sm ${
+                    activeTab === key ? 'bg-navy-900 text-white shadow-sm' : 'text-navy-800/60 hover:bg-white hover:text-navy-900'
+                  }`}
+                >
+                  <TabIcon className={activeTab === key ? 'text-iceblue-300' : 'text-navy-800/40'} /> {label}
+                </button>
+              ))}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] lg:flex lg:items-start">
+              <div ref={customerSearchBoxRef} className="relative min-w-0 lg:w-80">
+                <FiSearch className="pointer-events-none absolute left-3 top-3.5 text-navy-800/40" />
+                <input
+                  className="input-field h-11 pl-9"
+                  placeholder="Search customers..."
+                  value={customerSearch}
+                  onFocus={() => setCustomerListOpen(true)}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setCustomerSearch(value);
+                    setCustomerListOpen(true);
+                  }}
+                />
+                {customerListOpen && (
+                  <div className="absolute right-0 top-12 z-50 max-h-[50dvh] w-full min-w-0 overflow-y-auto rounded-2xl border border-iceblue-100 bg-white p-2 shadow-xl sm:max-h-72">
+                    <div className="mb-1 flex items-center justify-between px-2 py-1">
+                      <p className="text-xs font-bold uppercase tracking-wide text-navy-800/45">Customers</p>
+                      <button type="button" onClick={() => setCustomerListOpen(false)} aria-label="Close customer results" className="text-navy-800/45 hover:text-navy-900"><FiXCircle /></button>
+                    </div>
+                    {customerListLoading ? <p className="px-3 py-6 text-center text-sm text-navy-800/50">Searching...</p> : customerError ? <p className="px-3 py-4 text-sm font-medium text-red-600">{customerError}</p> : customerList.length ? customerList.map((customer) => (
+                      <button type="button" key={customer._id} onClick={() => router.push(`/truck/customers/${customer._id}`)} className="block w-full min-w-0 rounded-xl px-3 py-2 text-left hover:bg-iceblue-50">
+                        <p className="break-words text-sm font-bold text-navy-900">{customer.name}</p>
+                        <p className="mt-0.5 break-words text-xs text-navy-800/50">{customer.phoneNumber || 'No phone'}{customer.address ? ` · ${customer.address}` : ''}</p>
+                      </button>
+                    )) : <p className="px-3 py-6 text-center text-sm text-navy-800/50">No customers found.</p>}
+                  </div>
+                )}
+              </div>
+              <button type="button" onClick={() => { setCustomerError(''); setCustomerForm(createCustomerForm()); setCustomerCreateOpen(true); }} className="btn-primary flex h-11 items-center justify-center gap-2">
+                <FiUserPlus /> Create Customer
               </button>
-            ))}
+            </div>
           </div>
 
           {activeTab === 'overview' && (
-            <OverviewTab
-              data={data}
-              totalExpense={totalExpense}
-              truckOffline={truckOffline}
-              recentSales={saleRows.slice(0, 5)}
-              onPay={openPayment}
-            />
+            <div className="space-y-5">
+              <OverviewTab
+                data={data}
+                expenseAmount={expenseAmount}
+                driverAmount={driverAmount}
+                truckOffline={truckOffline}
+                recentSales={saleRows.slice(0, 5)}
+                onPay={openPayment}
+              />
+              <ExpenseHistory rows={expenses} />
+            </div>
           )}
 
           {activeTab === 'trip' && (
@@ -802,17 +993,50 @@ export default function TruckDashboardPage() {
               />
             </div>
           )}
+
+          {activeTab === 'customers' && (
+            <div className="space-y-5">
+              {customerHistoryLoading ? (
+                <div className="flex min-h-[220px] items-center justify-center rounded-2xl border border-iceblue-100 bg-white">
+                  <IceBlockSpinner label="Loading customer history..." />
+                </div>
+              ) : customerHistoryError ? (
+                <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-medium text-red-700">
+                  <p>{customerHistoryError}</p>
+                  <button type="button" onClick={() => void loadCustomerHistory()} className="mt-3 inline-flex items-center gap-2 font-bold underline underline-offset-4"><FiRefreshCcw /> Retry</button>
+                </div>
+              ) : (
+                <>
+                  <SalesTable title="Daily Customer Buying History" rows={customerHistoryRows} onPay={openPayment} empty="No customer buying history for this truck." showPay={false} />
+                  <SalesTable title="Pending Customer History" rows={pendingCustomerRows} onPay={openPayment} empty="No pending customer payments for this truck." showPay={canRecordTrip} />
+                </>
+              )}
+            </div>
+          )}
         </>
 
       {canRecordTrip && (
-        <button
-          type="button"
-          onClick={() => setSaleModalOpen(true)}
-          className="fixed bottom-5 right-5 z-40 inline-flex h-12 items-center gap-2 rounded-full bg-navy-900 px-5 text-sm font-bold text-white shadow-[0_14px_35px_rgba(7,27,43,0.3)] transition hover:-translate-y-0.5 hover:bg-iceblue-700 sm:bottom-7 sm:right-7"
-          aria-label="Add sale"
-        >
-          <FiPlus className="text-lg" /> Sales
-        </button>
+        <>
+          {addMenuOpen && <button type="button" aria-label="Close add menu" className="fixed inset-0 z-30 cursor-default" onClick={() => setAddMenuOpen(false)} />}
+          <div className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] right-3 z-40 flex flex-col items-end gap-2 sm:bottom-7 sm:right-7">
+            {addMenuOpen && (
+              <div className="w-40 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1.5 shadow-[0_16px_40px_rgba(7,27,43,0.22)]" role="menu">
+                <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); setSaleModalOpen(true); }} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-bold text-navy-900 transition hover:bg-iceblue-50"><FiShoppingCart className="text-iceblue-600" /> Sales</button>
+                <button type="button" role="menuitem" onClick={() => { setAddMenuOpen(false); setError(''); setAmountModalOpen(true); }} className="flex h-11 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-bold text-navy-900 transition hover:bg-iceblue-50"><FiDollarSign className="text-red-500" /> Expense</button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setAddMenuOpen((open) => !open)}
+              className="inline-flex h-12 items-center gap-2 rounded-full bg-navy-900 px-4 text-sm font-bold text-white shadow-[0_14px_35px_rgba(7,27,43,0.3)] transition hover:-translate-y-0.5 hover:bg-iceblue-700 sm:px-5"
+              aria-label="Add sales or expense"
+              aria-haspopup="menu"
+              aria-expanded={addMenuOpen}
+            >
+              <FiPlus className={`text-lg transition-transform ${addMenuOpen ? 'rotate-45' : ''}`} /> Add
+            </button>
+          </div>
+        </>
       )}
 
       {saleModalOpen && (
@@ -826,6 +1050,21 @@ export default function TruckDashboardPage() {
               setSaleModalOpen(false);
             }}
           />
+        </Modal>
+      )}
+
+      {customerCreateOpen && (
+        <Modal title="Create Customer" onClose={() => setCustomerCreateOpen(false)}>
+          <form onSubmit={saveCustomer} className="space-y-3">
+            <div><label className="label-text">Customer Name</label><input required className="input-field" value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} /></div>
+            <div><label className="label-text">Phone Number</label><input className="input-field" value={customerForm.phoneNumber} onChange={(event) => setCustomerForm({ ...customerForm, phoneNumber: event.target.value })} /></div>
+            <div><label className="label-text">Address</label><input className="input-field" value={customerForm.address} onChange={(event) => setCustomerForm({ ...customerForm, address: event.target.value })} /></div>
+            <div><label className="label-text">Default Sale Type</label><select className="input-field" value={customerForm.defaultSaleType} onChange={(event) => setCustomerForm({ ...customerForm, defaultSaleType: event.target.value })}><option value="retail">Retail</option><option value="wholesale">Wholesale</option></select></div>
+            <div><label className="label-text">Price Per Bar</label><input required type="number" min="0.01" step="0.01" inputMode="decimal" className="input-field" placeholder="Enter customer price" value={customerForm.price} onChange={(event) => setCustomerForm({ ...customerForm, price: event.target.value })} /></div>
+            <div><label className="label-text">Notes</label><textarea rows={2} className="input-field" value={customerForm.notes} onChange={(event) => setCustomerForm({ ...customerForm, notes: event.target.value })} /></div>
+            {customerError && <ErrorAlert message={customerError} />}
+            <button disabled={customerSaving} className="btn-primary flex h-11 w-full items-center justify-center gap-2 disabled:opacity-60"><FiUserPlus /> {customerSaving ? 'Creating...' : 'Create Customer'}</button>
+          </form>
         </Modal>
       )}
 
@@ -901,15 +1140,17 @@ export default function TruckDashboardPage() {
       )}
 
       {amountModalOpen && (
-        <Modal title="Driver Amount / Expense" onClose={() => setAmountModalOpen(false)}>
+        <Modal title="Add Expense" onClose={() => setAmountModalOpen(false)}>
           <form onSubmit={saveExpense} className="space-y-4">
             {error && <ErrorAlert message={error} />}
             <div><label className="label-text">Date</label><input type="date" required className="input-field" value={expenseForm.date} onChange={(e) => setExpenseForm({...expenseForm, date: e.target.value})} /></div>
-            <div><label className="label-text">Amount Needed / Spent</label><input type="number" min="0.01" step="0.01" required className="input-field" value={expenseForm.amount} onChange={(e) => setExpenseForm({...expenseForm, amount: e.target.value})} /></div>
-            <div><label className="label-text">Purpose</label><input required className="input-field" placeholder="Diesel, food, repair..." value={expenseForm.purpose} onChange={(e) => setExpenseForm({...expenseForm, purpose: e.target.value})} /></div>
-            <div><label className="label-text">Notes</label><textarea className="input-field" rows={2} value={expenseForm.notes} onChange={(e) => setExpenseForm({...expenseForm, notes: e.target.value})} /></div>
+            <div><label className="label-text">Expense Category</label><select required className="input-field" value={expenseForm.costType} onChange={(e) => setExpenseForm({ ...expenseForm, costType: e.target.value, customCategory: '', fuelQuantity: '' })}><option value="">Select category</option><option value="food">Food</option><option value="petrol_diesel">Petrol / Diesel</option><option value="advance_for_employee">Worker Amount</option><option value="other_expenses">Other Expenses</option><option value="custom">Custom category</option></select>{expenseForm.costType === 'custom' && <input required maxLength={100} className="input-field mt-2" placeholder="Type custom category" value={expenseForm.customCategory} onChange={(e) => setExpenseForm({ ...expenseForm, customCategory: e.target.value })} />}</div>
+            {expenseForm.costType === 'advance_for_employee' && <div><label className="label-text">Worker / Driver Name</label><input readOnly className="input-field bg-slate-50" value={data?.truck?.driverName || user?.displayName || user?.username || 'Driver'} /></div>}
+            {expenseForm.costType === 'petrol_diesel' && <div className="grid gap-3 sm:grid-cols-2"><div><label className="label-text">Truck</label><input readOnly className="input-field bg-slate-50" value={data?.truck?.truckName || 'Truck'} /></div><div><label className="label-text">Fuel Used (Litres)</label><input required type="number" min="0.01" step="0.01" inputMode="decimal" className="input-field" value={expenseForm.fuelQuantity} onChange={(e) => setExpenseForm({ ...expenseForm, fuelQuantity: e.target.value })} /></div></div>}
+            <div><label className="label-text">Amount (₹)</label><input type="number" min="0.01" step="0.01" inputMode="decimal" required className="input-field" value={expenseForm.amount} onChange={(e) => setExpenseForm({...expenseForm, amount: e.target.value})} /></div>
+            <div><label className="label-text">Notes</label><textarea className="input-field" rows={3} maxLength={500} placeholder="Invoice, supplier, or reason for expense" value={expenseForm.notes} onChange={(e) => setExpenseForm({...expenseForm, notes: e.target.value})} /></div>
             <button type="submit" className="btn-primary flex h-12 w-full items-center justify-center gap-2 disabled:opacity-50" disabled={savingExpense}>
-              <FiDollarSign /> {savingExpense ? 'Saving...' : 'Save Amount'}
+              <FiDollarSign /> {savingExpense ? 'Saving...' : 'Save Expense'}
             </button>
           </form>
         </Modal>
@@ -999,7 +1240,7 @@ function TableCard({ title, icon: Icon, count, empty, hasRows, children }: { tit
   );
 }
 
-function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale: any; name: string; bar: number }[]; onPay: (sale: any) => void; empty: string }) {
+function SalesTable({ title, rows, onPay, empty, showPay = true }: { title: string; rows: { sale: any; name: string; bar: number }[]; onPay: (sale: any) => void; empty: string; showPay?: boolean }) {
   const totalBars = rows.reduce((sum, row) => sum + row.bar, 0);
   const totalAmount = rows.reduce((sum, row) => sum + Number(row.sale.totalAmount || 0), 0);
   const totalPaid = rows.reduce((sum, row) => sum + Number(row.sale.paidAmount || 0), 0);
@@ -1007,6 +1248,62 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
 
   return (
     <TableCard title={title} icon={FiShoppingCart} count={rows.length} empty={empty} hasRows={rows.length > 0}>
+      <div className="sm:hidden">
+        {rows.map(({ sale, name, bar }, index) => {
+          const balance = Number(sale.balanceAmount || 0);
+          return (
+            <div key={sale._id} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-navy-900">{name}</p>
+                  <p className="mt-0.5 text-[10px] font-medium text-navy-800/45">{formatDate(sale.date)} · {formatTime(sale.createdAt || sale.date)}</p>
+                </div>
+                <span className="shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">#{index + 1}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-right">
+                <div>
+                  <p className="text-[10px] font-medium text-navy-800/45">Bars</p>
+                  <p className="text-xs font-semibold text-navy-900">{formatBarQuantity(bar)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium text-navy-800/45">Total</p>
+                  <p className="text-xs font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-medium text-navy-800/45">Paid</p>
+                  <p className="text-xs font-semibold text-emerald-700">{formatCurrency(sale.paidAmount)}</p>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <p className={`text-xs font-semibold ${balance > 0 ? 'text-red-600' : 'text-navy-800/55'}`}>Balance: {formatCurrency(balance)}</p>
+                {balance > 0 && showPay ? (
+                  <button
+                    type="button"
+                    onClick={() => onPay(sale)}
+                    className="rounded-lg bg-navy-900 px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-iceblue-700"
+                  >
+                    Pay
+                  </button>
+                ) : balance > 0 ? (
+                  <span className="pill bg-amber-50 text-amber-700">Pending</span>
+                ) : (
+                  <span className="pill bg-emerald-50 text-emerald-600">Paid</span>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-100 px-1 py-3">
+          <p className="text-xs font-bold uppercase text-navy-900">Total</p>
+          <div className="text-right">
+            <p className="text-xs font-bold text-navy-900">{formatBarQuantity(totalBars)} bars</p>
+            <p className="text-xs font-bold text-navy-900">{formatCurrency(totalAmount)}</p>
+            <p className="text-xs font-bold text-emerald-700">{formatCurrency(totalPaid)}</p>
+            <p className={`text-xs font-bold ${totalBalance > 0 ? 'text-red-600' : 'text-navy-900'}`}>{formatCurrency(totalBalance)}</p>
+          </div>
+        </div>
+      </div>
+      <div className="hidden sm:block">
       <table className="w-full min-w-[820px] table-fixed border-collapse text-[11px] sm:text-xs lg:text-sm">
         <thead className="bg-slate-100 text-navy-900">
           <tr>
@@ -1033,7 +1330,7 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
                 <td className="border border-slate-300 px-2 py-2.5 text-right font-medium text-emerald-700">{formatCurrency(sale.paidAmount)}</td>
                 <td className={`border border-slate-300 px-2 py-2.5 text-right font-semibold ${balance > 0 ? 'text-red-600' : 'text-navy-800/55'}`}>{formatCurrency(balance)}</td>
                 <td className="border border-slate-300 px-1 py-2.5 text-center">
-                  {balance > 0 ? (
+                  {balance > 0 && showPay ? (
                     <button
                       type="button"
                       onClick={() => onPay(sale)}
@@ -1041,6 +1338,8 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
                     >
                       Pay
                     </button>
+                  ) : balance > 0 ? (
+                    <span className="pill bg-amber-50 text-amber-700">Pending</span>
                   ) : (
                     <span className="pill bg-emerald-50 text-emerald-600">Paid</span>
                   )}
@@ -1060,6 +1359,27 @@ function SalesTable({ title, rows, onPay, empty }: { title: string; rows: { sale
           </tr>
         </tfoot>
       </table>
+      </div>
+    </TableCard>
+  );
+}
+
+function ExpenseHistory({ rows }: { rows: any[] }) {
+  const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  return (
+    <TableCard title="Today's Expense History" icon={FiDollarSign} count={rows.length} empty="No expenses recorded today." hasRows={rows.length > 0}>
+      <div className="space-y-3 sm:hidden">
+        {rows.map((row) => (
+          <div key={row._id} className="rounded-xl border border-iceblue-100 p-3">
+            <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words text-sm font-bold text-navy-900">{row.purpose || row.costType || 'Expense'}</p><p className="mt-1 text-xs text-navy-800/50">{formatDate(row.date)} · {formatTime(row.createdAt || row.date)}</p></div><p className="shrink-0 font-bold text-red-600">-{formatCurrency(row.amount)}</p></div>
+            {row.notes && <p className="mt-2 break-words text-xs text-navy-800/55">{row.notes}</p>}
+          </div>
+        ))}
+        <div className="flex justify-between rounded-xl bg-red-50 px-3 py-3 text-sm font-bold"><span>Total Expenses</span><span className="text-red-600">-{formatCurrency(total)}</span></div>
+      </div>
+      <div className="hidden sm:block">
+        <table className="table-base min-w-[640px]"><thead><tr><th>Date / Time</th><th>Category</th><th>Notes</th><th className="text-right">Expense Amount</th></tr></thead><tbody>{rows.map((row) => <tr key={row._id}><td>{formatDate(row.date)} · {formatTime(row.createdAt || row.date)}</td><td>{row.purpose || row.costType || 'Expense'}</td><td className="break-words">{row.notes || '-'}</td><td className="text-right font-bold text-red-600">-{formatCurrency(row.amount)}</td></tr>)}</tbody><tfoot><tr className="font-bold"><td colSpan={3} className="text-right">Total Expenses</td><td className="text-right text-red-600">-{formatCurrency(total)}</td></tr></tfoot></table>
+      </div>
     </TableCard>
   );
 }
@@ -1102,13 +1422,15 @@ function StatCard({
 
 function OverviewTab({
   data,
-  totalExpense,
+  expenseAmount,
+  driverAmount,
   truckOffline,
   recentSales,
   onPay,
 }: {
   data: any;
-  totalExpense: number;
+  expenseAmount: number;
+  driverAmount: number;
   truckOffline: boolean;
   recentSales: { sale: any; name: string; bar: number }[];
   onPay: (sale: any) => void;
@@ -1119,13 +1441,14 @@ function OverviewTab({
     { label: 'Collected', value: formatCurrency(data?.todayCollection || 0), icon: FiCheckCircle, tone: 'emerald' },
     { label: 'Balance Due', value: formatCurrency(balanceDue), icon: FiClock, tone: 'amber', danger: balanceDue > 0 },
     { label: 'Wastage', value: `${formatBarQuantity(data?.todayWastage || 0) || 0} bar`, icon: FiTrash2, tone: 'red' },
-    { label: 'Driver Amount', value: formatCurrency(totalExpense), icon: FiDollarSign, tone: 'violet' },
+    { label: 'Expenses Amount', value: formatCurrency(expenseAmount), icon: FiDollarSign, tone: 'red' },
+    { label: 'Driver Amount', value: formatCurrency(driverAmount), icon: FiDollarSign, tone: 'violet' },
     { label: 'Bars Remaining', value: `${formatBarQuantity(Math.max(0, Number(data?.remainingBars || 0))) || 0} bar`, icon: FiPackage, tone: 'cyan' },
   ];
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 min-[390px]:gap-3 sm:grid-cols-3">
         {stats.map((stat) => (
           <StatCard key={stat.label} {...stat} />
         ))}
@@ -1184,6 +1507,7 @@ function TripTab({
     remaining: 0,
     collectedAmount: 0,
     pendingAmount: 0,
+    expenseAmount: 0,
     driverAmount: 0,
   };
   return (
@@ -1209,7 +1533,7 @@ function TripTab({
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
-                <p className="font-display text-sm font-bold text-navy-900">{formatCurrency(trend.totalAmount)}</p>
+                <p className="break-words font-display text-xs font-bold text-navy-900 min-[390px]:text-sm">{formatCurrency(trend.totalAmount)}</p>
                 <p className="text-[10px] font-semibold uppercase text-navy-800/45">7-day sales</p>
               </div>
               <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
@@ -1217,7 +1541,7 @@ function TripTab({
                 <p className="text-[10px] font-semibold uppercase text-navy-800/45">Bills</p>
               </div>
               <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
-                <p className="font-display text-sm font-bold text-navy-900">{formatCurrency(trend.averagePerDay)}</p>
+                <p className="break-words font-display text-xs font-bold text-navy-900 min-[390px]:text-sm">{formatCurrency(trend.averagePerDay)}</p>
                 <p className="text-[10px] font-semibold uppercase text-navy-800/45">Avg / day</p>
               </div>
             </div>
@@ -1241,6 +1565,7 @@ function TripTab({
                 ['Balance', Math.max(0, Number(report.remaining || 0))],
                 ['Collection', formatCurrency(report.collectedAmount)],
                 ['Pending', formatCurrency(report.pendingAmount)],
+                ['Expenses Amount', formatCurrency(report.expenseAmount)],
                 ['Driver Amount', formatCurrency(report.driverAmount)],
               ].map(([label, value]) => (
                 <div key={String(label)} className="rounded-xl border border-iceblue-100/70 bg-iceblue-50/40 px-3 py-2">

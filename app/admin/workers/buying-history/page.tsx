@@ -141,16 +141,46 @@ export default function BuyingHistoryPage() {
         <p className="font-semibold text-navy-900">Total: <span className="text-red-600">{formatCurrency(total)}</span></p>
       </div>
       {error && !editing && <p className="m-4 rounded-xl bg-red-50 p-3 text-sm text-red-600">{error}</p>}
-      <div className="overflow-x-auto">
-        {loading ? <p className="p-6 text-navy-800/50">Loading history...</p> : <table className="w-full min-w-[900px] table-fixed border-collapse text-xs sm:text-sm">
-          <thead className="bg-slate-100 text-navy-900"><tr><th className="w-[7%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">S.No</th><th className="w-[19%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Worker Name</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Amount Date</th><th className="w-[22%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Entry Date &amp; Time</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-right font-bold uppercase">Amount</th><th className="w-[16%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Notes</th><th className="w-[8%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">Actions</th></tr></thead>
-          <tbody>
-            {rows.map((row, index) => <tr key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-300 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">{row.worker?.name || 'Worker'}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDate(row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td><td className="border border-slate-300 px-3 py-2.5">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</td><td className="border border-slate-300 px-2 py-2.5 text-center">{canManageAmounts && !row.isExpenseAdvance && isTodayAmount(row.date) ? <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEdit(row)} className="text-navy-900 hover:text-black"><FiEdit2 /></button> : <span className="text-navy-800/30">—</span>}</td></tr>)}
-            {rows.length === 0 && <tr><td colSpan={7} className="border border-slate-300 py-10 text-center text-navy-800/50">No records for this period.</td></tr>}
-          </tbody>
-          {rows.length > 0 && <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={4} className="border border-slate-300 px-3 py-3 text-right uppercase">Total</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">{formatCurrency(total)}</td><td className="border border-slate-300" /><td className="border border-slate-300" /></tr></tfoot>}
-        </table>}
-      </div>
+      {loading ? <p className="p-6 text-navy-800/50">Loading history...</p> : <>
+        <div className="md:hidden">
+          {rows.map((row, index) => (
+            <div key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-navy-900">{row.worker?.name || 'Worker'}</p>
+                  <p className="mt-1 text-xs text-navy-800/55">{formatDate(row.date)} &middot; {formatDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</p>
+                </div>
+                <p className="shrink-0 text-sm font-bold text-red-500">{formatCurrency(row.buyingAmount)}</p>
+              </div>
+              <p className="mt-1.5 text-xs text-navy-800/60">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</p>
+              <div className="mt-2">
+                {canManageAmounts && !row.isExpenseAdvance && isTodayAmount(row.date) ? (
+                  <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEdit(row)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-900 hover:text-black"><FiEdit2 /> Edit</button>
+                ) : (
+                  <span className="text-xs text-navy-800/30">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {rows.length === 0 && <p className="px-4 py-10 text-center text-sm text-navy-800/50">No records for this period.</p>}
+          {rows.length > 0 && (
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-navy-900">
+              <span>Total</span>
+              <span className="text-red-600">{formatCurrency(total)}</span>
+            </div>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[900px] table-fixed border-collapse text-xs sm:text-sm">
+            <thead className="bg-slate-100 text-navy-900"><tr><th className="w-[7%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">S.No</th><th className="w-[19%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Worker Name</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Amount Date</th><th className="w-[22%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Entry Date &amp; Time</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-right font-bold uppercase">Amount</th><th className="w-[16%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Notes</th><th className="w-[8%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">Actions</th></tr></thead>
+            <tbody>
+              {rows.map((row, index) => <tr key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-300 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">{row.worker?.name || 'Worker'}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDate(row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td><td className="border border-slate-300 px-3 py-2.5">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</td><td className="border border-slate-300 px-2 py-2.5 text-center">{canManageAmounts && !row.isExpenseAdvance && isTodayAmount(row.date) ? <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEdit(row)} className="text-navy-900 hover:text-black"><FiEdit2 /></button> : <span className="text-navy-800/30">—</span>}</td></tr>)}
+              {rows.length === 0 && <tr><td colSpan={7} className="border border-slate-300 py-10 text-center text-navy-800/50">No records for this period.</td></tr>}
+            </tbody>
+            {rows.length > 0 && <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={4} className="border border-slate-300 px-3 py-3 text-right uppercase">Total</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">{formatCurrency(total)}</td><td className="border border-slate-300" /><td className="border border-slate-300" /></tr></tfoot>}
+          </table>
+        </div>
+      </>}
     </section>
 
     {editing && <Modal title="Edit Worker Amount" onClose={() => setEditing(null)}>

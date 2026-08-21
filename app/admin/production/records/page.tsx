@@ -95,7 +95,39 @@ export default function ProductionRecordsPage() {
     </div>
     <section className="card overflow-x-auto">
       {loading ? <p className="py-8 text-center text-sm text-navy-800/50">Loading records...</p> : error ? <p className="rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</p> : rows.length ?
+        <>
+        <div className="sm:hidden">
+          {rows.map((row, index) => (
+            <div key={row.key} className="border-b border-iceblue-50 py-3 last:border-b-0">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold text-navy-900">{row.branch?.name || "Branch"}</p>
+                    <p className="text-xs text-navy-800/45">{row.branch?.code || ""}</p>
+                  </div>
+                </div>
+                <p className="shrink-0 text-xs font-semibold text-navy-800/60">{formatDate(row.date)}</p>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 pl-8 text-xs">
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Batches</span><span className="font-semibold text-navy-900">{row.batches}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">First Open</span><span className="text-navy-900">{row.boxOpen}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Final Close</span><span className="text-navy-900">{row.boxClose}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Made Bars</span><span className="font-bold text-navy-900">{fmtBars(row.madeBars)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Returned Bars</span><span className="font-bold text-amber-700">{fmtBars(row.returned)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Production Bars</span><span className="font-bold text-blue-700">{fmtBars(row.productionBars)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Sold Bars</span><span className="font-bold text-emerald-700">{fmtBars(row.sold)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Wastage</span><span className="font-semibold text-red-600">{fmtBars(row.wastage)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Stocks</span><span className="font-semibold text-amber-700">{fmtBars(row.stock)}</span></div>
+                <div className="flex items-center justify-between"><span className="text-navy-800/45">Outsource</span><span className="font-semibold text-iceblue-700">{fmtBars(row.outsource)}</span></div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="hidden sm:block">
         <table className="table-base min-w-[1120px]"><thead><tr><th>#</th><th>Date</th><th>Branch</th><th>Batches</th><th>First Open</th><th>Final Close</th><th>Made Bars</th><th>Returned Bars</th><th>Production Bars</th><th>Sold Bars</th><th>Wastage</th><th>Stocks</th><th>Outsource</th></tr></thead><tbody>{rows.map((row, index) => <tr key={row.key}><td>{index + 1}</td><td className="font-semibold">{formatDate(row.date)}</td><td><p className="font-semibold text-navy-900">{row.branch?.name || "Branch"}</p><p className="text-xs text-navy-800/45">{row.branch?.code || ""}</p></td><td className="font-semibold text-navy-900">{row.batches}</td><td>{row.boxOpen}</td><td>{row.boxClose}</td><td className="font-bold text-navy-900">{fmtBars(row.madeBars)}</td><td className="font-bold text-amber-700">{fmtBars(row.returned)}</td><td className="font-bold text-blue-700">{fmtBars(row.productionBars)}</td><td className="font-bold text-emerald-700">{fmtBars(row.sold)}</td><td className="font-semibold text-red-600">{fmtBars(row.wastage)}</td><td className="font-semibold text-amber-700">{fmtBars(row.stock)}</td><td className="font-semibold text-iceblue-700">{fmtBars(row.outsource)}</td></tr>)}</tbody></table>
+        </div>
+        </>
         : <p className="py-8 text-center text-sm text-navy-800/50">No sold production records available. Unsold-only production is not listed.</p>}
     </section>
   </div>;

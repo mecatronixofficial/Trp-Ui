@@ -290,69 +290,69 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="-mt-4 space-y-1 sm:-mt-5">
+    <div className="-mt-4 min-w-0 space-y-2 overflow-x-hidden sm:-mt-5 sm:space-y-3">
       {isSuperAdmin && (
-        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
+        <section className="mb-3 flex min-w-0 flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-3 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-4">
+          <div className="flex min-w-0 items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div>
+            <div className="min-w-0">
               <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Company report view</p>
-              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all companies'}</p>
+              <p className="truncate text-sm font-semibold text-navy-900 sm:text-base">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all companies'}</p>
             </div>
           </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change report company" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
+          <select className="input-field h-11 w-full text-sm sm:h-10 sm:max-w-xs" aria-label="Change report company" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
             <option value="">Overall — all companies</option>
             {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
           </select>
         </section>
       )}
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-3 py-3 sm:flex-row sm:items-center sm:px-4">
           <h1 className="shrink-0 font-display text-base font-bold text-navy-900">Reports &amp; Exports</h1>
-          <div className="ml-auto flex flex-wrap items-center gap-2">
-            <button onClick={exportExcel} className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4"><FiDownload /> Excel</button>
-            <button onClick={exportPdf} className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4"><FiFileText /> PDF</button>
+          <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            <button onClick={exportExcel} className="btn-secondary flex min-h-11 w-full items-center justify-center gap-2 px-3 sm:h-10 sm:min-h-0 sm:w-auto sm:px-4"><FiDownload /> Excel</button>
+            <button onClick={exportPdf} className="btn-secondary flex min-h-11 w-full items-center justify-center gap-2 px-3 sm:h-10 sm:min-h-0 sm:w-auto sm:px-4"><FiFileText /> PDF</button>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 border-b border-iceblue-100 px-4 pt-3">
+        <div className="grid grid-cols-4 gap-1.5 border-b border-iceblue-100 px-3 pt-3 sm:flex sm:flex-wrap sm:gap-2 sm:px-4">
           {(['day', 'week', 'month', 'year'] as ReportPeriod[]).map((item) => (
             <button
               key={item}
               type="button"
               onClick={() => setPeriod(item)}
-              className={`rounded-t-xl px-4 py-2 text-sm font-bold capitalize transition ${period === item ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-navy-900 hover:bg-iceblue-100'}`}
+              className={`min-h-11 rounded-t-xl px-2 py-2 text-xs font-bold capitalize transition sm:min-h-0 sm:px-4 sm:text-sm ${period === item ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-navy-900 hover:bg-iceblue-100'}`}
             >
               {item}
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-end gap-3 border-b border-iceblue-100 px-4 py-3">
-          {period === 'day' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Day</label><input type="date" className="input-field" value={reportDay} onChange={(event) => setReportDay(event.target.value)} /></div>}
-          {period === 'week' && <div className="w-full sm:w-[180px]"><label className="label-text">Report Week</label><input type="week" className="input-field" value={reportWeek} onChange={(event) => setReportWeek(event.target.value)} /></div>}
-          {period === 'month' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Month</label><input type="month" className="input-field" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} /></div>}
-          {period === 'year' && <div className="w-full sm:w-[150px]"><label className="label-text">Report Year</label><input type="number" min="2000" max="9999" step="1" className="input-field" value={reportYear} onChange={(event) => setReportYear(event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>}
-          <div className="rounded-xl border border-iceblue-100 bg-iceblue-50 px-3 py-2 text-xs text-navy-800/70">
+        <div className="grid min-w-0 grid-cols-1 items-end gap-3 border-b border-iceblue-100 px-3 py-3 sm:flex sm:flex-wrap sm:px-4">
+          {period === 'day' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Day</label><input type="date" className="input-field h-11 sm:h-10" value={reportDay} onChange={(event) => setReportDay(event.target.value)} /></div>}
+          {period === 'week' && <div className="w-full sm:w-[180px]"><label className="label-text">Report Week</label><input type="week" className="input-field h-11 sm:h-10" value={reportWeek} onChange={(event) => setReportWeek(event.target.value)} /></div>}
+          {period === 'month' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Month</label><input type="month" className="input-field h-11 sm:h-10" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} /></div>}
+          {period === 'year' && <div className="w-full sm:w-[150px]"><label className="label-text">Report Year</label><input type="number" min="2000" max="9999" step="1" className="input-field h-11 sm:h-10" value={reportYear} onChange={(event) => setReportYear(event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>}
+          <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50 px-3 py-2 text-xs text-navy-800/70 sm:w-auto">
             <span className="font-semibold text-navy-900">{from}</span> to <span className="font-semibold text-navy-900">{to}</span>
           </div>
           {showTruckFilter && (
             <div className="w-full sm:w-[180px]">
               <label className="label-text">Truck</label>
-              <select className="input-field" value={truck} onChange={(e) => setTruck(e.target.value)}>
+              <select className="input-field h-11 sm:h-10" value={truck} onChange={(e) => setTruck(e.target.value)}>
                 <option value="">All</option>
                 {trucks.map((t) => <option key={t._id} value={t._id}>{t.truckName}</option>)}
               </select>
             </div>
           )}
-          <button onClick={load} className="btn-secondary">Refresh</button>
+          <button onClick={load} className="btn-secondary min-h-11 w-full sm:min-h-0 sm:w-auto">Refresh</button>
         </div>
       </section>
 
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="-mx-1 flex min-w-0 snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-1 pb-2 touch-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
         {REPORT_TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => { setData(null); setError(''); setTab(t.key); }}
-            className={`whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium transition ${
+            className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium transition ${
               tab === t.key ? 'bg-iceblue-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-navy-900 hover:bg-iceblue-50'
             }`}
           >
@@ -361,11 +361,11 @@ export default function ReportsPage() {
         ))}
       </div>
 
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="border-b border-iceblue-100 bg-white px-4 py-3">
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
+        <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
           <h2 className="font-display text-base font-bold text-navy-900">{REPORT_TABS.find((item) => item.key === tab)?.label}</h2>
         </div>
-        <div className="p-4">
+        <div className="min-w-0 p-3 sm:p-4">
           {loading ? (
             <p className="text-navy-800/50">Loading report...</p>
           ) : error ? (
@@ -379,12 +379,27 @@ export default function ReportsPage() {
         </div>
       </section>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
-          <div className="border-b border-iceblue-100 bg-white px-4 py-3">
+      <div className="grid min-w-0 gap-3 md:grid-cols-2 md:gap-4">
+        <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
+          <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
             <h2 className="font-display text-sm font-bold text-navy-900">Top Customers</h2>
           </div>
-          <div className="overflow-x-auto">
+          <div className="sm:hidden">
+            {topCustomers.map((c, index) => (
+              <div key={c.customerId} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                  <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{c.customerName}</p>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                  <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{c.quantity}</span> Bars</p>
+                  <p className="shrink-0 text-sm font-bold tabular-nums text-iceblue-700">{formatCurrency(c.totalAmount)}</p>
+                </div>
+              </div>
+            ))}
+            {topCustomers.length === 0 && <p className="px-3 py-6 text-center text-sm text-navy-800/50">No data</p>}
+          </div>
+          <div className="hidden max-w-full overflow-x-auto sm:block">
             <table className="w-full min-w-[460px] table-fixed border-collapse text-xs">
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
@@ -408,11 +423,26 @@ export default function ReportsPage() {
             </table>
           </div>
         </section>
-        <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
-          <div className="border-b border-iceblue-100 bg-white px-4 py-3">
+        <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
+          <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
             <h2 className="font-display text-sm font-bold text-navy-900">Top Selling Sizes</h2>
           </div>
-          <div className="overflow-x-auto">
+          <div className="sm:hidden">
+            {topSizes.map((s, index) => (
+              <div key={s.size} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                <div className="flex items-center gap-2">
+                  <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                  <p className="text-sm font-bold text-navy-900">{s.size} bar</p>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                  <p className="text-xs font-medium text-navy-800/50">Quantity</p>
+                  <p className="text-sm font-bold tabular-nums text-navy-900">{s.quantity}</p>
+                </div>
+              </div>
+            ))}
+            {topSizes.length === 0 && <p className="px-3 py-6 text-center text-sm text-navy-800/50">No data</p>}
+          </div>
+          <div className="hidden max-w-full overflow-x-auto sm:block">
             <table className="w-full min-w-[340px] table-fixed border-collapse text-xs">
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
@@ -450,7 +480,7 @@ function ReportBody({ tab, data }: { tab: string; data: any }) {
       { key: 'salesCount', label: 'Sales Count', value: String(Number(data.salesCount || 0)), trend: 'up' as const },
     ];
     return (
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 lg:grid-cols-4">
         {metrics.map((metric, index) => <ReportMetric key={metric.key} index={index} label={metric.label} value={metric.value} trend={metric.trend} />)}
       </div>
     );
@@ -458,7 +488,7 @@ function ReportBody({ tab, data }: { tab: string; data: any }) {
 
   if (tab === 'profit-loss') {
     return (
-      <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-4 xl:grid-cols-8">
         {Object.entries(data).filter(([k]) => k !== 'from' && k !== 'to').map(([k, v]: any, index) => {
           const normalizedKey = k.toLowerCase();
           const isCount = ['count', 'quantity', 'bars', 'units', 'records'].some((word) => normalizedKey.includes(word));
@@ -476,101 +506,157 @@ function ReportBody({ tab, data }: { tab: string; data: any }) {
   if (tab === 'truck-wise' || tab === 'customer-wise') {
     const rows = Object.entries(data);
     return (
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[600px] table-fixed border-collapse text-xs">
-          <thead className="bg-slate-100 text-navy-900">
-            <tr>
-              <th className="w-[8%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-              <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Name</th>
-              <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Bar Used</th>
-              <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(([id, v]: any, index) => (
-              <tr key={id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                <td className="border border-slate-300 px-3 py-3 text-navy-900">{v.truckName || v.customerName}</td>
-                <td className="border border-slate-300 px-3 py-3 text-right text-navy-900">{v.quantity}</td>
-                <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{formatCurrency(v.totalAmount)}</td>
+      <>
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:hidden">
+          {rows.map(([id, v]: any, index) => (
+            <div key={id} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{v.truckName || v.customerName}</p>
+              </div>
+              <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{v.quantity}</span> Bars</p>
+                <p className="shrink-0 text-sm font-bold tabular-nums text-iceblue-700">{formatCurrency(v.totalAmount)}</p>
+              </div>
+            </div>
+          ))}
+          {rows.length === 0 && <p className="px-3 py-6 text-center text-sm text-navy-800/50">No data</p>}
+        </div>
+        <div className="hidden max-w-full overflow-x-auto rounded-xl border border-slate-200 sm:block">
+          <table className="w-full min-w-[600px] table-fixed border-collapse text-xs">
+            <thead className="bg-slate-100 text-navy-900">
+              <tr>
+                <th className="w-[8%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Name</th>
+                <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Bar Used</th>
+                <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Amount</th>
               </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={4} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map(([id, v]: any, index) => (
+                <tr key={id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                  <td className="border border-slate-300 px-3 py-3 text-navy-900">{v.truckName || v.customerName}</td>
+                  <td className="border border-slate-300 px-3 py-3 text-right text-navy-900">{v.quantity}</td>
+                  <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{formatCurrency(v.totalAmount)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={4} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>
     );
   }
 
   if (tab === 'size-wise' || tab === 'wastage') {
     const rows = Object.entries(data);
     return (
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
-          <thead className="bg-slate-100 text-navy-900">
-            <tr>
-              <th className="w-[10%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-              <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Size</th>
-              <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Quantity</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(([size, rawValue]: any, index) => {
-              const row = rawValue && typeof rawValue === 'object' ? rawValue : null;
-              const label = row?.size || size;
-              const quantity = row ? Number(row.quantity ?? row.wastage ?? row.total ?? 0) : Number(rawValue || 0);
-              return (
-                <tr key={size} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                  <td className="border border-slate-300 px-3 py-3 text-navy-900">{label} bar</td>
-                  <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{quantity}</td>
-                </tr>
-              );
-            })}
-            {rows.length === 0 && <tr><td colSpan={3} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <>
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:hidden">
+          {rows.map(([size, rawValue]: any, index) => {
+            const row = rawValue && typeof rawValue === 'object' ? rawValue : null;
+            const label = row?.size || size;
+            const quantity = row ? Number(row.quantity ?? row.wastage ?? row.total ?? 0) : Number(rawValue || 0);
+            return (
+              <div key={size} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                <div className="flex items-center gap-2">
+                  <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                  <p className="text-sm font-bold text-navy-900">{label} bar</p>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                  <p className="text-xs font-medium text-navy-800/50">Quantity</p>
+                  <p className="text-sm font-bold tabular-nums text-navy-900">{quantity}</p>
+                </div>
+              </div>
+            );
+          })}
+          {rows.length === 0 && <p className="px-3 py-6 text-center text-sm text-navy-800/50">No data</p>}
+        </div>
+        <div className="hidden max-w-full overflow-x-auto rounded-xl border border-slate-200 sm:block">
+          <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
+            <thead className="bg-slate-100 text-navy-900">
+              <tr>
+                <th className="w-[10%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Size</th>
+                <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Quantity</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(([size, rawValue]: any, index) => {
+                const row = rawValue && typeof rawValue === 'object' ? rawValue : null;
+                const label = row?.size || size;
+                const quantity = row ? Number(row.quantity ?? row.wastage ?? row.total ?? 0) : Number(rawValue || 0);
+                return (
+                  <tr key={size} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                    <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                    <td className="border border-slate-300 px-3 py-3 text-navy-900">{label} bar</td>
+                    <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{quantity}</td>
+                  </tr>
+                );
+              })}
+              {rows.length === 0 && <tr><td colSpan={3} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>
     );
   }
 
   if (tab === 'expense') {
     const rows = Object.entries(data);
     return (
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
-          <thead className="bg-slate-100 text-navy-900">
-            <tr>
-              <th className="w-[10%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-              <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Cost Type</th>
-              <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(([type, amt]: any, index) => (
-              <tr key={type} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                <td className="border border-slate-300 px-3 py-3 capitalize text-navy-900">{type.replace('_', ' ')}</td>
-                <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{formatCurrency(amt)}</td>
+      <>
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:hidden">
+          {rows.map(([type, amt]: any, index) => (
+            <div key={type} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                <p className="min-w-0 flex-1 truncate text-sm font-bold capitalize text-navy-900">{type.replace('_', ' ')}</p>
+              </div>
+              <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                <p className="text-xs font-medium text-navy-800/50">Amount</p>
+                <p className="shrink-0 text-sm font-bold tabular-nums text-iceblue-700">{formatCurrency(amt)}</p>
+              </div>
+            </div>
+          ))}
+          {rows.length === 0 && <p className="px-3 py-6 text-center text-sm text-navy-800/50">No data</p>}
+        </div>
+        <div className="hidden max-w-full overflow-x-auto rounded-xl border border-slate-200 sm:block">
+          <table className="w-full min-w-[420px] table-fixed border-collapse text-xs">
+            <thead className="bg-slate-100 text-navy-900">
+              <tr>
+                <th className="w-[10%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                <th className="border border-slate-300 px-3 py-3 text-left text-[10px] font-bold uppercase leading-tight">Cost Type</th>
+                <th className="border border-slate-300 px-3 py-3 text-right text-[10px] font-bold uppercase leading-tight">Amount</th>
               </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={3} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map(([type, amt]: any, index) => (
+                <tr key={type} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                  <td className="border border-slate-300 px-3 py-3 capitalize text-navy-900">{type.replace('_', ' ')}</td>
+                  <td className="border border-slate-300 px-3 py-3 text-right font-semibold text-navy-900">{formatCurrency(amt)}</td>
+                </tr>
+              ))}
+              {rows.length === 0 && <tr><td colSpan={3} className="border border-slate-300 py-6 text-center text-navy-800/50">No data</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>
     );
   }
 
   if (tab === 'retail-vs-wholesale') {
     return (
-      <div className="grid grid-cols-2 gap-1.5 sm:max-w-xl">
+      <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:max-w-xl">
         <ReportMetric index={0} label="Retail" value={formatCurrency(data.retail)} trend="up" />
         <ReportMetric index={1} label="Wholesale" value={formatCurrency(data.wholesale)} trend="up" />
       </div>
     );
   }
 
-  return <pre className="text-xs">{JSON.stringify(data, null, 2)}</pre>;
+  return <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(data, null, 2)}</pre>;
 }
 
 function ReportMetric({ label, value, trend, index = 0 }: { label: string; value: string; trend: 'up' | 'down'; index?: number }) {
@@ -585,14 +671,14 @@ function ReportMetric({ label, value, trend, index = 0 }: { label: string; value
   const danger = trend === 'down';
 
   return (
-    <div className={`flex min-h-[66px] min-w-0 items-center gap-2 overflow-hidden rounded-lg border bg-gradient-to-br px-2.5 py-2 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
+    <div className={`flex min-h-[72px] min-w-0 items-center gap-2 overflow-hidden rounded-lg border bg-gradient-to-br px-3 py-2.5 shadow-sm transition sm:min-h-[66px] sm:px-2.5 sm:py-2 sm:hover:-translate-y-0.5 sm:hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
       <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}>
         <FiFileText />
       </span>
 
       <div className="min-w-0">
-        <p className="truncate text-[9px] font-bold uppercase tracking-wide text-navy-800/45">{label}</p>
-        <p className={`truncate font-display text-sm font-bold leading-tight ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+        <p className="truncate text-[9px] font-bold uppercase tracking-wide text-navy-800/45 sm:text-[9px]">{label}</p>
+        <p className={`break-words font-display text-sm font-bold leading-tight sm:truncate ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
       </div>
     </div>
   );

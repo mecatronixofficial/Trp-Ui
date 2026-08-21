@@ -142,7 +142,7 @@ export default function AllSalesPage() {
           <h1 className="mt-1 font-display text-2xl font-bold text-navy-900">All Sales Records</h1>
         </div>
         <div className="flex items-center gap-2">
-          <Link href="/admin/sales" className="btn-secondary flex items-center gap-2"><FiArrowLeft /> Today's Sales</Link>
+          <Link href="/admin/sales" className="btn-secondary flex items-center gap-2"><FiArrowLeft /> Today&apos;s Sales</Link>
           <button
             type="button"
             onClick={exportExcel}
@@ -210,6 +210,61 @@ export default function AllSalesPage() {
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
+          <>
+          <div className="sm:hidden">
+            {visibleSales.map((s, index) => (
+              <div key={s._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold tabular-nums text-slate-500">{index + 1}</span>
+                      <p className="font-medium text-navy-900">{formatDate(s.date)}</p>
+                    </div>
+                    {s.customer?._id ? (
+                      <Link href={`/admin/customers/${s.customer._id}`} className="mt-1 block truncate font-medium text-iceblue-700 underline-offset-2 hover:underline">
+                        {s.customer.name}
+                      </Link>
+                    ) : (
+                      <span className="mt-1 block text-navy-800/60">Unknown customer</span>
+                    )}
+                    <p className="text-xs text-navy-800/60">
+                      {s.customer?.phoneNumber || '-'}
+                      {s.truck?.truckName ? ` · ${s.truck.truckName}` : ''}
+                    </p>
+                  </div>
+                  <p className="shrink-0 font-bold tabular-nums text-navy-900">{formatCurrency(s.totalAmount)}</p>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <p className="text-slate-500">Bars</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{formatBarQuantity((s.items || []).reduce((sum, item) => sum + getItemBarUsed(item), 0)) || '0'}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Paid</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{formatCurrency(s.paidAmount)}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Balance</p>
+                    <p className={`font-semibold tabular-nums ${s.balanceAmount > 0 ? 'text-red-500' : 'text-emerald-700'}`}>{formatCurrency(s.balanceAmount)}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-4">
+                  <button type="button" onClick={() => setPrintSale(s)} className="flex items-center gap-1 text-xs font-semibold text-navy-700 hover:text-navy-900" title="Print sale" aria-label="Print sale"><FiPrinter /> Print</button>
+                  {s.balanceAmount > 0 && (
+                    <button type="button" onClick={() => setPaymentTarget(s)} className="flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700" title="Collect payment" aria-label="Collect payment">
+                      <FiDollarSign /> Collect
+                    </button>
+                  )}
+                  <button type="button" onClick={() => { setEditing(s); setModalOpen(true); }} className="flex items-center gap-1 text-xs font-semibold text-iceblue-600 hover:text-iceblue-700" title="Edit sale" aria-label="Edit sale"><FiEdit2 /> Edit</button>
+                  <button type="button" onClick={() => remove(s._id)} disabled={deletingId === s._id} className="flex items-center gap-1 text-xs font-semibold text-red-500 hover:text-red-600 disabled:opacity-40" title="Delete sale" aria-label="Delete sale"><FiTrash2 /> Delete</button>
+                </div>
+              </div>
+            ))}
+            {visibleSales.length === 0 && (
+              <p className="px-4 py-8 text-center text-navy-800/50">No sales found for the selected filters.</p>
+            )}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[820px] table-fixed border-collapse text-[11px] sm:text-xs">
             <thead className="sticky top-0 z-10 bg-emerald-700 text-white">
               <tr>
@@ -260,6 +315,8 @@ export default function AllSalesPage() {
               {visibleSales.length === 0 && <tr><td colSpan={10} className="border border-slate-300 py-8 text-center text-navy-800/50">No sales found for the selected filters.</td></tr>}
             </tbody>
           </table>
+          </div>
+          </>
         )}
       </div>
 

@@ -247,10 +247,75 @@ export default function AdminSalesPage() {
           </div>
         )}
 
-        <div className="overflow-x-auto">
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
+          <>
+          <div className="sm:hidden">
+            {visibleSales.map((s, index) => (
+              <div key={s._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                      <p className="font-medium text-navy-900">{formatDate(s.date)}</p>
+                      <span className="text-xs text-navy-800/45">{formatTime(s.date)}</span>
+                    </div>
+                    {s.customer?._id ? (
+                      <Link
+                        href={`/admin/customers/${s.customer._id}`}
+                        className="mt-1 block truncate font-medium text-navy-900 underline-offset-2 hover:underline"
+                      >
+                        {s.customer.name}
+                      </Link>
+                    ) : (
+                      <p className="mt-1 font-medium text-navy-800/60">Unknown customer</p>
+                    )}
+                    <p className="text-[10px] text-navy-800/45">{s.customer?.phoneNumber || 'No phone'}</p>
+                  </div>
+                  <p className="shrink-0 font-bold tabular-nums text-navy-900">{formatCurrency(s.totalAmount)}</p>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <p className="text-navy-800/45">Bars</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{formatBarQuantity((s.items || []).reduce((sum, item) => sum + getItemBarUsed(item), 0)) || '0'}</p>
+                  </div>
+                  <div>
+                    <p className="text-navy-800/45">Paid</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{formatCurrency(s.paidAmount)}</p>
+                  </div>
+                  <div>
+                    <p className="text-navy-800/45">Balance</p>
+                    <p className={`tabular-nums text-navy-900 ${s.balanceAmount > 0 ? 'font-semibold' : ''}`}>{formatCurrency(s.balanceAmount)}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-4">
+                  <button type="button" onClick={() => setPrintSale(s)} className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black" title="Print sale" aria-label="Print sale"><FiPrinter /> Print</button>
+                  {canManageSales && s.balanceAmount > 0 && (
+                    <button type="button" onClick={() => setPaymentTarget(s)} className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black" title="Collect payment" aria-label="Collect payment">
+                      <FiDollarSign /> Collect
+                    </button>
+                  )}
+                  {canManageSales && <>
+                    <button type="button" onClick={() => { setEditing(s); setModalOpen(true); }} className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black" title="Edit sale" aria-label="Edit sale"><FiEdit2 /> Edit</button>
+                    <button type="button" onClick={() => remove(s._id)} disabled={deletingId === s._id} className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black disabled:opacity-40" title="Delete sale" aria-label="Delete sale"><FiTrash2 /> Delete</button>
+                  </>}
+                </div>
+              </div>
+            ))}
+            {visibleSales.length === 0 && (
+              <p className="px-4 py-8 text-center text-navy-800/50">No sales found for the selected filters.</p>
+            )}
+            {visibleSales.length > 0 && (
+              <div className="border-t border-slate-300 bg-slate-100 px-4 py-3 text-xs font-bold text-navy-900">
+                <div className="flex items-center justify-between"><span>TOTAL BARS</span><span>{formatBarQuantity(summary.bars) || '0'}</span></div>
+                <div className="mt-1 flex items-center justify-between"><span>TOTAL AMOUNT</span><span>{formatCurrency(summary.amount)}</span></div>
+                <div className="mt-1 flex items-center justify-between"><span>TOTAL PAID</span><span>{formatCurrency(summary.paid)}</span></div>
+                <div className="mt-1 flex items-center justify-between"><span>TOTAL BALANCE</span><span>{formatCurrency(summary.balance)}</span></div>
+              </div>
+            )}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[900px] table-fixed border-collapse text-[11px] sm:text-xs lg:text-sm">
             <thead className="bg-slate-100 text-navy-900">
               <tr>
@@ -309,8 +374,9 @@ export default function AdminSalesPage() {
             </tbody>
             <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={3} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-2 py-3 text-right">{formatBarQuantity(summary.bars) || '0'}</td><td className="border border-slate-300 px-2 py-3 text-right">{formatCurrency(summary.amount)}</td><td className="hidden border border-slate-300 px-2 py-3 text-right sm:table-cell">{formatCurrency(summary.paid)}</td><td className="border border-slate-300 px-2 py-3 text-right">{formatCurrency(summary.balance)}</td><td className="border border-slate-300" /></tr></tfoot>
           </table>
+          </div>
+          </>
         )}
-        </div>
       </section>
 
       {modalOpen && (
@@ -386,7 +452,34 @@ function SalesSummaryCard({ icon: Icon, label, value, helper, danger = false, to
 function CustomerPaymentTable({ sales, mode }: { sales: Sale[]; mode: 'paid' | 'balance' }) {
   const total = sales.reduce((sum, sale) => sum + Number(mode === 'paid' ? sale.paidAmount : sale.balanceAmount), 0);
   return (
-    <div className="overflow-x-auto border border-slate-300 bg-white">
+    <div className="border border-slate-300 bg-white">
+      <div className="sm:hidden">
+        {sales.map((sale, index) => (
+          <div key={sale._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+              <p className="text-sm font-medium text-navy-900">{formatDate(sale.date)}</p>
+            </div>
+            <div className="mt-1 pl-6">
+              {sale.customer?._id ? <Link href={`/admin/customers/${sale.customer._id}`} className="font-semibold hover:underline">{sale.customer.name}</Link> : 'Unknown customer'}
+              <p className="text-[10px] text-slate-500">{sale.customer?.phoneNumber || 'No phone'}</p>
+            </div>
+            <div className="mt-1.5 flex items-center justify-between gap-3 pl-6 text-xs">
+              <span className="text-navy-800/60">Bill Total: <span className="font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</span></span>
+              <span className="font-bold text-navy-900">{mode === 'paid' ? 'Amount Paid' : 'Balance Due'}: {formatCurrency(mode === 'paid' ? sale.paidAmount : sale.balanceAmount)}</span>
+            </div>
+          </div>
+        ))}
+        {sales.length === 0 && (
+          <p className="px-4 py-8 text-center text-slate-500">No matching customer payments.</p>
+        )}
+        {sales.length > 0 && (
+          <div className="flex items-center justify-between border-t border-slate-300 bg-slate-100 px-4 py-3 text-xs font-bold">
+            <span>TOTAL</span><span>{formatCurrency(total)}</span>
+          </div>
+        )}
+      </div>
+      <div className="hidden max-w-full overflow-x-auto sm:block">
       <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-navy-900">
         <thead className="bg-slate-100">
           <tr>
@@ -414,6 +507,7 @@ function CustomerPaymentTable({ sales, mode }: { sales: Sale[]; mode: 'paid' | '
         </tbody>
         <tfoot className="bg-slate-100 font-bold"><tr><td colSpan={4} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-3 py-3 text-right">{formatCurrency(total)}</td></tr></tfoot>
       </table>
+      </div>
     </div>
   );
 }

@@ -67,6 +67,7 @@ export default function AdminDashboardPage() {
   const [todaySalesBars, setTodaySalesBars] = useState<number | null>(null);
   const [todaySales, setTodaySales] = useState<any[]>([]);
   const [todayTruckReturns, setTodayTruckReturns] = useState(0);
+  const [todayTruckBalances, setTodayTruckBalances] = useState<Array<{ id: string; name: string; driverName: string; balance: number }>>([]);
   const [managementCounts, setManagementCounts] = useState({
     totalCustomers: 0,
     localCustomers: 0,
@@ -92,7 +93,7 @@ export default function AdminDashboardPage() {
               to: `${today}T23:59:59.999+05:30`,
             },
           }),
-          fetch('/api/expenses?today=true', {
+          fetch('/api/expenses', {
             cache: 'no-store',
             headers: selectedBranchHeaders(),
           }).then(async (response) => {
@@ -106,15 +107,27 @@ export default function AdminDashboardPage() {
         setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
         // Use the same branch-scoped expense source as Expenses, Reports and
         // Production so every page reconciles to one daily total.
-        setTodayExpenses(expenseResult.status === 'fulfilled'
-          ? Number(expenseResult.value?.summary?.totalExpenses || 0)
-          : 0);
-        setEmployeeExpenseRows([]);
+        const expenseRows = expenseResult.status === 'fulfilled' && Array.isArray(expenseResult.value?.records)
+          ? expenseResult.value.records
+          : [];
+        setTodayExpenses(expenseRows
+          .filter((row: any) => row.date && indiaDateKey(row.date) === today)
+          .reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0));
+        setEmployeeExpenseRows(expenseRows);
         const customers = customerResult.status === 'fulfilled' && Array.isArray(customerResult.value.data) ? customerResult.value.data : [];
         const workers = workerResult.status === 'fulfilled' && Array.isArray(workerResult.value.data) ? workerResult.value.data : [];
         const trucks = truckResult.status === 'fulfilled' && Array.isArray(truckResult.value.data) ? truckResult.value.data : [];
         const reconciliations = reconciliationResult.status === 'fulfilled' && Array.isArray(reconciliationResult.value.data) ? reconciliationResult.value.data : [];
         const truckIds = new Set(trucks.map((truck: any) => String(truck._id || '')));
+        const trucksById = new Map(trucks.map((truck: any) => [String(truck._id || ''), truck]));
+        setTodayTruckBalances(reconciliations.filter((row: any) => {
+          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
+          return truckId && truckIds.has(truckId) && Number(row.taken || 0) > 0;
+        }).map((row: any) => {
+          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
+          const truck: any = row.truck && typeof row.truck === 'object' ? row.truck : trucksById.get(truckId);
+          return { id: truckId, name: truck?.truckName || 'Truck', driverName: truck?.driverName || '', balance: Number(row.remaining || 0) };
+        }));
         setTodayTruckReturns(reconciliations.reduce((total: number, row: any) => {
           const truckId = String(row.truckId || row.truck?._id || row.truck || '');
           if (!truckId || !truckIds.has(truckId) || Number(row.taken || 0) <= 0) return total;
@@ -193,12 +206,29 @@ export default function AdminDashboardPage() {
   const dashboard = useMemo(() => {
     if (!data) return null;
 
-    const truckRows = Object.entries(data.truckWiseSalesToday || {}).map(([id, row]: any) => ({
-      id,
-      truckName: row.truckName || 'Truck',
-      quantity: Number(row.quantity || 0),
-      totalAmount: Number(row.totalAmount || 0),
-    }));
+    const today = todayISO();
+    const truckRows = Object.entries(data.truckWiseSalesToday || {}).map(([id, row]: any) => {
+      const truckName = row.truckName || 'Truck';
+      const truckExpenses = employeeExpenseRows.filter((expense: any) => expense.date && indiaDateKey(expense.date) === today && (
+        String(expense.truck?._id || expense.truck || '') === String(id)
+        || String(expense.truckName || '').toLowerCase().includes(String(truckName).toLowerCase())
+      ));
+      const expenseAmount = row.expenseAmount == null
+        ? truckExpenses.reduce((sum: number, expense: any) => sum + Number(expense.amount || 0), 0)
+        : Number(row.expenseAmount || 0);
+      const totalAmount = Number(row.totalAmount || 0);
+      const collectionAmount = Number(row.collectionAmount ?? row.totalPaid ?? 0);
+      return {
+        id,
+        truckName,
+        driverName: row.driverName || truckExpenses.find((expense: any) => expense.workerName)?.workerName || '-',
+        quantity: Number(row.quantity || 0),
+        totalAmount,
+        collectionAmount,
+        expenseAmount,
+        balanceAmount: Number(row.balanceAmount ?? collectionAmount - expenseAmount),
+      };
+    });
     // Sales items are the source of truth. The dashboard aggregate remains a
     // fallback for older backend responses or a failed sales request.
     const soldBars = todaySalesBars ?? truckRows.reduce((sum, row) => sum + row.quantity, 0);
@@ -222,7 +252,8 @@ export default function AdminDashboardPage() {
       const month = row.date ? indiaDateKey(row.date).slice(0, 7) : '';
       if (!month) return months;
       months[month] ||= { advance: 0, petrolDiesel: 0 };
-      if (row.costType === 'advance_for_employee') months[month].advance += Number(row.amount || 0);
+      const costType = String(row.costType || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      if (['advance', 'employee_advance', 'advance_employee', 'advance_for_employee', 'advance_for_emp'].includes(costType)) months[month].advance += Number(row.amount || 0);
       if (['petrol_diesel', 'petrol', 'diesel'].includes(String(row.costType))) months[month].petrolDiesel += Number(row.amount || 0);
       return months;
     }, {});
@@ -256,6 +287,17 @@ export default function AdminDashboardPage() {
 
   const todayPendingBills = Number(data.today.balance || 0);
   const todayInHand = Number(data.today.collection || 0) - Number(todayExpenses || 0);
+  const todayExpenseReport = Object.values(employeeExpenseRows
+    .filter((row: any) => row.date && indiaDateKey(row.date) === todayISO())
+    .reduce((groups: Record<string, any>, row: any) => {
+      const truckName = row.truckName || 'General / Shop';
+      const driverName = row.driverName || row.workerName || '-';
+      const key = `${truckName}::${driverName}`;
+      groups[key] ||= { truckName, driverName, amount: 0, entries: 0 };
+      groups[key].amount += Number(row.amount || 0);
+      groups[key].entries += 1;
+      return groups;
+    }, {})) as any[];
   const todayProfit = todayInHand;
   const indiaDayOfMonth = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric' }).format(new Date())) || 1;
   const monthlyDailyAverage = Number(data.monthlySales || 0) / indiaDayOfMonth;
@@ -278,6 +320,8 @@ export default function AdminDashboardPage() {
   const stockTotalBars = Math.max(0, Number(data.barStock?.totalAvailable ?? openingStockBars + newProductionBars));
   const stockSoldBars = Math.max(0, Number(data.barStock?.sold ?? dashboard.soldBars));
   const stockBalanceBars = Math.max(0, Number(data.barStock?.balance ?? stockTotalBars - stockSoldBars));
+  const truckBalanceBars = todayTruckBalances.reduce((total, row) => total + Number(row.balance || 0), 0);
+  const shopBalanceBars = stockBalanceBars - truckBalanceBars;
   const todayBarChart = [
     { name: 'Sold Bars', value: stockSoldBars, color: '#16a34a' },
     { name: 'Balance Bars', value: stockBalanceBars, color: '#f59e0b' },
@@ -418,7 +462,7 @@ export default function AdminDashboardPage() {
 
           <DashboardSummaryCard
             icon={FiDollarSign}
-            label="Today In Hand"
+            label="Today's Net Collection"
             value={formatCurrency(todayInHand)}
             danger={todayInHand < 0}
             positive={todayInHand >= 0}
@@ -610,13 +654,49 @@ export default function AdminDashboardPage() {
             <EmptyState icon={FiTruck} text="No truck sales recorded today." />
           ) : (
             <>
-            <div className="overflow-x-auto rounded-lg border border-slate-300">
-              <table className="w-full min-w-[650px] table-fixed border-collapse text-xs">
-                <thead className="bg-emerald-700 text-white"><tr><th className="w-[70px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">S.No</th><th className="border border-emerald-800 px-3 py-3 text-left text-[10px] font-bold uppercase">Truck Name</th><th className="w-[130px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">Bars Used</th><th className="w-[150px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Sales Amount</th><th className="w-[130px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Average / Bar</th></tr></thead>
+            <div className="sm:hidden">
+              {dashboard.truckRows.map((row: any, index: number) => (
+                <div key={`${row.truckName}-${index}`} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                    <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{row.truckName}</p>
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                    <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{row.quantity}</span> Bars Used</p>
+                    <p className="shrink-0 text-sm font-bold tabular-nums text-emerald-700">{formatCurrency(row.totalAmount)}</p>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
+                    <p className="text-[10px] font-medium text-navy-800/45">Collection Amount</p>
+                    <p className="text-xs font-semibold tabular-nums text-sky-700">{formatCurrency(row.collectionAmount)}</p>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
+                    <p className="text-[10px] font-medium text-navy-800/45">{row.driverName} · Expense</p>
+                    <p className="text-xs font-semibold tabular-nums text-red-600">-{formatCurrency(row.expenseAmount)}</p>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
+                    <p className="text-[10px] font-medium text-navy-800/45">Balance Amount</p>
+                    <p className={`text-xs font-bold tabular-nums ${row.balanceAmount < 0 ? 'text-red-600' : 'text-navy-900'}`}>{formatCurrency(row.balanceAmount)}</p>
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-emerald-50 px-3 py-3">
+                <p className="text-xs font-bold uppercase text-navy-900">Total</p>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-navy-900">{dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0)} bars</p>
+                  <p className="text-sm font-bold text-emerald-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0))}</p>
+                  <p className="text-xs font-bold text-sky-700">Collection {formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.collectionAmount || 0), 0))}</p>
+                  <p className="text-xs font-bold text-red-600">-{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.expenseAmount || 0), 0))}</p>
+                  <p className="text-xs font-bold text-navy-900">Balance {formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.balanceAmount || 0), 0))}</p>
+                </div>
+              </div>
+            </div>
+            <div className="hidden overflow-x-auto rounded-lg border border-slate-300 sm:block">
+              <table className="w-full min-w-[1040px] table-fixed border-collapse text-xs">
+                <thead className="bg-emerald-700 text-white"><tr><th className="w-[60px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">S.No</th><th className="border border-emerald-800 px-3 py-3 text-left text-[10px] font-bold uppercase">Truck Name</th><th className="border border-emerald-800 px-3 py-3 text-left text-[10px] font-bold uppercase">Driver Name</th><th className="w-[100px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">Bars Used</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Sales Amount</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Collection Amount</th><th className="w-[130px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Expenses</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Balance Amount</th></tr></thead>
                 <tbody>
-                  {dashboard.truckRows.map((row: any, index: number) => <tr key={`${row.truckName}-${index}`} className="even:bg-slate-50 hover:bg-emerald-50/70"><td className="border border-slate-300 px-3 py-3 text-center text-slate-500">{index + 1}</td><td className="border border-slate-300 px-3 py-3 font-semibold text-navy-900">{row.truckName}</td><td className="border border-slate-300 px-3 py-3 text-center font-semibold">{row.quantity}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-emerald-700">{formatCurrency(row.totalAmount)}</td><td className="border border-slate-300 px-3 py-3 text-right font-semibold text-slate-600">{formatCurrency(row.quantity > 0 ? row.totalAmount / row.quantity : 0)}</td></tr>)}
+                  {dashboard.truckRows.map((row: any, index: number) => <tr key={`${row.truckName}-${index}`} className="even:bg-slate-50 hover:bg-emerald-50/70"><td className="border border-slate-300 px-3 py-3 text-center text-slate-500">{index + 1}</td><td className="border border-slate-300 px-3 py-3 font-semibold text-navy-900">{row.truckName}</td><td className="border border-slate-300 px-3 py-3">{row.driverName}</td><td className="border border-slate-300 px-3 py-3 text-center font-semibold">{row.quantity}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-emerald-700">{formatCurrency(row.totalAmount)}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-sky-700">{formatCurrency(row.collectionAmount)}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">-{formatCurrency(row.expenseAmount)}</td><td className={`border border-slate-300 px-3 py-3 text-right font-bold ${row.balanceAmount < 0 ? 'text-red-600' : 'text-navy-900'}`}>{formatCurrency(row.balanceAmount)}</td></tr>)}
                 </tbody>
-                <tfoot className="bg-emerald-50 font-bold text-navy-900"><tr><td className="border border-slate-300 px-3 py-3 text-center" colSpan={2}>TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center">{dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0)}</td><td className="border border-slate-300 px-3 py-3 text-right text-emerald-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right text-slate-600">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0) > 0 ? dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0) / dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0) : 0)}</td></tr></tfoot>
+                <tfoot className="bg-emerald-50 font-bold text-navy-900"><tr><td className="border border-slate-300 px-3 py-3 text-center" colSpan={3}>TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center">{dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0)}</td><td className="border border-slate-300 px-3 py-3 text-right text-emerald-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right text-sky-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.collectionAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">-{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.expenseAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.balanceAmount || 0), 0))}</td></tr></tfoot>
               </table>
             </div>
             {false && <ResponsiveContainer width="100%" height={310}>
@@ -634,6 +714,16 @@ export default function AdminDashboardPage() {
             </>
           )}
         </Panel>
+
+        <Panel title="Today's Expense Report" icon={FiDollarSign}>
+          {todayExpenseReport.length === 0 ? <EmptyState text="No expenses recorded today." /> : <>
+            <div className="space-y-2 sm:hidden">
+              {todayExpenseReport.map((row) => <div key={`${row.truckName}-${row.driverName}`} className="rounded-xl border border-slate-200 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words text-sm font-bold text-navy-900">{row.truckName}</p><p className="mt-1 text-xs text-navy-800/50">{row.driverName} · {row.entries} entr{row.entries === 1 ? 'y' : 'ies'}</p></div><p className="shrink-0 font-bold text-red-600">-{formatCurrency(row.amount)}</p></div></div>)}
+              <div className="flex justify-between rounded-xl bg-red-50 px-3 py-3 text-sm font-bold"><span>Total Expenses</span><span className="text-red-600">-{formatCurrency(todayExpenses)}</span></div>
+            </div>
+            <div className="hidden overflow-x-auto rounded-lg border border-slate-300 sm:block"><table className="w-full min-w-[620px] border-collapse text-xs"><thead className="bg-red-600 text-white"><tr><th className="border border-red-700 px-3 py-3 text-left">Truck Name</th><th className="border border-red-700 px-3 py-3 text-left">Driver / Worker</th><th className="border border-red-700 px-3 py-3 text-center">Entries</th><th className="border border-red-700 px-3 py-3 text-right">Expenses</th></tr></thead><tbody>{todayExpenseReport.map((row) => <tr key={`${row.truckName}-${row.driverName}`}><td className="border border-slate-300 px-3 py-3 font-bold text-navy-900">{row.truckName}</td><td className="border border-slate-300 px-3 py-3">{row.driverName}</td><td className="border border-slate-300 px-3 py-3 text-center">{row.entries}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">-{formatCurrency(row.amount)}</td></tr>)}</tbody><tfoot className="bg-red-50 font-bold"><tr><td colSpan={3} className="border border-slate-300 px-3 py-3 text-right">TOTAL EXPENSES</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">-{formatCurrency(todayExpenses)}</td></tr></tfoot></table></div>
+          </>}
+        </Panel>
       </section>
 
       <section className="space-y-4">
@@ -646,7 +736,40 @@ export default function AdminDashboardPage() {
         <div className="min-w-0 border-b border-sky-100 p-4 lg:border-b-0 lg:border-r sm:p-5">
           <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50"><FiDollarSign className="text-emerald-600" /></span> Daily Sales Report</h3>
           <p className="mb-3 mt-1 pl-10 text-[11px] font-medium text-slate-400">Latest 10 sales recorded today</p>
-          {todaySales.length === 0 ? <EmptyState text="No sales recorded today." /> : <div className="overflow-x-auto rounded-xl border border-slate-200"><table className="w-full min-w-[560px] table-fixed border-collapse text-xs"><thead className="bg-sky-50/80 text-navy-900"><tr><th className="w-[19%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Date</th><th className="w-[27%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Customer</th><th className="w-[13%] border-b border-slate-200 px-3 py-2.5 text-center font-bold uppercase">Bars</th><th className="w-[21%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Amount</th><th className="w-[20%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Balance</th></tr></thead><tbody>{todaySales.slice(0, 10).map((sale) => { const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0); return <tr key={sale._id} className="border-b border-slate-100 last:border-0 even:bg-slate-50/60 hover:bg-sky-50/70"><td className="px-3 py-2.5 text-slate-600">{formatDate(sale.date)}</td><td className="truncate px-3 py-2.5 font-semibold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</td><td className="px-3 py-2.5 text-center font-semibold">{bars}</td><td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{formatCurrency(sale.totalAmount)}</td><td className="px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(sale.balanceAmount)}</td></tr>; })}</tbody><tfoot className="border-t border-sky-200 bg-sky-50 font-bold text-navy-900"><tr><td colSpan={2} className="px-3 py-2.5 text-right">TOTAL</td><td className="px-3 py-2.5 text-center">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)}</td><td className="px-3 py-2.5 text-right text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="px-3 py-2.5 text-right text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot></table></div>}
+          {todaySales.length === 0 ? <EmptyState text="No sales recorded today." /> : (
+            <>
+              <div className="sm:hidden">
+                {todaySales.slice(0, 10).map((sale) => {
+                  const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0);
+                  return (
+                    <div key={sale._id} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</p>
+                        <p className="shrink-0 text-xs font-medium text-slate-500">{formatDate(sale.date)}</p>
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between gap-3">
+                        <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{bars}</span> Bars</p>
+                        <p className="text-sm font-bold tabular-nums text-emerald-700">{formatCurrency(sale.totalAmount)}</p>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-3">
+                        <p className="text-[10px] font-medium text-navy-800/45">Balance</p>
+                        <p className="text-xs font-semibold tabular-nums text-red-500">{formatCurrency(sale.balanceAmount)}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex items-center justify-between gap-3 border-t border-sky-200 bg-sky-50 px-1 py-3">
+                  <p className="text-xs font-bold uppercase text-navy-900">Total</p>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-navy-900">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)} bars</p>
+                    <p className="text-sm font-bold text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</p>
+                    <p className="text-xs font-bold text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</p>
+                  </div>
+                </div>
+              </div>
+              <div className="hidden overflow-x-auto rounded-xl border border-slate-200 sm:block"><table className="w-full min-w-[560px] table-fixed border-collapse text-xs"><thead className="bg-sky-50/80 text-navy-900"><tr><th className="w-[19%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Date</th><th className="w-[27%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Customer</th><th className="w-[13%] border-b border-slate-200 px-3 py-2.5 text-center font-bold uppercase">Bars</th><th className="w-[21%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Amount</th><th className="w-[20%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Balance</th></tr></thead><tbody>{todaySales.slice(0, 10).map((sale) => { const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0); return <tr key={sale._id} className="border-b border-slate-100 last:border-0 even:bg-slate-50/60 hover:bg-sky-50/70"><td className="px-3 py-2.5 text-slate-600">{formatDate(sale.date)}</td><td className="truncate px-3 py-2.5 font-semibold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</td><td className="px-3 py-2.5 text-center font-semibold">{bars}</td><td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{formatCurrency(sale.totalAmount)}</td><td className="px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(sale.balanceAmount)}</td></tr>; })}</tbody><tfoot className="border-t border-sky-200 bg-sky-50 font-bold text-navy-900"><tr><td colSpan={2} className="px-3 py-2.5 text-right">TOTAL</td><td className="px-3 py-2.5 text-center">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)}</td><td className="px-3 py-2.5 text-right text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="px-3 py-2.5 text-right text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot></table></div>
+            </>
+          )}
         </div>
 
         <div className="min-w-0 bg-sky-50/25 p-4 sm:p-5">
@@ -669,6 +792,17 @@ export default function AdminDashboardPage() {
                 <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Balance Bars</p>
                 <p className="mt-2 font-display text-2xl font-black text-amber-700">{formatBarQuantity(stockBalanceBars) || '0'}</p>
               </div>
+            </div>
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <table className="w-full min-w-[420px] border-collapse text-xs">
+                <thead className="bg-amber-50 text-navy-900"><tr><th className="border-b border-slate-200 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Balance Source</th><th className="border-b border-slate-200 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Driver</th><th className="border-b border-slate-200 px-3 py-2.5 text-right text-[10px] font-bold uppercase">Balance Bars</th></tr></thead>
+                <tbody>
+                  <tr><td className="border-b border-slate-100 px-3 py-2.5 font-semibold text-navy-900">Shop / Factory</td><td className="border-b border-slate-100 px-3 py-2.5 text-slate-500">-</td><td className={`border-b border-slate-100 px-3 py-2.5 text-right font-bold ${shopBalanceBars < 0 ? 'text-red-600' : 'text-amber-700'}`}>{formatBarQuantity(shopBalanceBars) || '0'}</td></tr>
+                  {todayTruckBalances.map((row) => <tr key={row.id}><td className="border-b border-slate-100 px-3 py-2.5 font-semibold text-navy-900">{row.name}</td><td className="border-b border-slate-100 px-3 py-2.5 text-slate-600">{row.driverName || '-'}</td><td className={`border-b border-slate-100 px-3 py-2.5 text-right font-bold ${row.balance < 0 ? 'text-red-600' : 'text-amber-700'}`}>{formatBarQuantity(row.balance) || '0'}</td></tr>)}
+                  {todayTruckBalances.length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-slate-500">No truck balance entries today.</td></tr>}
+                  <tr className="bg-slate-50"><td colSpan={2} className="px-3 py-2.5 font-black uppercase text-navy-900">Total Balance</td><td className="px-3 py-2.5 text-right font-black text-navy-900">{formatBarQuantity(shopBalanceBars + truckBalanceBars) || '0'}</td></tr>
+                </tbody>
+              </table>
             </div>
             <div className="relative h-[190px] rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
               {todayBarChart.length > 0 ? (
@@ -698,7 +832,44 @@ export default function AdminDashboardPage() {
           {dashboard.pendingPayments.length === 0 ? (
             <EmptyState text="No pending payments." />
           ) : (
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <>
+            <div className="sm:hidden">
+              {dashboard.pendingPayments.map((sale: any, index: number) => (
+                <div key={sale._id} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
+                  <div className="flex min-w-0 items-start gap-2">
+                    <span className="w-7 shrink-0 pt-0.5 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-navy-900">{sale.customer?.name}</p>
+                      <p className="text-[10px] text-slate-400">{sale.customer?.phoneNumber || 'No phone'}</p>
+                      <p className="mt-0.5 text-[10px] font-medium text-slate-500">{formatDate(sale.date)} · {sale.truck?.truckName || '-'}</p>
+                    </div>
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-3 gap-2 pl-9 text-right">
+                    <div>
+                      <p className="text-[10px] font-medium text-navy-800/45">Total</p>
+                      <p className="text-xs font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-medium text-navy-800/45">Paid</p>
+                      <p className="text-xs font-semibold text-emerald-600">{formatCurrency(sale.paidAmount)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-medium text-navy-800/45">Balance</p>
+                      <p className="text-xs font-bold text-red-600">{formatCurrency(sale.balanceAmount)}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between gap-3 border-t border-sky-200 bg-sky-50 px-1 py-3">
+                <p className="text-xs font-bold uppercase text-navy-900">Total</p>
+                <div className="flex gap-3 text-right">
+                  <p className="text-xs font-bold text-navy-900">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.totalAmount || 0), 0))}</p>
+                  <p className="text-xs font-bold text-emerald-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.paidAmount || 0), 0))}</p>
+                  <p className="text-xs font-bold text-red-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.balanceAmount || 0), 0))}</p>
+                </div>
+              </div>
+            </div>
+            <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white sm:block">
               <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-navy-900">
                 <thead className="bg-sky-50 text-navy-900">
                   <tr>
@@ -725,6 +896,7 @@ export default function AdminDashboardPage() {
                 <tfoot className="bg-sky-50 font-bold text-navy-900"><tr><td colSpan={4} className="border-r border-slate-200 px-3 py-3 text-right">TOTAL</td><td className="border-r border-slate-200 px-2 py-3 text-right">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="border-r border-slate-200 px-2 py-3 text-right text-emerald-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.paidAmount || 0), 0))}</td><td className="px-2 py-3 text-right text-red-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot>
               </table>
             </div>
+            </>
           )}
         </Panel>
         </div>
@@ -735,7 +907,24 @@ export default function AdminDashboardPage() {
           {dashboard.recentPayments.length === 0 ? (
             <EmptyState text="No old payments collected today." />
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            <div className="sm:hidden">
+              {dashboard.recentPayments.map((payment: any, index: number) => (
+                <div key={`${payment.saleId}-${index}`} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{payment.customer?.name}</p>
+                    <p className="shrink-0 text-sm font-bold tabular-nums text-emerald-600">{formatCurrency(payment.amount)}</p>
+                  </div>
+                  <p className="mt-0.5 text-[10px] text-navy-800/45">Bill: {formatDate(payment.billDate)}</p>
+                  <div className="mt-1.5 flex items-center justify-between gap-3">
+                    <p className="text-xs text-navy-800/55">{payment.truck?.truckName || '-'}</p>
+                    <p className="text-xs capitalize text-navy-800/55">{payment.paymentMode}</p>
+                    <p className="text-xs text-navy-800/55">{formatDate(payment.date)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
               <table className="table-base min-w-[620px]">
                 <thead>
                   <tr>
@@ -762,6 +951,7 @@ export default function AdminDashboardPage() {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </Panel>
 

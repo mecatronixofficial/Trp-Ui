@@ -186,7 +186,44 @@ export default function AllExpenseRecordsPage() {
 
         {error && <p className="m-4 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</p>}
         {loading ? <p className="p-8 text-center text-slate-500">Loading records...</p> : (
-          <div className="overflow-x-auto"><table className={`w-full ${isSuperAdmin ? "min-w-[900px]" : "min-w-[760px]"} table-fixed border-collapse text-left text-xs sm:text-sm`}>
+          <>
+          <div className="sm:hidden">
+            {visibleRecords.map((record, index) => (
+              <div key={record._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold tabular-nums text-slate-400">{index + 1}</span>
+                      <p className="font-semibold text-slate-900">{formatDate(record.date)}</p>
+                    </div>
+                    <p className="mt-1 break-words text-xs font-semibold text-emerald-700">{categoryLabel(record)}</p>
+                  </div>
+                  <p className="shrink-0 font-bold text-slate-900">{formatCurrency(Number(record.amount || 0))}</p>
+                </div>
+                {isSuperAdmin && (
+                  <p className="mt-2 text-xs text-slate-600">
+                    <span className="font-semibold text-slate-400">Branch: </span>
+                    {record.branchName || branches.find((branch) => branch._id === record.branch)?.name || "Unassigned"}
+                  </p>
+                )}
+                <p className="mt-1 text-xs text-slate-600">
+                  <span className="font-semibold text-slate-400">Worker / Truck: </span>
+                  {record.workerName || record.truckName || "—"}
+                  {Number(record.fuelQuantity || 0) > 0 && (
+                    <span className="ml-1 text-slate-500">({Number(record.fuelQuantity).toLocaleString("en-IN")} L)</span>
+                  )}
+                </p>
+                <p className="mt-1 break-words text-xs text-slate-600">
+                  <span className="font-semibold text-slate-400">Notes: </span>
+                  {visibleNotes(record) || "—"}
+                </p>
+              </div>
+            ))}
+            {visibleRecords.length === 0 && (
+              <p className="px-4 py-10 text-center text-slate-500">No expense records for this selection.</p>
+            )}
+          </div>
+          <div className="hidden overflow-x-auto sm:block"><table className={`w-full ${isSuperAdmin ? "min-w-[900px]" : "min-w-[760px]"} table-fixed border-collapse text-left text-xs sm:text-sm`}>
             <thead className="bg-emerald-700 text-white">
               <tr>
                 <th className="w-[7%] border border-emerald-800 px-2 py-3 text-center text-xs font-bold uppercase">S.No</th>
@@ -216,6 +253,7 @@ export default function AllExpenseRecordsPage() {
               {visibleRecords.length === 0 && <tr><td colSpan={isSuperAdmin ? 7 : 6} className="border border-slate-300 px-4 py-10 text-center text-slate-500">No expense records for this selection.</td></tr>}
             </tbody>
           </table></div>
+          </>
         )}
       </section>
     </div>

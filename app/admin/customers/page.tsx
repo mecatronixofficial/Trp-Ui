@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiTag, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye, FiDollarSign, FiCheckCircle } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye, FiDollarSign, FiCheckCircle } from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
@@ -61,6 +61,8 @@ interface Customer {
   customerType?: 'local' | 'truck';
   truck?: { _id: string; truckName: string; truckNumber: string; driverName?: string } | string | null;
   notes?: string;
+  createdByName?: string;
+  createdBy?: { displayName?: string; username?: string; name?: string } | string;
 }
 
 interface Branch {
@@ -71,6 +73,20 @@ interface Branch {
 }
 
 const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '', isActive: true };
+const creatorFromNotes = (notes?: string) => String(notes || '').match(/^\[Created by: ([^\]]+)\]/)?.[1] || '';
+const priceMarkerFromNotes = (notes?: string) => String(notes || '').match(/\[Customer price: (?:retail|wholesale)=[0-9]+(?:\.[0-9]+)?\]/i)?.[0] || '';
+const notesWithoutCreator = (notes?: string) => String(notes || '')
+  .replace(/^\[Created by: [^\]]+\]\s*/, '')
+  .replace(/^\[Customer price: (?:retail|wholesale)=[0-9]+(?:\.[0-9]+)?\]\s*/i, '');
+const creatorName = (customer: Customer) => customer.createdByName
+  || (typeof customer.createdBy === 'object' && customer.createdBy
+    ? customer.createdBy.displayName || customer.createdBy.name || customer.createdBy.username
+    : '')
+  || creatorFromNotes(customer.notes)
+  || 'Not recorded';
+const customerTruckName = (customer: Customer) => typeof customer.truck === 'object' && customer.truck
+  ? `${customer.truck.truckName}${customer.truck.truckNumber ? ` (${customer.truck.truckNumber})` : ''}`
+  : customer.truck ? 'Assigned truck' : 'Local';
 
 export default function CustomersPage() {
   const { user, loading: authLoading } = useAuth();
@@ -83,10 +99,6 @@ export default function CustomersPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [form, setForm] = useState<any>(emptyForm);
-  const [priceTarget, setPriceTarget] = useState<Customer | null>(null);
-  const [prices, setPrices] = useState<any[]>([]);
-  const [priceForm, setPriceForm] = useState<{ retail: string; wholesale: string }>({ retail: '', wholesale: '' });
-  const [savingPrice, setSavingPrice] = useState(false);
   const [historyTarget, setHistoryTarget] = useState<Customer | null>(null);
   const [historyRange, setHistoryRange] = useState({ from: last30Days(), to: indiaTodayISO() });
   const [historyRows, setHistoryRows] = useState<HistoryDay[]>([]);
@@ -99,7 +111,6 @@ export default function CustomersPage() {
   const [collectionError, setCollectionError] = useState('');
   const [pageError, setPageError] = useState('');
   const [formError, setFormError] = useState('');
-  const [priceError, setPriceError] = useState('');
   const [savingCustomer, setSavingCustomer] = useState(false);
   const [deletingCustomerId, setDeletingCustomerId] = useState('');
   const isSuperAdmin = user?.role === 'super_admin';
@@ -189,7 +200,7 @@ export default function CustomersPage() {
       address: c.address || '',
       defaultSaleType: c.defaultSaleType || 'retail',
       truck: truckId,
-      notes: c.notes || '',
+      notes: notesWithoutCreator(c.notes),
       isActive: c.isActive !== false,
     });
     setFormError('');
@@ -207,7 +218,13 @@ export default function CustomersPage() {
       setFormError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'A customer with this name already exists.' : 'A customer with this phone number already exists.');
       return;
     }
-    const payload = { ...form, truck: form.customerType === 'truck' ? form.truck : null };
+    const payload = {
+      ...form,
+      truck: form.customerType === 'truck' ? form.truck : null,
+      notes: editing && creatorName(editing) !== 'Not recorded'
+        ? `[Created by: ${creatorName(editing)}]${priceMarkerFromNotes(editing.notes) ? `\n${priceMarkerFromNotes(editing.notes)}` : ''}${form.notes ? `\n${form.notes}` : ''}`
+        : form.notes,
+    };
     setSavingCustomer(true);
     try {
       if (editing) await api.patch(`/customers/${editing._id}`, payload);
@@ -233,58 +250,6 @@ export default function CustomersPage() {
       setPageError(error?.response?.data?.message || `Could not delete ${c.name}.`);
     } finally {
       setDeletingCustomerId('');
-    }
-  };
-
-  const openPrices = async (c: Customer) => {
-    if (!canManageCustomers) return;
-    setPriceError('');
-    setPriceTarget(c);
-    setPrices([]);
-    try {
-      const { data } = await api.get(`/price-list/customer/${c._id}`);
-      const rows = Array.isArray(data) ? data : [];
-      setPrices(rows);
-      setPriceForm({
-        retail: rows.find((p: any) => p.saleType === 'retail')?.price?.toString() || '',
-        wholesale: rows.find((p: any) => p.saleType === 'wholesale')?.price?.toString() || '',
-      });
-    } catch (error: any) {
-      setPriceError(error?.response?.data?.message || 'Could not load customer prices.');
-    }
-  };
-
-  const savePrice = async (saleType: 'retail' | 'wholesale') => {
-    if (!priceTarget || !canManageCustomers) return;
-    const price = Number(priceForm[saleType]);
-    if (!Number.isFinite(price) || price <= 0) {
-      setPriceError('Enter a price greater than zero.');
-      return;
-    }
-    setPriceError('');
-    setSavingPrice(true);
-    try {
-      await api.post('/price-list', { customer: priceTarget._id, saleType, price });
-      const { data } = await api.get(`/price-list/customer/${priceTarget._id}`);
-      setPrices(Array.isArray(data) ? data : []);
-    } catch (error: any) {
-      setPriceError(error?.response?.data?.message || 'Could not save the customer price.');
-    } finally {
-      setSavingPrice(false);
-    }
-  };
-
-  const removePrice = async (saleType: 'retail' | 'wholesale') => {
-    if (!canManageCustomers) return;
-    const entry = prices.find((p) => p.saleType === saleType);
-    if (!entry) return;
-    setPriceError('');
-    try {
-      await api.delete(`/price-list/${entry._id}`);
-      setPrices(prices.filter((p) => p._id !== entry._id));
-      setPriceForm((prev) => ({ ...prev, [saleType]: '' }));
-    } catch (error: any) {
-      setPriceError(error?.response?.data?.message || 'Could not remove the customer price.');
     }
   };
 
@@ -408,52 +373,40 @@ export default function CustomersPage() {
           </button>}
         </div>
         {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
-        <div className="overflow-x-auto">
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className="w-full min-w-[920px] table-fixed border-collapse text-left text-xs sm:text-sm">
-            <thead className="bg-slate-100 text-navy-900">
-              <tr>
-                <th className="w-[6%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Name</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Address</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Type</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Credit Balance</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <div className="sm:hidden">
               {customers.map((c, index) => (
-                <tr key={c._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                  <td className="break-words border border-slate-300 px-2 py-3">
-                    <Link href={`/admin/customers/${c._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
-                      {c.name}
-                    </Link>
-                  </td>
-                  <td className="break-all border border-slate-300 px-2 py-3">{c.phoneNumber || '-'}</td>
-                  <td className="break-words border border-slate-300 px-2 py-3">{c.address || '-'}</td>
-                  <td className="border border-slate-300 px-2 py-3 text-center">
-                    <span className="pill bg-slate-100 text-navy-900">
-                      {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
-                    </span>
-                  </td>
-                  <td className={`break-words border border-slate-300 px-2 py-3 text-center text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</td>
-                  <td className="border border-slate-300 px-2 py-3 text-center">
+                <div key={c._id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                        <Link href={`/admin/customers/${c._id}`} className="min-w-0 truncate font-semibold text-navy-900 underline-offset-2 hover:underline">
+                          {c.name}
+                        </Link>
+                      </div>
+                      <p className="mt-1 break-all pl-8 text-xs text-navy-800/55">{c.phoneNumber || '-'}</p>
+                      <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">{c.address || '-'}</p>
+                      <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">Created by: {creatorName(c)}</p>
+                      <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">Truck: {customerTruckName(c)}</p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={`text-sm text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</p>
+                      <span className="mt-1 inline-block pill bg-slate-100 text-navy-900">
+                        {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between gap-3 pl-8">
                     <span className="pill bg-slate-100 text-navy-900">{c.isActive ? 'Active' : 'Inactive'}</span>
-                  </td>
-                  <td className="border border-slate-300 px-2 py-3">
-                    <div className="flex flex-wrap items-center justify-center gap-2">
+                    <div className="flex flex-wrap items-center gap-3">
                       <button title="View details and purchase history" aria-label={`View ${c.name} details`} onClick={() => openHistory(c)} className="text-navy-900 hover:text-black">
                         <FiEye />
                       </button>
                       {canManageCustomers && <>
-                      <button title="Price list" onClick={() => openPrices(c)} className="text-navy-900 hover:text-black">
-                        <FiTag />
-                      </button>
                       {Number(c.creditBalance || 0) > 0 && (
                         <button title="Collect pending amount" aria-label={`Collect pending amount from ${c.name}`} onClick={() => openCollection(c)} className="text-emerald-600 transition hover:text-emerald-800">
                           <FiDollarSign />
@@ -467,16 +420,81 @@ export default function CustomersPage() {
                       </button>
                       </>}
                     </div>
-                  </td>
-                </tr>
+                  </div>
+                </div>
               ))}
               {customers.length === 0 && (
-                <tr><td colSpan={8} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No customers found.</td></tr>
+                <p className="px-4 py-10 text-center text-sm text-navy-800/50">No customers found.</p>
               )}
-            </tbody>
-          </table>
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
+              <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs sm:text-sm">
+                <thead className="bg-slate-100 text-navy-900">
+                  <tr>
+                    <th className="w-[6%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Name</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Created By</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Name</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Address</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Type</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Credit Balance</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {customers.map((c, index) => (
+                    <tr key={c._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                      <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                      <td className="break-words border border-slate-300 px-2 py-3">
+                        <Link href={`/admin/customers/${c._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
+                          {c.name}
+                        </Link>
+                      </td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{creatorName(c)}</td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{customerTruckName(c)}</td>
+                      <td className="break-all border border-slate-300 px-2 py-3">{c.phoneNumber || '-'}</td>
+                      <td className="break-words border border-slate-300 px-2 py-3">{c.address || '-'}</td>
+                      <td className="border border-slate-300 px-2 py-3 text-center">
+                        <span className="pill bg-slate-100 text-navy-900">
+                          {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
+                        </span>
+                      </td>
+                      <td className={`break-words border border-slate-300 px-2 py-3 text-center text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</td>
+                      <td className="border border-slate-300 px-2 py-3 text-center">
+                        <span className="pill bg-slate-100 text-navy-900">{c.isActive ? 'Active' : 'Inactive'}</span>
+                      </td>
+                      <td className="border border-slate-300 px-2 py-3">
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          <button title="View details and purchase history" aria-label={`View ${c.name} details`} onClick={() => openHistory(c)} className="text-navy-900 hover:text-black">
+                            <FiEye />
+                          </button>
+                          {canManageCustomers && <>
+                          {Number(c.creditBalance || 0) > 0 && (
+                            <button title="Collect pending amount" aria-label={`Collect pending amount from ${c.name}`} onClick={() => openCollection(c)} className="text-emerald-600 transition hover:text-emerald-800">
+                              <FiDollarSign />
+                            </button>
+                          )}
+                          <button title="Edit" onClick={() => openEdit(c)} className="text-navy-900 hover:text-black">
+                            <FiEdit2 />
+                          </button>
+                          <button title="Delete" disabled={deletingCustomerId === c._id} onClick={() => remove(c)} className="text-navy-900 hover:text-black disabled:cursor-wait disabled:opacity-40">
+                            <FiTrash2 />
+                          </button>
+                          </>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {customers.length === 0 && (
+                    <tr><td colSpan={10} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No customers found.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
-        </div>
       </section>
 
       {modalOpen && (
@@ -533,50 +551,6 @@ export default function CustomersPage() {
             {formError && <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-600">{formError}</p>}
             <button disabled={savingCustomer} className="btn-primary w-full disabled:cursor-wait disabled:opacity-60">{savingCustomer ? 'Saving...' : editing ? 'Save Changes' : 'Create Customer'}</button>
           </form>
-        </Modal>
-      )}
-
-      {priceTarget && (
-        <Modal title={`Bar Price: ${priceTarget.name}`} onClose={() => setPriceTarget(null)}>
-          {priceError && <p className="mb-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-sm font-medium text-red-600" role="alert">{priceError}</p>}
-          <p className="mb-3 text-xs text-navy-800/50">Set the price for 1 bar. The total is calculated automatically when a sale is recorded (bars × price).</p>
-          <div className="space-y-3">
-            {(['retail', 'wholesale'] as const).map((saleType) => {
-              const entry = prices.find((p) => p.saleType === saleType);
-              return (
-                <div key={saleType} className="rounded-2xl border border-iceblue-100 bg-white p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="pill capitalize bg-iceblue-50 text-iceblue-700">{saleType}</span>
-                    {entry && <span className="text-xs text-navy-800/45">Current: {formatCurrency(entry.price)} / bar</span>}
-                  </div>
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      placeholder="Price per bar"
-                      className="input-field"
-                      value={priceForm[saleType]}
-                      onChange={(e) => setPriceForm({ ...priceForm, [saleType]: e.target.value })}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => savePrice(saleType)}
-                      disabled={savingPrice || !priceForm[saleType]}
-                      className="btn-primary shrink-0 disabled:opacity-50"
-                    >
-                      Save
-                    </button>
-                    {entry && (
-                      <button type="button" onClick={() => removePrice(saleType)} className="shrink-0 text-red-500 text-xs">
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </Modal>
       )}
 

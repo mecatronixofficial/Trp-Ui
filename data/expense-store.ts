@@ -1,5 +1,15 @@
-import { promises as fs } from 'fs';
-import path from 'path';
+import 'server-only';
+import { getBackendApiUrl } from '../lib/backend-api-url';
+
+// Expenses used to be persisted to a local JSON file (data/expenses.json).
+// That works in local dev but crashes in production, where the deployed
+// function's filesystem is read-only (EROFS on write). Expenses now live in
+// the real backend (Trp-Server's Mongo-backed /expenses API), reached the
+// same way every other resource in this app is: an authenticated fetch
+// forwarding the caller's session cookie and selected-branch header. The
+// exported function names/signatures below are unchanged other than the
+// added `auth` parameter, so app/api/expenses/route.ts keeps its existing
+// request validation, response shape, and error messages.
 
 export type ExpenseRecord = {
   _id: string;
@@ -17,6 +27,8 @@ export type ExpenseRecord = {
   description?: string;
   createdAt?: string;
   updatedAt?: string;
+  createdByType?: 'ADMIN' | 'DRIVER';
+  driverName?: string;
 };
 
 export type ExpenseSummary = {
@@ -26,7 +38,10 @@ export type ExpenseSummary = {
   balance: number;
 };
 
-const storePath = path.join(process.cwd(), 'data', 'expenses.json');
+// Credentials to reach the backend as the same caller: the session cookie
+// (who), and the resolved branch (which branch's data — already computed by
+// the route handler from the user's role / X-Branch-Id header).
+export type ExpenseAuth = { cookie: string; branch: string };
 
 const isSnackCategory = (costType: string) => {
   const normalized = String(costType || '').trim().toLowerCase();
@@ -38,27 +53,6 @@ const normalizeCostType = (costType: unknown) => {
   if (normalized === 'petrol' || normalized === 'diesel' || normalized === 'petrol_diesel') return 'petrol_diesel';
   return normalized || 'other';
 };
-
-async function readStore() {
-  try {
-    const raw = await fs.readFile(storePath, 'utf8');
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      throw new Error('Expense data file must contain a JSON array');
-    }
-    return parsed as ExpenseRecord[];
-  } catch (error: any) {
-    if (error?.code !== 'ENOENT') throw error;
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, JSON.stringify([], null, 2));
-    return [];
-  }
-}
-
-async function writeStore(records: ExpenseRecord[]) {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(records, null, 2));
-}
 
 function parseAmount(value: unknown) {
   const parsed = typeof value === 'number' ? value : Number(value);
@@ -75,116 +69,168 @@ function cleanText(value: unknown, maximum: number) {
   return String(value || '').trim().slice(0, maximum);
 }
 
-const indiaDateKey = (date: string | Date) => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Kolkata',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-}).format(new Date(date));
+function referenceId(value: any) {
+  return String(value?._id || value || '');
+}
 
-function dateMatches(recordDate: string, filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null }) {
-  if (!filters) return true;
+function backendErrorMessage(data: any, fallback: string) {
+  const message = data?.message;
+  return Array.isArray(message) ? message.join(', ') : (message || fallback);
+}
 
-  if (filters.today) {
-    const todayKey = indiaDateKey(new Date());
-    return indiaDateKey(recordDate) === todayKey;
-  }
+async function backendRequest(path: string, auth: ExpenseAuth, init?: RequestInit) {
+  const headers: Record<string, string> = { cookie: auth.cookie || '' };
+  if (auth.branch) headers['x-branch-id'] = auth.branch;
+  if (init?.body) headers['content-type'] = 'application/json';
 
-  if (filters.date) {
-    return indiaDateKey(recordDate) === filters.date;
-  }
+  const response = await fetch(`${getBackendApiUrl()}${path}`, {
+    ...init,
+    headers,
+    cache: 'no-store',
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  return { ok: response.ok, status: response.status, data };
+}
 
-  if (filters.from || filters.to) {
-    const recordKey = indiaDateKey(recordDate);
-    return (!filters.from || recordKey >= filters.from)
-      && (!filters.to || recordKey <= filters.to);
-  }
+function filtersToQuery(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null }) {
+  const params = new URLSearchParams();
+  if (filters?.month) params.set('month', String(filters.month));
+  if (filters?.year) params.set('year', String(filters.year));
+  if (filters?.today) params.set('today', 'true');
+  if (filters?.date) params.set('date', filters.date);
+  if (filters?.from) params.set('from', filters.from);
+  if (filters?.to) params.set('to', filters.to);
+  return params.toString();
+}
 
-  if (filters.month && filters.year) {
-    const monthKey = `${String(filters.year).padStart(4, '0')}-${String(filters.month).padStart(2, '0')}`;
-    return recordDate.startsWith(monthKey);
-  }
+function indiaDateKey(value: unknown) {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(date);
+}
 
+function matchesExpenseFilters(record: ExpenseRecord, filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null }) {
+  const date = indiaDateKey(record.date || record.createdAt);
+  if (!date) return false;
+  const today = indiaDateKey(new Date());
+  if (filters?.today && date !== today) return false;
+  if (filters?.date && date !== filters.date) return false;
+  if (filters?.month && Number(date.slice(5, 7)) !== Number(filters.month)) return false;
+  if (filters?.year && Number(date.slice(0, 4)) !== Number(filters.year)) return false;
+  if (filters?.from && date < filters.from) return false;
+  if (filters?.to && date > filters.to) return false;
   return true;
 }
 
-export async function listExpenses(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null }) {
-  const records = await readStore();
-  return records.filter((record) => dateMatches(record.date, filters)
-    && (!filters?.branch || String(record.branch || '') === filters.branch));
+export async function listExpenses(
+  filters: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null } | undefined,
+  auth: ExpenseAuth,
+) {
+  const query = filtersToQuery(filters);
+  const [expenseResult, driverResult] = await Promise.all([
+    backendRequest(`/expenses${query ? `?${query}` : ''}`, auth),
+    // Driver expenses use their own endpoint contract and do not accept the
+    // Admin expense filters. Apply those filters after normalizing the rows.
+    backendRequest('/driver-expenses', auth),
+  ]);
+  const { ok, data } = expenseResult;
+  if (!ok) throw new Error(backendErrorMessage(data, 'Could not load expenses.'));
+  const records = Array.isArray(data) ? (data as ExpenseRecord[]) : [];
+  const existingIds = new Set(records.map((record) => String(record._id || '')));
+  const driverExpenses: ExpenseRecord[] = driverResult.ok && Array.isArray(driverResult.data)
+    ? driverResult.data.filter((row: any) => !existingIds.has(String(row?._id || ''))).map((row: any) => {
+      const truck = row?.truck && typeof row.truck === 'object' ? row.truck : null;
+      const purpose = cleanText(row?.purpose, 500);
+      const notes = cleanText(row?.notes, 500);
+      const purposeType = normalizeCostType(row?.costType || row?.purpose);
+      const costType = purposeType === 'worker_amount' ? 'advance_for_employee'
+        : purposeType === 'food' ? 'food'
+          : purposeType === 'petrol_diesel' ? 'petrol_diesel'
+            : purposeType === 'other_expenses' ? 'other_expenses'
+              : purposeType || 'truck_expense';
+      return {
+        _id: String(row?._id || ''),
+        date: String(row?.date || row?.createdAt || ''),
+        costType,
+        amount: Number(row?.amount || 0),
+        notes: [purpose, notes].filter(Boolean).join(' - '),
+        description: purpose,
+        truck: referenceId(truck || row?.truck),
+        truckName: cleanText(truck?.truckName || row?.truckName, 160),
+        workerName: cleanText(row?.workerName || truck?.driverName || row?.driverName || row?.createdByName, 160),
+        driverName: cleanText(truck?.driverName || row?.driverName || row?.createdByName, 160),
+        createdByType: 'DRIVER',
+        fuelQuantity: Number(row?.fuelQuantity || 0),
+        branch: referenceId(row?.branch || truck?.branch),
+        createdAt: row?.createdAt,
+        updatedAt: row?.updatedAt,
+      };
+    })
+    : [];
+  return [...records, ...driverExpenses.filter((record) => matchesExpenseFilters(record, filters))];
 }
 
-export async function createExpense(input: Partial<ExpenseRecord>) {
-  const records = await readStore();
+export async function createExpense(input: Partial<ExpenseRecord>, auth: ExpenseAuth) {
   const amount = parseAmount(input.amount);
   if (!amount) throw new Error('Amount must be a positive number');
 
-  const now = new Date().toISOString();
-  const record: ExpenseRecord = {
-    _id: input._id || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  const payload = {
     date: validateDate(input.date || new Date().toISOString()),
     costType: normalizeCostType(input.costType),
     amount,
     notes: cleanText(input.notes, 1000),
     worker: cleanText(input.worker, 120),
     workerName: cleanText(input.workerName, 160),
-    branch: cleanText(input.branch, 120),
-    branchName: cleanText(input.branchName, 160),
     truck: cleanText(input.truck, 120),
     truckName: cleanText(input.truckName, 160),
     fuelQuantity: parseAmount(input.fuelQuantity),
     description: cleanText(input.description || input.notes, 1000),
-    createdAt: now,
-    updatedAt: now,
   };
 
-  records.unshift(record);
-  await writeStore(records);
-  return record;
+  const { ok, data } = await backendRequest('/expenses', auth, { method: 'POST', body: JSON.stringify(payload) });
+  if (!ok) throw new Error(backendErrorMessage(data, 'Could not save expense'));
+  return data as ExpenseRecord;
 }
 
-export async function updateExpense(id: string, input: Partial<ExpenseRecord>) {
-  const records = await readStore();
-  const index = records.findIndex((record) => record._id === id);
-  if (index === -1) return null;
-
+export async function updateExpense(id: string, input: Partial<ExpenseRecord>, auth: ExpenseAuth) {
   const amount = parseAmount(input.amount);
   if (!amount) throw new Error('Amount must be a positive number');
 
-  const updated: ExpenseRecord = {
-    ...records[index],
-    ...input,
-    _id: id,
+  const payload = {
+    date: validateDate(input.date || new Date().toISOString()),
+    costType: normalizeCostType(input.costType),
     amount,
-    date: validateDate(input.date || records[index].date),
-    costType: normalizeCostType(input.costType || records[index].costType),
-    notes: cleanText(input.notes ?? records[index].notes, 1000),
-    worker: cleanText(input.worker ?? records[index].worker, 120),
-    workerName: cleanText(input.workerName ?? records[index].workerName, 160),
-    branch: cleanText(input.branch ?? records[index].branch, 120),
-    branchName: cleanText(input.branchName ?? records[index].branchName, 160),
-    truck: cleanText(input.truck ?? records[index].truck, 120),
-    truckName: cleanText(input.truckName ?? records[index].truckName, 160),
-    fuelQuantity: parseAmount(input.fuelQuantity ?? records[index].fuelQuantity),
-    description: cleanText(input.description ?? input.notes ?? records[index].description ?? records[index].notes, 1000),
-    updatedAt: new Date().toISOString(),
+    notes: cleanText(input.notes, 1000),
+    worker: cleanText(input.worker, 120),
+    workerName: cleanText(input.workerName, 160),
+    truck: cleanText(input.truck, 120),
+    truckName: cleanText(input.truckName, 160),
+    fuelQuantity: parseAmount(input.fuelQuantity),
+    description: cleanText(input.description ?? input.notes, 1000),
   };
 
-  records[index] = updated;
-  await writeStore(records);
-  return updated;
+  const { ok, status, data } = await backendRequest(`/expenses/${id}`, auth, { method: 'PATCH', body: JSON.stringify(payload) });
+  if (status === 404) return null;
+  if (!ok) throw new Error(backendErrorMessage(data, 'Could not save expense'));
+  return data as ExpenseRecord;
 }
 
-export async function deleteExpense(id: string) {
-  const records = await readStore();
-  const next = records.filter((record) => record._id !== id);
-  if (next.length === records.length) return false;
-  await writeStore(next);
+export async function deleteExpense(id: string, auth: ExpenseAuth) {
+  const { ok, status, data } = await backendRequest(`/expenses/${id}`, auth, { method: 'DELETE' });
+  if (status === 404) return false;
+  if (!ok) throw new Error(backendErrorMessage(data, 'Could not delete expense'));
   return true;
 }
 
-export async function getExpenseSummary(filters?: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null }) {
-  const records = await listExpenses(filters);
+export async function getExpenseSummary(
+  filters: { month?: number | null; year?: number | null; today?: boolean; date?: string | null; from?: string | null; to?: string | null; branch?: string | null } | undefined,
+  auth: ExpenseAuth,
+  existingRecords?: ExpenseRecord[],
+) {
+  const records = existingRecords ?? await listExpenses(filters, auth);
   const snacksTotal = records.reduce((sum, record) => sum + (isSnackCategory(record.costType) ? Number(record.amount || 0) : 0), 0);
   const petrolDieselTotal = records.reduce((sum, record) => sum + (normalizeCostType(record.costType) === 'petrol_diesel' ? Number(record.amount || 0) : 0), 0);
   const totalExpenses = records.reduce((sum, record) => sum + Number(record.amount || 0), 0);
