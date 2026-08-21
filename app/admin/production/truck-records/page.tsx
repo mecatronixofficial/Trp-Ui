@@ -34,7 +34,34 @@ export default function TruckRecordsPage() {
     <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">All Records</p><h1 className="mt-1 font-display text-2xl font-bold text-navy-900">Truck Assignment &amp; Sales Report</h1></div><Link href="/admin/production" className="btn-secondary flex items-center gap-2"><FiArrowLeft /> Today View</Link></div>
     <section className="card overflow-x-auto">
       {loading ? <p className="py-8 text-center text-sm text-navy-800/50">Loading records...</p> : error ? <p className="rounded-xl bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</p> : rows.length ?
+        <>
+        <div className="sm:hidden">
+          {rows.map((row: any) => (
+            <div key={row.key} className="border-b border-iceblue-50 py-3 last:border-b-0">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-navy-900">{row.truckName}</p>
+                  <p className="text-xs text-navy-800/45">{row.truckNumber}</p>
+                </div>
+                <p className="shrink-0 text-xs font-semibold text-navy-800/60">{formatDate(`${row.date}T12:00:00+05:30`)}</p>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {row.assignments.map((assignment: any, index: number) => (
+                  <span key={assignment._id} className="pill bg-iceblue-50 text-iceblue-700">#{index + 1}: {fmtBars(Number(assignment.quantity || 0))}</span>
+                ))}
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                <div><p className="text-navy-800/45">Total Taken</p><p className="font-semibold text-navy-900">{fmtBars(row.taken)}</p></div>
+                <div><p className="text-navy-800/45">Sold Bars</p><p className="font-semibold text-amber-700">{fmtBars(row.sold)}</p></div>
+                <div><p className="text-navy-800/45">Remaining</p><p className={`font-bold ${row.taken - row.sold < 0 ? "text-red-600" : "text-emerald-700"}`}>{fmtBars(row.taken - row.sold)}</p></div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="hidden sm:block">
         <table className="table-base min-w-[820px]"><thead><tr><th>Date</th><th>Truck</th><th>Separate Assignments</th><th>Total Taken</th><th>Sold Bars</th><th>Remaining</th></tr></thead><tbody>{rows.map((row: any) => <tr key={row.key}><td>{formatDate(`${row.date}T12:00:00+05:30`)}</td><td><p className="font-semibold text-navy-900">{row.truckName}</p><p className="text-xs text-navy-800/45">{row.truckNumber}</p></td><td><div className="flex flex-wrap gap-1">{row.assignments.map((assignment: any, index: number) => <span key={assignment._id} className="pill bg-iceblue-50 text-iceblue-700">#{index + 1}: {fmtBars(Number(assignment.quantity || 0))}</span>)}</div></td><td className="font-semibold">{fmtBars(row.taken)}</td><td className="font-semibold text-amber-700">{fmtBars(row.sold)}</td><td className={`font-bold ${row.taken - row.sold < 0 ? "text-red-600" : "text-emerald-700"}`}>{fmtBars(row.taken - row.sold)}</td></tr>)}</tbody></table>
+        </div>
+        </>
         : <p className="py-8 text-center text-sm text-navy-800/50">No truck assignment records available.</p>}
     </section>
   </div>;

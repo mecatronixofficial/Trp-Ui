@@ -64,6 +64,8 @@ const referenceId = (value: unknown) => {
   if (value && typeof value === 'object' && '_id' in value) return String((value as { _id: unknown })._id || '');
   return String(value || '');
 };
+const workerIdentity = (worker?: Pick<Worker, 'name' | 'role'> | null) =>
+  worker ? `${worker.name}${worker.role ? ` (${worker.role})` : ''}` : '';
 const isTodayAmount = (value: string | Date) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date(value)) === indiaToday();
@@ -132,17 +134,20 @@ export default function WorkersPage() {
       const todayAdvances = todayAdvanceRows
         .filter(isAdvanceExpense)
         .filter((row: any) => String(row.worker || ''))
-        .map((row: any) => ({
-          ...row,
-          worker: {
-            _id: String(row.worker),
-            name: row.workerName || workerData.find((worker: Worker) => worker._id === String(row.worker))?.name || 'Worker',
-          },
-          buyingAmount: Number(row.amount || 0),
-          entryDateTime: row.updatedAt || row.createdAt || row.date,
-          entryType: 'Worker Amount',
-          isExpenseAdvance: true,
-        }));
+        .map((row: any) => {
+          const worker = workerData.find((item: Worker) => item._id === String(row.worker));
+          return {
+            ...row,
+            worker: {
+              _id: String(row.worker),
+              name: workerIdentity(worker) || row.workerName || 'Worker',
+            },
+            buyingAmount: Number(row.amount || 0),
+            entryDateTime: row.updatedAt || row.createdAt || row.date,
+            entryType: 'Worker Amount',
+            isExpenseAdvance: true,
+          };
+        });
       setWorkers(workerData);
       setSummary(Array.isArray(summaryRows.data) ? summaryRows.data : []);
       setDrivers(Array.isArray(driverRows.data) ? driverRows.data : []);
@@ -221,15 +226,18 @@ export default function WorkersPage() {
       const driverRows = driver
         ? driverExpenses.filter((expense) => String(expense.truck?._id || expense.truck) === driver._id)
         : [];
-      const buyingAmount = driver
-        ? driverRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0)
-        : Number(summaryRow?.buyingAmount || 0);
+      // A driver can now receive both truck fuel/expense entries (driverRows)
+      // and regular Worker Amount entries (summaryRow) — count both, not
+      // just one or the other, so an amount entered for a driver still
+      // shows up here.
+      const buyingAmount = (driver ? driverRows.reduce((sum, expense) => sum + Number(expense.amount || 0), 0) : 0)
+        + Number(summaryRow?.buyingAmount || 0);
       return {
         id: worker._id,
         name: worker.name,
         role: driver?.truckName || worker.role || '-',
         buyingAmount: buyingAmount + advances.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
-        buyingDays: driver ? driverRows.length : summaryRow?.buyingDays || 0,
+        buyingDays: (driver ? driverRows.length : 0) + (summaryRow?.buyingDays || 0),
         isDriver: Boolean(driver),
         worker,
         driver,
@@ -291,7 +299,7 @@ export default function WorkersPage() {
     const normalizedName = String(workerForm.name || '').trim().toLocaleLowerCase();
     const normalizedPhone = String(workerForm.phoneNumber || '').replace(/\D/g, '');
     const duplicate = workers.find((worker) => worker._id !== editingWorker?._id && (worker.name.trim().toLocaleLowerCase() === normalizedName || (normalizedPhone && String(worker.phoneNumber || '').replace(/\D/g, '') === normalizedPhone)));
-    if (duplicate) { setError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'A worker with this name already exists.' : 'A worker with this phone number already exists.'); return; }
+    if (duplicate) { setError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'Worker name already exists' : 'Worker phone number already exists'); return; }
     const payload = { ...workerForm };
     try {
       if (editingWorker) await api.patch(`/workers/${editingWorker._id}`, payload);
@@ -313,13 +321,13 @@ export default function WorkersPage() {
   const openCreateBuying = (workerId = '') => {
     if (!canManageWorkers) return;
     setEditingBuying(null);
-    setBuyingForm({ ...emptyBuyingForm, worker: workerId || workers.find((worker) => !worker.truck)?._id || '' });
+    setBuyingForm({ ...emptyBuyingForm, worker: workerId || workers[0]?._id || '' });
     setError('');
     setBuyingModalOpen(true);
   };
 
   const openEditBuying = (row: any) => {
-    if (!canManageWorkers || row.isExpenseAdvance || !isTodayAmount(row.date)) return;
+    if (!canManageWorkers || !isTodayAmount(row.date)) return;
     setEditingBuying(row);
     setBuyingForm({
       worker: referenceId(row.worker),
@@ -339,15 +347,49 @@ export default function WorkersPage() {
       return;
     }
     setError('');
-    const payload = { ...buyingForm, buyingAmount: Number(buyingForm.buyingAmount) || 0 };
+    const amount = Number(buyingForm.buyingAmount) || 0;
+    const payload = { ...buyingForm, buyingAmount: amount };
     try {
-      if (editingBuying) await api.patch(`/workers/buying/${editingBuying._id}`, payload);
-      else await api.post('/workers/buying', payload);
+      if (editingBuying?.isExpenseAdvance) {
+        const worker = workers.find((row) => row._id === buyingForm.worker);
+        const response = await fetch(`/api/expenses?id=${encodeURIComponent(editingBuying._id)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', ...selectedBranchHeaders() },
+          body: JSON.stringify({
+            date: buyingForm.date,
+            costType: 'advance_for_employee',
+            amount,
+            notes: buyingForm.notes,
+            worker: buyingForm.worker,
+            workerName: workerIdentity(worker) || editingBuying.worker?.name || '',
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result?.message || 'Could not save worker amount');
+      } else if (editingBuying) {
+        await api.patch(`/workers/buying/${editingBuying._id}`, payload);
+      } else {
+        const worker = workers.find((row) => row._id === buyingForm.worker);
+        const response = await fetch('/api/expenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...selectedBranchHeaders() },
+          body: JSON.stringify({
+            date: buyingForm.date,
+            costType: 'advance_for_employee',
+            amount,
+            notes: buyingForm.notes,
+            worker: buyingForm.worker,
+            workerName: workerIdentity(worker),
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result?.message || 'Could not save worker amount');
+      }
       setBuyingModalOpen(false);
       setEditingBuying(null);
       await load();
     } catch (err: any) {
-      setError(err?.response?.data?.message || 'Could not save buying amount');
+      setError(err?.response?.data?.message || err?.message || 'Could not save buying amount');
     }
   };
 
@@ -402,57 +444,93 @@ export default function WorkersPage() {
         {error && !workerModalOpen && !buyingModalOpen && (
           <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{error}</div>
         )}
-        <div className="overflow-x-auto">
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className={`w-full ${isSuperAdmin ? 'min-w-[900px]' : 'min-w-[760px]'} table-fixed border-collapse text-left text-xs sm:text-sm`}>
-            <thead className="bg-slate-100 text-navy-900">
-              <tr>
-                <th className="w-[7%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                {isSuperAdmin && <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker Name</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Role / Truck</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Amount</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Entry Days</th>
-                <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <div className="sm:hidden">
               {peopleSummary.map((row, index) => (
-                <tr key={row.id} className="text-navy-900 even:bg-slate-50 hover:bg-iceblue-50/70">
-                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                  {isSuperAdmin && <td className="break-words border border-slate-300 px-2 py-3 text-center">{typeof row.branch === 'object' && row.branch ? `${row.branch.name} (${row.branch.code})` : '-'}</td>}
-                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-semibold">
-                    <Link
-                      href={`/admin/workers/${row.worker?._id || row.id}`}
-                      className="text-navy-900 underline-offset-2 hover:underline"
-                    >
-                      {row.name}
-                    </Link>
-                  </td>
-                  <td className="break-words border border-slate-300 px-2 py-3 text-center">{row.role}</td>
-                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-bold text-red-600">{formatCurrency(row.buyingAmount)}</td>
-                  <td className="border border-slate-300 px-2 py-3 text-center">{row.buyingDays}</td>
-                  <td className="border border-slate-300 px-2 py-3">
-                    {canManageWorkers && !row.isDriver && (
-                      <div className="flex flex-wrap items-center justify-center gap-3">
-                        <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
-                        {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
-                        {row.worker && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
+                <div key={row.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                        <Link href={`/admin/workers/${row.worker?._id || row.id}`} className="min-w-0 truncate text-sm font-bold text-navy-900 underline-offset-2 hover:underline">{row.name}</Link>
                       </div>
-                    )}
-                  </td>
-                </tr>
+                      <p className="mt-1 pl-8 text-xs text-navy-800/55">{row.role}</p>
+                      {isSuperAdmin && <p className="mt-0.5 pl-8 text-xs text-navy-800/45">{typeof row.branch === 'object' && row.branch ? `${row.branch.name} (${row.branch.code})` : '-'}</p>}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-bold text-red-600">{formatCurrency(row.buyingAmount)}</p>
+                      <p className="mt-0.5 text-xs text-navy-800/50">{row.buyingDays} days</p>
+                    </div>
+                  </div>
+                  {canManageWorkers && (
+                    <div className="mt-2 flex flex-wrap items-center gap-4 pl-8">
+                      <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
+                      {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
+                      {row.worker && !row.isDriver && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
+                    </div>
+                  )}
+                </div>
               ))}
-              {peopleSummary.length === 0 && (
-                <tr><td colSpan={isSuperAdmin ? 7 : 6} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
+              {peopleSummary.length === 0 && <p className="px-4 py-10 text-center text-sm text-navy-800/50">No workers or drivers added yet.</p>}
+              {peopleSummary.length > 0 && (
+                <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-navy-900">
+                  <span>TOTAL ({peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)} entry days)</span>
+                  <span className="text-red-600">{formatCurrency(workerTotal)}</span>
+                </div>
               )}
-            </tbody>
-            <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={isSuperAdmin ? 4 : 3} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center text-red-600">{formatCurrency(workerTotal)}</td><td className="border border-slate-300 px-3 py-3 text-center">{peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)}</td><td className="border border-slate-300 px-3 py-3" /></tr></tfoot>
-          </table>
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
+              <table className={`w-full ${isSuperAdmin ? 'min-w-[900px]' : 'min-w-[760px]'} table-fixed border-collapse text-left text-xs sm:text-sm`}>
+                <thead className="bg-slate-100 text-navy-900">
+                  <tr>
+                    <th className="w-[7%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                    {isSuperAdmin && <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker Name</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Role / Truck</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Amount</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Entry Days</th>
+                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {peopleSummary.map((row, index) => (
+                    <tr key={row.id} className="text-navy-900 even:bg-slate-50 hover:bg-iceblue-50/70">
+                      <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                      {isSuperAdmin && <td className="break-words border border-slate-300 px-2 py-3 text-center">{typeof row.branch === 'object' && row.branch ? `${row.branch.name} (${row.branch.code})` : '-'}</td>}
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center font-semibold">
+                        <Link
+                          href={`/admin/workers/${row.worker?._id || row.id}`}
+                          className="text-navy-900 underline-offset-2 hover:underline"
+                        >
+                          {row.name}
+                        </Link>
+                      </td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{row.role}</td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center font-bold text-red-600">{formatCurrency(row.buyingAmount)}</td>
+                      <td className="border border-slate-300 px-2 py-3 text-center">{row.buyingDays}</td>
+                      <td className="border border-slate-300 px-2 py-3">
+                        {canManageWorkers && (
+                          <div className="flex flex-wrap items-center justify-center gap-3">
+                            <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
+                            {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
+                            {row.worker && !row.isDriver && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {peopleSummary.length === 0 && (
+                    <tr><td colSpan={isSuperAdmin ? 7 : 6} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
+                  )}
+                </tbody>
+                <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={isSuperAdmin ? 4 : 3} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center text-red-600">{formatCurrency(workerTotal)}</td><td className="border border-slate-300 px-3 py-3 text-center">{peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)}</td><td className="border border-slate-300 px-3 py-3" /></tr></tfoot>
+              </table>
+            </div>
+          </>
         )}
-        </div>
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
@@ -465,11 +543,39 @@ export default function WorkersPage() {
             View More <FiArrowRight />
           </Link>
         </div>
-        <div className="overflow-x-auto">
+        <div className="md:hidden">
+          {recentBuying.map((row, index) => (
+            <div key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-navy-900">{row.worker?.name || 'Worker'}</p>
+                  <p className="mt-1 text-xs text-navy-800/55">{formatDate(row.date)} &middot; {formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</p>
+                </div>
+                <p className="shrink-0 text-sm font-bold text-red-500">{formatCurrency(row.buyingAmount)}</p>
+              </div>
+              <p className="mt-1.5 text-xs text-navy-800/60">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</p>
+              <div className="mt-2">
+                {canManageWorkers && isTodayAmount(row.date) ? (
+                  <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEditBuying(row)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-900 hover:text-black"><FiEdit2 /> Edit</button>
+                ) : (
+                  <span className="text-xs text-navy-800/30">—</span>
+                )}
+              </div>
+            </div>
+          ))}
+          {recentBuying.length === 0 && <p className="px-4 py-8 text-center text-sm text-navy-800/50">No amount entries for today.</p>}
+          {recentBuying.length > 0 && (
+            <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-navy-900">
+              <span>TOTAL</span>
+              <span className="text-red-600">{formatCurrency(recentBuying.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</span>
+            </div>
+          )}
+        </div>
+        <div className="hidden overflow-x-auto md:block">
           <table className="w-full min-w-[860px] table-fixed border-collapse text-xs sm:text-sm">
             <thead className="bg-slate-100 text-navy-900"><tr><th className="w-[7%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">S.No</th><th className="w-[18%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Worker Name</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Amount Date</th><th className="w-[21%] border border-slate-300 px-3 py-3 text-center font-bold uppercase">Entry Date &amp; Time</th><th className="w-[14%] border border-slate-300 px-3 py-3 text-right font-bold uppercase">Amount</th><th className="w-[18%] border border-slate-300 px-3 py-3 text-left font-bold uppercase">Notes</th><th className="w-[8%] border border-slate-300 px-2 py-3 text-center font-bold uppercase">Actions</th></tr></thead>
             <tbody>
-              {recentBuying.map((row, index) => <tr key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-300 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">{row.worker?.name || 'Worker'}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDate(row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td><td className="border border-slate-300 px-3 py-2.5">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</td><td className="border border-slate-300 px-2 py-2.5 text-center">{canManageWorkers && !row.isExpenseAdvance && isTodayAmount(row.date) ? <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEditBuying(row)} className="text-navy-900 hover:text-black"><FiEdit2 /></button> : <span className="text-navy-800/30">—</span>}</td></tr>)}
+              {recentBuying.map((row, index) => <tr key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="even:bg-slate-50 hover:bg-iceblue-50/70"><td className="border border-slate-300 px-2 py-2.5 text-center">{index + 1}</td><td className="border border-slate-300 px-3 py-2.5 font-semibold text-navy-900">{row.worker?.name || 'Worker'}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatDate(row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-center">{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td><td className="border border-slate-300 px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td><td className="border border-slate-300 px-3 py-2.5">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</td><td className="border border-slate-300 px-2 py-2.5 text-center">{canManageWorkers && isTodayAmount(row.date) ? <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEditBuying(row)} className="text-navy-900 hover:text-black"><FiEdit2 /></button> : <span className="text-navy-800/30">—</span>}</td></tr>)}
               {recentBuying.length === 0 && <tr><td colSpan={7} className="border border-slate-300 py-8 text-center text-navy-800/50">No amount entries for today.</td></tr>}
             </tbody>
             {recentBuying.length > 0 && <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={4} className="border border-slate-300 px-3 py-3 text-right uppercase">Total</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">{formatCurrency(recentBuying.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td><td className="border border-slate-300" /><td className="border border-slate-300" /></tr></tfoot>}
@@ -536,7 +642,7 @@ export default function WorkersPage() {
               <label className="label-text">Worker</label>
               <select required className="input-field" value={buyingForm.worker} onChange={(e) => setBuyingForm({ ...buyingForm, worker: e.target.value })}>
                 <option value="">Select worker</option>
-                {workers.filter((worker) => !worker.truck).map((worker) => <option key={worker._id} value={worker._id}>{worker.name}</option>)}
+                {workers.map((worker) => <option key={worker._id} value={worker._id}>{workerIdentity(worker)}</option>)}
               </select>
             </div>
             <div>
@@ -590,46 +696,76 @@ export default function WorkersPage() {
               <button type="button" onClick={() => loadWorkerDetail(workerDetailTarget.worker, workerDetailRange)} className="btn-secondary">Apply</button>
             </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <div className="overflow-x-auto">
+            <div>
               {workerDetailLoading ? (
                 <p className="text-navy-800/50">Loading...</p>
               ) : (
-                <table className="table-base min-w-[650px]">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Current Date &amp; Time</th>
-                      <th>Type</th>
-                      <th>Amount</th>
-                      <th>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <>
+                  <div className="sm:hidden">
                     {workerDetailRows.map((row) => (
-                      <tr key={row._id}>
-                        <td>{formatDate(row.date)}</td>
-                        <td>{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td>
-                        <td><span className={`pill ${row.entryType === 'Worker Amount' ? 'bg-amber-50 text-amber-700' : 'bg-iceblue-50 text-iceblue-700'}`}>{row.entryType || 'Amount'}</span></td>
-                        <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
-                        <td className="text-xs text-navy-800/60">{row.notes}</td>
-                      </tr>
+                      <div key={row._id} className="border-b border-slate-100 py-3 last:border-b-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-navy-900">{formatDate(row.date)}</p>
+                            <p className="mt-1 text-xs text-navy-800/55">{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</p>
+                          </div>
+                          <p className="shrink-0 text-sm font-bold text-red-500">{formatCurrency(row.buyingAmount)}</p>
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-3">
+                          <span className={`pill ${row.entryType === 'Worker Amount' ? 'bg-amber-50 text-amber-700' : 'bg-iceblue-50 text-iceblue-700'}`}>{row.entryType || 'Amount'}</span>
+                          {row.notes && <p className="truncate text-xs text-navy-800/60">{row.notes}</p>}
+                        </div>
+                      </div>
                     ))}
                     {workerDetailRows.length === 0 && (
-                      <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No worker amount entries for the selected range.</td></tr>
+                      <p className="py-4 text-center text-sm text-navy-800/50">No worker amount entries for the selected range.</p>
                     )}
-                  </tbody>
-                  {workerDetailRows.length > 0 && (
-                    <tfoot>
-                      <tr className="font-semibold">
-                        <td>Total</td>
-                        <td></td>
-                        <td></td>
-                        <td className="text-red-500">{formatCurrency(workerDetailRows.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
+                    {workerDetailRows.length > 0 && (
+                      <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3 text-sm font-semibold text-navy-900">
+                        <span>Total</span>
+                        <span className="text-red-500">{formatCurrency(workerDetailRows.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="hidden overflow-x-auto sm:block">
+                    <table className="table-base min-w-[650px]">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Current Date &amp; Time</th>
+                          <th>Type</th>
+                          <th>Amount</th>
+                          <th>Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workerDetailRows.map((row) => (
+                          <tr key={row._id}>
+                            <td>{formatDate(row.date)}</td>
+                            <td>{formatEntryDateTime(row.entryDateTime || row.updatedAt || row.createdAt || row.date)}</td>
+                            <td><span className={`pill ${row.entryType === 'Worker Amount' ? 'bg-amber-50 text-amber-700' : 'bg-iceblue-50 text-iceblue-700'}`}>{row.entryType || 'Amount'}</span></td>
+                            <td className="font-semibold text-red-500">{formatCurrency(row.buyingAmount)}</td>
+                            <td className="text-xs text-navy-800/60">{row.notes}</td>
+                          </tr>
+                        ))}
+                        {workerDetailRows.length === 0 && (
+                          <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No worker amount entries for the selected range.</td></tr>
+                        )}
+                      </tbody>
+                      {workerDetailRows.length > 0 && (
+                        <tfoot>
+                          <tr className="font-semibold">
+                            <td>Total</td>
+                            <td></td>
+                            <td></td>
+                            <td className="text-red-500">{formatCurrency(workerDetailRows.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -646,30 +782,47 @@ export default function WorkersPage() {
               <SummaryPill label="Monthly Salary" value={formatCurrency(driverDetailTarget.monthlySalary || 0)} />
               <SummaryPill label={`Total Buying (${month})`} value={formatCurrency(driverDetailTotal)} danger={driverDetailTotal > 0} />
             </div>
-            <div className="overflow-x-auto">
-              <table className="table-base min-w-[500px]">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Amount</th>
-                    <th>Purpose</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {driverDetailRows.map((row) => (
-                    <tr key={row._id}>
-                      <td>{formatDate(row.date)}</td>
-                      <td className="font-semibold text-red-500">{formatCurrency(row.amount)}</td>
-                      <td>{row.purpose || '-'}</td>
-                      <td className="text-xs text-navy-800/60">{row.notes}</td>
+            <div>
+              <div className="sm:hidden">
+                {driverDetailRows.map((row) => (
+                  <div key={row._id} className="border-b border-slate-100 py-3 last:border-b-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <p className="text-sm font-bold text-navy-900">{formatDate(row.date)}</p>
+                      <p className="shrink-0 text-sm font-bold text-red-500">{formatCurrency(row.amount)}</p>
+                    </div>
+                    <p className="mt-1 text-xs text-navy-800/55">{row.purpose || '-'}</p>
+                    {row.notes && <p className="mt-1 text-xs text-navy-800/60">{row.notes}</p>}
+                  </div>
+                ))}
+                {driverDetailRows.length === 0 && (
+                  <p className="py-4 text-center text-sm text-navy-800/50">No buying entries for this month.</p>
+                )}
+              </div>
+              <div className="hidden overflow-x-auto sm:block">
+                <table className="table-base min-w-[500px]">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Amount</th>
+                      <th>Purpose</th>
+                      <th>Notes</th>
                     </tr>
-                  ))}
-                  {driverDetailRows.length === 0 && (
-                    <tr><td colSpan={4} className="py-4 text-center text-navy-800/50">No buying entries for this month.</td></tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {driverDetailRows.map((row) => (
+                      <tr key={row._id}>
+                        <td>{formatDate(row.date)}</td>
+                        <td className="font-semibold text-red-500">{formatCurrency(row.amount)}</td>
+                        <td>{row.purpose || '-'}</td>
+                        <td className="text-xs text-navy-800/60">{row.notes}</td>
+                      </tr>
+                    ))}
+                    {driverDetailRows.length === 0 && (
+                      <tr><td colSpan={4} className="py-4 text-center text-navy-800/50">No buying entries for this month.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </Modal>

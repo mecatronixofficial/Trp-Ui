@@ -1,5 +1,22 @@
 [
   {
+    "_id": "1787148421996-f3ed1ba822d3",
+    "date": "2026-08-19T00:00:00.000Z",
+    "costType": "petrol_diesel",
+    "amount": 1000,
+    "notes": "",
+    "worker": "",
+    "workerName": "",
+    "branch": "6a8433fc2e5a87a0b81a2a06",
+    "branchName": "",
+    "truck": "6a8567f6b44c2969b126d05c",
+    "truckName": "PickUp (tn6429)",
+    "fuelQuantity": 5,
+    "description": "",
+    "createdAt": "2026-08-19T14:07:01.996Z",
+    "updatedAt": "2026-08-19T14:07:01.996Z"
+  },
+  {
     "_id": "1787056109774-23f6fa6c01302",
     "date": "2026-08-18T00:00:00.000Z",
     "costType": "snacks",

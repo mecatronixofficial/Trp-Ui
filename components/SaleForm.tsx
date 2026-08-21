@@ -135,14 +135,15 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
     setCustomerSearch(`${selectedCustomer.name}${selectedCustomer.phoneNumber ? ` - ${selectedCustomer.phoneNumber}` : ''}`);
   }, [selectedCustomer]);
 
-  // Flat price for a single bar, set by admin per customer per sale type.
+  // Flat price for a single bar, stored per customer and sale type.
   const barPrice = useMemo(() => {
     const normalizedType = String(saleType || '').toLowerCase();
     const match = priceList.find((p) => String(p.saleType || p.type || '').toLowerCase() === normalizedType);
     const customerPrice = normalizedType === 'wholesale'
       ? selectedCustomer?.wholesalePrice
       : selectedCustomer?.retailPrice;
-    const resolved = Number(match?.price ?? match?.pricePerBar ?? customerPrice);
+    const notesPrice = String(selectedCustomer?.notes || '').match(new RegExp(`\\[Customer price: ${normalizedType}=([0-9]+(?:\\.[0-9]+)?)\\]`, 'i'))?.[1];
+    const resolved = Number(match?.price ?? match?.pricePerBar ?? customerPrice ?? notesPrice);
     return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
   }, [priceList, saleType, selectedCustomer]);
 
@@ -436,7 +437,7 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
           <label className="label-text">Items</label>
           {selectedCustomer && (
             <span className={`text-xs font-medium ${priceLocked ? 'text-red-500' : 'text-navy-800/50'}`}>
-              {barPrice != null ? `${formatCurrency(barPrice)} / bar` : 'No price set for this customer — ask admin'}
+              {barPrice != null ? `${formatCurrency(barPrice)} / bar` : 'No price set for this customer — create or update the customer price'}
             </span>
           )}
         </div>

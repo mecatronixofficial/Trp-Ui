@@ -80,6 +80,7 @@ const indiaDateKey = (date: string | Date) =>
 const todayIndiaISO = () => indiaDateKey(new Date());
 const CATEGORY_NOTE_PREFIX = "[[expense-category:";
 const CATEGORY_NOTE_SUFFIX = "]]";
+const CHART_COLORS = ["#2563eb", "#0ea5e9", "#22c55e", "#a855f7", "#f59e0b", "#14b8a6", "#ef4444", "#64748b"];
 
 const createForm = (): ExpenseForm => ({
   date: todayIndiaISO(),
@@ -387,16 +388,6 @@ export default function ExpensesPage() {
       .sort((a, b) => b.amount - a.amount);
   }, [filteredRecords]);
 
-  const chartColors = [
-    "#2563eb",
-    "#0ea5e9",
-    "#22c55e",
-    "#a855f7",
-    "#f59e0b",
-    "#14b8a6",
-    "#ef4444",
-    "#64748b",
-  ];
   const totalSpending = useMemo(
     () => monthRecords.reduce((sum, record) => sum + Number(record.amount || 0), 0),
     [monthRecords],
@@ -406,7 +397,7 @@ export default function ExpensesPage() {
       categoryTotals.map((item, index) => ({
         ...item,
         percent: totalSpending > 0 ? (item.amount / totalSpending) * 100 : 0,
-        color: chartColors[index % chartColors.length],
+        color: CHART_COLORS[index % CHART_COLORS.length],
       })),
     [categoryTotals, totalSpending],
   );
@@ -816,7 +807,66 @@ export default function ExpensesPage() {
         {loading ? (
           <ExpenseLoading />
         ) : visibleRecords.length ? (
-          <div className="overflow-x-auto">
+          <>
+            <div className="sm:hidden">
+              {visibleRecords.map((record, index) => (
+                <div key={record._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                        <p className="font-semibold text-navy-900">{formatDate(record.date)}</p>
+                      </div>
+                      <span className="pill mt-1.5 inline-block bg-slate-100 text-navy-900">
+                        {displayCategoryName(recordCategory(record))}
+                      </span>
+                    </div>
+                    <p className="shrink-0 font-bold tabular-nums text-navy-900">{formatCurrency(Number(record.amount || 0))}</p>
+                  </div>
+                  {isSuperAdmin && (
+                    <p className="mt-2 text-xs text-navy-800/60">
+                      <span className="font-semibold text-navy-800/45">Branch: </span>
+                      {record.branchName || branches.find((branch) => branch._id === record.branch)?.name || "Unassigned"}
+                    </p>
+                  )}
+                  <p className="mt-1 text-xs text-navy-800/60">
+                    <span className="font-semibold text-navy-800/45">Worker / Truck: </span>
+                    {record.workerName || record.truckName || "—"}
+                    {Number(record.fuelQuantity || 0) > 0 && (
+                      <span className="ml-1 text-navy-800/50">({Number(record.fuelQuantity).toLocaleString("en-IN")} L)</span>
+                    )}
+                  </p>
+                  <p className="mt-1 break-words text-xs text-navy-800/60">
+                    <span className="font-semibold text-navy-800/45">Notes: </span>
+                    {recordNotes(record) || "—"}
+                  </p>
+                  {canManageExpenses && (
+                    <div className="mt-2 flex items-center gap-4">
+                      <button
+                        type="button"
+                        onClick={() => openEditExpense(record)}
+                        title="Edit expense"
+                        className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black"
+                      >
+                        <FiEdit3 /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteError("");
+                          setDeleteTarget(record);
+                        }}
+                        title="Delete expense"
+                        className="flex items-center gap-1 text-xs font-semibold text-navy-900 hover:text-black"
+                      >
+                        <FiTrash2 /> Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
             <table className={`w-full ${isSuperAdmin ? "min-w-[1060px]" : "min-w-[920px]"} table-fixed border-collapse text-left text-xs sm:text-sm`}>
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
@@ -889,7 +939,8 @@ export default function ExpensesPage() {
                 )}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         ) : (
           <div className="flex flex-col items-center px-5 py-14 text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-iceblue-50 text-2xl text-iceblue-600">

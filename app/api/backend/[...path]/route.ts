@@ -37,7 +37,8 @@ function makeCookieSameOrigin(cookie: string) {
 
 async function proxyRequest(request: NextRequest, path: string[]) {
   const safePath = path.map((segment) => encodeURIComponent(segment)).join('/');
-  const target = `${getBackendApiUrl()}/${safePath}${request.nextUrl.search}`;
+  const backendApiUrl = getBackendApiUrl();
+  const target = `${backendApiUrl}/${safePath}${request.nextUrl.search}`;
   const requestHeaders = new Headers(request.headers);
 
   requestHeaders.delete('connection');
@@ -45,10 +46,74 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   requestHeaders.delete('host');
 
   try {
+    const requestBody = request.method === 'GET' || request.method === 'HEAD'
+      ? undefined
+      : await request.arrayBuffer();
+
+    // Keep worker names unique for every create path, including requests
+    // outside the Worker Management screen. The real backend remains the
+    // source of truth; this guard returns the expected conflict response
+    // before forwarding a duplicate create request.
+    if (request.method === 'POST' && safePath === 'workers' && requestBody) {
+      let payload: any = null;
+      try {
+        payload = JSON.parse(new TextDecoder().decode(requestBody));
+      } catch {
+        // Let the backend return its existing validation response for
+        // malformed payloads.
+      }
+      const requestedName = String(payload?.name || '').trim().toLocaleLowerCase();
+      if (requestedName) {
+        const workersResponse = await fetch(`${backendApiUrl}/workers`, {
+          method: 'GET',
+          headers: requestHeaders,
+          cache: 'no-store',
+        });
+        if (workersResponse.ok) {
+          const workers = await workersResponse.json();
+          const duplicate = Array.isArray(workers) && workers.some(
+            (worker: any) => String(worker?.name || '').trim().toLocaleLowerCase() === requestedName,
+          );
+          if (duplicate) {
+            return NextResponse.json({ message: 'Worker name already exists' }, { status: 409 });
+          }
+        }
+      }
+    }
+
+    const workerUpdate = safePath.match(/^workers\/([^/]+)$/);
+    if (request.method === 'PATCH' && workerUpdate && requestBody) {
+      let payload: any = null;
+      try {
+        payload = JSON.parse(new TextDecoder().decode(requestBody));
+      } catch {
+        // Preserve the backend's existing malformed-payload response.
+      }
+      const requestedTruck = String(payload?.truck?._id || payload?.truck || '');
+      if (requestedTruck) {
+        const workersResponse = await fetch(`${backendApiUrl}/workers`, {
+          method: 'GET',
+          headers: requestHeaders,
+          cache: 'no-store',
+        });
+        if (workersResponse.ok) {
+          const workers = await workersResponse.json();
+          const workerId = decodeURIComponent(workerUpdate[1]);
+          const worker = Array.isArray(workers)
+            ? workers.find((row: any) => String(row?._id || '') === workerId)
+            : null;
+          const existingTruck = String(worker?.truck?._id || worker?.truck || '');
+          if (existingTruck && existingTruck !== requestedTruck) {
+            return NextResponse.json({ message: 'Worker is already assigned to a truck' }, { status: 409 });
+          }
+        }
+      }
+    }
+
     const backendResponse = await fetch(target, {
       method: request.method,
       headers: requestHeaders,
-      body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.arrayBuffer(),
+      body: requestBody,
       cache: 'no-store',
       redirect: 'manual',
     });

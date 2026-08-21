@@ -361,6 +361,7 @@ export default function ProductionPage() {
     const finalTotal = Math.max(0, shopTotal - shopSold);
     return {
       madeToday,
+      carriedStock,
       openingStock,
       produced,
       sold: shopSold,
@@ -477,11 +478,10 @@ export default function ProductionPage() {
       const produced = records
         .filter((row) => indiaDateKey(row.date) === activeDay && belongsToBranch(row) && inActiveSession(row))
         .reduce((sum, row) => sum + Number(row.totalBars || 0), 0);
-      const openingStock = produced > 0
-        ? (closing
-            ? Math.max(0, Number(closing.openingBalance || 0))
-            : getOpeningProductionStock(stockEntries, activeDay, indiaDateKey, branch._id, records))
-        : 0;
+      const carriedStock = closing
+        ? Math.max(0, Number(closing.openingBalance || 0))
+        : getOpeningProductionStock(stockEntries, activeDay, indiaDateKey, branch._id, records);
+      const openingStock = produced > 0 ? carriedStock : 0;
       const availableProduction = produced + openingStock;
       const branchSales = sales.filter((sale) => indiaDateKey(sale.date) === activeDay && belongsToBranch(sale));
       const liveBranchSales = closing?.status === "closed" ? branchSales : branchSales.filter(inActiveSession);
@@ -524,6 +524,7 @@ export default function ProductionPage() {
         // close/reopen session — matches the single-branch "Produced Today"
         // tile, not just the current session's own new production.
         madeToday: Number(closing?.produced || 0),
+        carriedStock,
         sold: dailySold,
         ready: closing?.status === "closed" ? 0 : Math.max(0, availableProduction + outsourced - sessionWasted - stocked - assigned - shopSold),
         wasted: dailyWasted,
@@ -1103,6 +1104,7 @@ export default function ProductionPage() {
         balance: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
         finalTotal: overallBranchRows.reduce((sum, branch) => sum + branch.ready, 0),
         wasted: overallBranchRows.reduce((sum, branch) => sum + branch.wasted, 0),
+        carriedStock: overallBranchRows.reduce((sum, branch) => sum + branch.carriedStock, 0),
       }
     : dayClosed
       ? {
@@ -1400,8 +1402,8 @@ export default function ProductionPage() {
           danger={liveSummary.wasted > 0}
         />
         <ProductionSummary
-          label="Stock"
-          value={fmtBars(liveSummary.stocked)}
+          label="Opening Stock"
+          value={fmtBars(liveSummary.carriedStock)}
           icon={<FiBox />}
         />
         <ProductionSummary
@@ -1450,7 +1452,29 @@ export default function ProductionPage() {
             <h2 className="font-display text-lg font-bold text-navy-900">All Branch Production Today</h2>
             <p className="mt-1 text-sm text-navy-800/50">Combined view of every active branch. Select a branch above to add, edit, assign bars, or close production.</p>
           </div>
-          <div className="overflow-x-auto">
+          <div className="sm:hidden">
+            {overallBranchRows.map((branch) => (
+              <div key={branch._id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-navy-900">{branch.name}</p>
+                    <p className="text-xs text-navy-800/45">{branch.code}</p>
+                  </div>
+                  <span className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${branch.status === "closed" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{branch.status === "closed" ? "Closed" : "Open"}</span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Produced</span><span className="font-bold text-navy-900">{fmtBars(branch.produced)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Sold</span><span className="font-bold text-emerald-700">{fmtBars(branch.sold)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Shop Ready</span><span className="font-bold text-blue-700">{fmtBars(branch.ready)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Wastage</span><span className="font-bold text-red-600">{fmtBars(branch.wasted)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Expenses</span><span className="font-bold text-red-600">{formatCurrency(branch.expenses)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Profit</span><span className={`font-bold ${branch.profit < 0 ? "text-red-600" : "text-emerald-700"}`}>{formatCurrency(branch.profit)}</span></div>
+                  <div className="flex items-center justify-between"><span className="text-navy-800/45">Closing Box</span><span className="font-semibold text-navy-900">{branch.closingBox == null ? "-" : fmtBars(Number(branch.closingBox))}</span></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[760px] border-collapse text-sm">
               <thead className="bg-slate-100 text-xs font-bold uppercase text-navy-900">
                 <tr><th className="border border-slate-300 px-3 py-3 text-left">Branch</th><th className="border border-slate-300 px-3 py-3 text-right">Produced</th><th className="border border-slate-300 px-3 py-3 text-right">Sold</th><th className="border border-slate-300 px-3 py-3 text-right">Shop Ready</th><th className="border border-slate-300 px-3 py-3 text-right">Wastage</th><th className="border border-slate-300 px-3 py-3 text-right">Expenses</th><th className="border border-slate-300 px-3 py-3 text-right">Profit</th><th className="border border-slate-300 px-3 py-3 text-center">Closing Box</th><th className="border border-slate-300 px-3 py-3 text-center">Status</th></tr>
@@ -1486,7 +1510,50 @@ export default function ProductionPage() {
               {fmtBars(summary.wasted)} bars total
             </span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="sm:hidden">
+            {todaysShopWastage.map((entry, index) => (
+              <div key={entry._id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
+                      <p className="font-bold text-navy-900">Main Shop</p>
+                    </div>
+                    <p className="mt-1 pl-7 text-xs capitalize text-navy-800/60">{String(entry.reason || "Other").replaceAll("_", " ")}</p>
+                  </div>
+                  <p className="shrink-0 font-bold tabular-nums text-red-600">{fmtBars(Number(entry.quantity || 0))}</p>
+                </div>
+                {entry.notes && <p className="mt-2 break-words rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs text-navy-800/60">{entry.notes}</p>}
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => openShopWastageEdit(entry)}
+                    disabled={operationsLocked}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-iceblue-100 bg-white px-2.5 py-1.5 text-xs font-bold text-iceblue-700 hover:bg-iceblue-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <FiEdit2 /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeleteError("");
+                      setDeleteTarget({
+                        kind: "wastage",
+                        id: entry._id,
+                        label: `${fmtBars(Number(entry.quantity || 0))}-bar Main Shop wastage`,
+                      });
+                    }}
+                    disabled={operationsLocked}
+                    title="Delete shop wastage"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-red-100 bg-white text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <FiTrash2 />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[680px] table-fixed border-collapse text-xs sm:text-sm">
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
@@ -1561,7 +1628,120 @@ export default function ProductionPage() {
         </div>
 
         {/* Table */}
-        <div className="overflow-x-auto">
+        <div className="sm:hidden">
+          {(() => {
+            const taken = Number(liveSummary.finalTotal || 0);
+            const sold = Number(liveShopSold || 0);
+            const balance = taken - sold;
+            return (
+              <div className="border-b border-slate-200 bg-blue-50/50 px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-xs font-black text-blue-700">S</div>
+                    <div>
+                      <p className="font-bold text-slate-800">Shop Selling Bars</p>
+                      <p className="text-xs text-slate-500">Main shop</p>
+                    </div>
+                  </div>
+                  <span
+                    className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                      balance < 0
+                        ? "bg-red-100 text-red-700"
+                        : balance === 0
+                          ? "bg-slate-100 text-slate-600"
+                          : "bg-emerald-100 text-emerald-700"
+                    }`}
+                  >
+                    {balance < 0 ? "Check" : balance === 0 ? "Completed" : "Available"}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div>
+                    <p className="text-slate-500">Total Bar</p>
+                    <p className={`font-bold ${taken < 0 ? "text-red-600" : "text-slate-800"}`}>{taken}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Sold</p>
+                    <p className="font-bold text-emerald-600">{sold}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Balance</p>
+                    <p className={`font-black ${balance < 0 ? "text-red-600" : balance === 0 ? "text-slate-500" : "text-blue-700"}`}>{balance}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {trucks.map((truck, index) => {
+            const taken = dayClosed ? 0 : Number(truckAssignments[truck._id] || 0);
+            const sold = dayClosed ? 0 : Number(soldByTruck[truck._id] || 0);
+            const balance = taken - sold;
+            return (
+              <div
+                key={truck._id}
+                className={`border-b border-slate-200 px-4 py-3 ${index % 2 === 0 ? "bg-white" : "bg-slate-50/40"}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-100 text-xs font-black text-orange-700">T</div>
+                    <div>
+                      <p className="font-bold text-slate-800">{truck.truckName}</p>
+                      <span className="rounded-md bg-slate-100 px-2 py-0.5 font-mono text-xs font-bold text-slate-700">{truck.truckNumber || "—"}</span>
+                    </div>
+                  </div>
+                  <span
+                    className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                      balance < 0
+                        ? "bg-red-100 text-red-700"
+                        : balance === 0
+                          ? "bg-slate-100 text-slate-600"
+                          : "bg-emerald-100 text-emerald-700"
+                    }`}
+                  >
+                    {balance < 0 ? "Check" : balance === 0 ? "Completed" : "Available"}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div>
+                    <p className="text-slate-500">Total Bar</p>
+                    <p className="font-bold text-slate-800">{taken}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Sold</p>
+                    <p className="font-bold text-emerald-600">{sold}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500">Balance</p>
+                    <p className={`font-black ${balance < 0 ? "text-red-600" : balance === 0 ? "text-slate-500" : "text-blue-700"}`}>{balance}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {trucks.length === 0 && (
+            <p className="px-4 py-8 text-center text-sm text-slate-400">No truck distribution available.</p>
+          )}
+          <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-wider text-slate-800">
+            <span>Total</span>
+            <span className="normal-case tracking-normal text-slate-600">
+              {Number(liveSummary.finalTotal || 0) +
+                trucks.reduce(
+                  (total, truck) =>
+                    total + (dayClosed ? 0 : Number(truckAssignments[truck._id] || 0)),
+                  0,
+                )}{" "}
+              taken ·{" "}
+              {Number(liveShopSold || 0) +
+                trucks.reduce(
+                  (total, truck) =>
+                    total + (dayClosed ? 0 : Number(soldByTruck[truck._id] || 0)),
+                  0,
+                )}{" "}
+              sold
+            </span>
+          </div>
+        </div>
+        <div className="hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[750px] border-collapse text-sm">
             <thead>
               <tr className="bg-emerald-700 text-left text-xs font-bold uppercase tracking-wider text-white">
@@ -1926,7 +2106,105 @@ export default function ProductionPage() {
 
         {/* Reconciliation is the single source for truck distribution and closing. */}
         {validDriverClosings.length > 0 && (
-          <div className="overflow-x-auto border-t border-slate-200">
+          <div className="border-t border-slate-200 sm:hidden">
+            {validDriverClosings.map((row, index) => {
+              const remaining = Number(row.remaining || 0);
+              const visibleBalance = Math.max(0, remaining);
+              const truckPresence = trucks.find((truck) => truck._id === row.truckId);
+              const returnApprovalPending = Boolean(row.driverClosed && !row.checked);
+              const mustRemainOnline = remaining > 0.0001 || returnApprovalPending;
+              const driverOnline = mustRemainOnline || Boolean(
+                truckPresence?.isOnline ?? truckPresence?.driverOnline ?? truckPresence?.online ??
+                row.isOnline ?? row.driverOnline ?? row.online ??
+                row.truck?.isOnline ?? row.truck?.driverOnline ?? row.truck?.online ?? false
+              );
+              return (
+                <div
+                  key={row.truckId}
+                  className={`border-b border-slate-200 px-4 py-3 ${
+                    row.checked
+                      ? "bg-emerald-50/40"
+                      : row.driverClosed
+                        ? "bg-iceblue-50/30"
+                        : "bg-amber-50/30"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold tabular-nums text-navy-800/45">#{index + 1}</p>
+                      <p className="font-bold text-navy-900">{row.truck?.truckName || truckPresence?.truckName || "Truck"}</p>
+                      <p className="text-xs text-navy-800/50">
+                        {row.truck?.driverName || "Driver"}
+                        {(row.truck?.truckNumber || truckPresence?.truckNumber)
+                          ? ` · ${row.truck?.truckNumber || truckPresence?.truckNumber}`
+                          : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold ${
+                        driverOnline ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+                      }`}
+                    >
+                      {driverOnline ? "Online" : "Offline"}
+                    </span>
+                  </div>
+                  {!row.driverClosed && row.closeReason && (
+                    <p className={`mt-1 text-[10px] ${remaining < 0 ? "font-semibold text-red-700" : "text-amber-700"}`}>
+                      {row.closeReason}
+                    </p>
+                  )}
+                  <div className="mt-2 grid grid-cols-4 gap-2 text-center text-xs">
+                    <div>
+                      <p className="text-navy-800/45">Taken</p>
+                      <p className="font-bold text-navy-900">{fmtBars(Number(row.taken || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-navy-800/45">Sold</p>
+                      <p className="font-bold text-navy-900">{fmtBars(Number(row.sold || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-navy-800/45">Return</p>
+                      <p className="font-bold text-navy-900">{fmtBars(Number(row.returned || 0))}</p>
+                    </div>
+                    <div>
+                      <p className="text-navy-800/45">Wastage</p>
+                      <p className="font-bold text-red-600">{fmtBars(Number(row.wastage || 0))}</p>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between border-t border-slate-200/70 pt-2">
+                    <p className="text-xs font-semibold text-navy-800/45">
+                      Balance <span className="font-black text-navy-900">{fmtBars(visibleBalance)}</span>
+                    </p>
+                    {!dayClosed && row.driverClosed && !row.checked ? (
+                      <button
+                        type="button"
+                        onClick={() => void checkTruckClosing(row)}
+                        disabled={checkingTruck === row.truckId || checkingAll}
+                        className="btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {checkingTruck === row.truckId ? "Accepting..." : "Accept"}
+                      </button>
+                    ) : row.checked ? (
+                      <span className="text-xs font-semibold text-emerald-600">Done</span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 bg-slate-100 px-4 py-3 text-xs font-black uppercase tracking-wider text-navy-900">
+              <span>Total</span>
+              <span className="normal-case tracking-normal text-navy-800/70">
+                {fmtBars(validDriverClosings.reduce((sum, r) => sum + Number(r.taken || 0), 0))} taken ·{" "}
+                {fmtBars(validDriverClosings.reduce((sum, r) => sum + Number(r.sold || 0), 0))} sold ·{" "}
+                {validDriverClosings.filter((r) => r.checked).length}/{validDriverClosings.length} checked
+              </span>
+            </div>
+          </div>
+        )}
+        {validDriverClosings.length > 0 && (
+          <div className="hidden overflow-x-auto border-t border-slate-200 sm:block">
             <table className="w-full min-w-[820px] border-collapse text-sm">
             <thead>
               <tr className="bg-slate-100 text-left text-xs font-bold uppercase tracking-wider text-navy-900">
@@ -2145,6 +2423,68 @@ export default function ProductionPage() {
           {loading ? (
             <LoadingRows />
           ) : soldProductionBatchRows.length ? (
+            <>
+            <div className="sm:hidden">
+              {soldProductionBatchRows.map((r, index) => {
+                const totalBars = Number(r.totalBars || 0);
+                return (
+                  <div key={r._id} className="border-b border-slate-200 px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold tabular-nums text-slate-400">#{index + 1}</p>
+                        <p className="font-bold text-navy-900">{formatDate(r.date)}</p>
+                        {isSuperAdmin && !selectedBranch && (
+                          <p className="text-xs text-navy-800/50">{r.branch?.name || branches.find((branch) => branch._id === r.branchId)?.name || "Branch"}</p>
+                        )}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          title="Edit production batch"
+                          onClick={() => void openEdit(r)}
+                          disabled={operationsLocked}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-iceblue-600 transition hover:bg-iceblue-50 hover:text-iceblue-800 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <FiEdit2 />
+                        </button>
+                        <button
+                          type="button"
+                          title="Delete production batch"
+                          onClick={() => {
+                            setDeleteError("");
+                            setDeleteTarget({
+                              kind: "production",
+                              id: r._id,
+                              label: `production batch for ${formatDate(r.date)}`,
+                            });
+                          }}
+                          disabled={operationsLocked}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-red-500 transition hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <FiTrash2 />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
+                      <div className="flex items-center justify-between"><span className="text-navy-800/45">Open</span><span className="font-semibold tabular-nums text-slate-700">{r.boxOpen}</span></div>
+                      <div className="flex items-center justify-between"><span className="text-navy-800/45">Close</span><span className="font-semibold tabular-nums text-slate-700">{r.boxClose}</span></div>
+                      <div className="flex items-center justify-between"><span className="text-navy-800/45">Made Bars</span><span className="font-bold tabular-nums text-navy-900">{fmtBars(totalBars)}</span></div>
+                      <div className="flex items-center justify-between"><span className="text-navy-800/45">Stocks</span><span className="text-slate-400">—</span></div>
+                      <div className="col-span-2 flex items-center justify-between"><span className="text-navy-800/45">Sold Bars</span><span className="font-bold tabular-nums text-navy-900">{fmtBars(Number(r.soldBars || 0))}</span></div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="border-t border-slate-200 bg-slate-100 px-4 py-3 text-xs font-bold uppercase tracking-wide text-navy-900">
+                Daily Total ({soldProductionBatchRows.length} sold batch{soldProductionBatchRows.length === 1 ? "" : "es"})
+                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 normal-case tracking-normal text-navy-800/70">
+                  <span>Made: <b className="text-navy-900">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.totalBars || 0), 0))}</b></span>
+                  <span>Stock: <b className="text-navy-900">{fmtBars(Number(dayClosed ? dailyReturnedBars : stockByDate[activeDay] || 0))}</b></span>
+                  <span>Sold: <b className="text-emerald-700">{fmtBars(soldProductionBatchRows.reduce((sum, record) => sum + Number(record.soldBars || 0), 0))}</b></span>
+                </div>
+              </div>
+            </div>
+            <div className="hidden sm:block">
             <table className="w-full min-w-[760px] table-fixed border-collapse text-sm">
               <thead className="bg-slate-100">
                 <tr className="text-navy-900">
@@ -2286,6 +2626,8 @@ export default function ProductionPage() {
                 </tr>
               </tfoot>
             </table>
+            </div>
+            </>
           ) : (
             <EmptyState
               title="No production recorded"
@@ -2316,7 +2658,35 @@ export default function ProductionPage() {
         {loading ? (
           <LoadingRows compact />
         ) : todaysSales.length ? (
-          <div className="overflow-x-auto">
+          <>
+          <div className="sm:hidden">
+            {todaysSales.map((sale) => {
+              const bars = (sale.items || []).reduce(
+                (sum: number, item: any) => sum + getItemBarUsed(item),
+                0,
+              );
+              return (
+                <div key={sale._id} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-navy-900">{sale.customer?.name || "Unknown customer"}</p>
+                      <p className="text-xs text-navy-800/50">
+                        {sale.truck?.truckName || "Shop"} ·{" "}
+                        {new Date(sale.date).toLocaleTimeString("en-IN", {
+                          timeZone: "Asia/Kolkata",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </p>
+                    </div>
+                    <p className="shrink-0 font-bold tabular-nums text-navy-900">{formatCurrency(Number(sale.totalAmount || 0))}</p>
+                  </div>
+                  <p className="mt-1 text-xs font-semibold tabular-nums text-navy-800/60">{formatBarQuantity(bars) || "0"} bars</p>
+                </div>
+              );
+            })}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
             <table className="w-full min-w-[680px] border-collapse border border-slate-300 text-sm">
               <thead className="bg-slate-100 text-navy-900">
                 <tr>
@@ -2370,6 +2740,7 @@ export default function ProductionPage() {
               </tbody>
             </table>
           </div>
+          </>
         ) : (
           <p className="rounded-xl bg-iceblue-50 px-4 py-8 text-center text-sm text-navy-800/50">
             No sales recorded today.
@@ -2405,6 +2776,45 @@ export default function ProductionPage() {
         {loading ? (
           <LoadingRows compact />
         ) : todayTruckReportRows.length ? (
+          <>
+          <div className="sm:hidden">
+            {todayTruckReportRows.map((row) => (
+              <div key={row.key} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-navy-900">{row.truckName}</p>
+                    {row.truckNumber && <p className="text-xs text-navy-800/45">{row.truckNumber}</p>}
+                  </div>
+                  <p className="shrink-0 text-xs font-semibold text-navy-800/50">{formatDate(`${row.date}T12:00:00+05:30`)}</p>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {row.assignments.map((assignment, index) => (
+                    <span
+                      key={assignment._id}
+                      className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-navy-900"
+                    >
+                      #{index + 1}: {fmtBars(Number(assignment.quantity || 0))} bars
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div>
+                    <p className="text-navy-800/45">Total Bar</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{fmtBars(row.taken)}</p>
+                  </div>
+                  <div>
+                    <p className="text-navy-800/45">Sold Bars</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{fmtBars(row.sold)}</p>
+                  </div>
+                  <div>
+                    <p className="text-navy-800/45">Remaining</p>
+                    <p className="font-semibold tabular-nums text-navy-900">{fmtBars(row.taken - row.sold)}</p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[760px] table-fixed border-collapse border border-slate-300 text-sm">
             <thead className="bg-slate-100">
               <tr>
@@ -2491,6 +2901,8 @@ export default function ProductionPage() {
               ))}
             </tbody>
           </table>
+          </div>
+          </>
         ) : (
           <p className="rounded-xl bg-iceblue-50 px-4 py-8 text-center text-sm text-navy-800/50">
             No truck assignments recorded.

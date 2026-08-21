@@ -25,7 +25,9 @@ interface Worker {
   name: string;
   phoneNumber?: string;
   role?: string;
+  notes?: string;
   truck?: { _id: string } | string;
+  isActive?: boolean;
 }
 
 const emptyForm = { branch: '', truckName: '', truckNumber: '', driverName: '', phoneNumber: '', loginId: '', password: '' };
@@ -33,6 +35,7 @@ const emptyForm = { branch: '', truckName: '', truckNumber: '', driverName: '', 
 const indiaDateISO = (date = new Date()) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(date);
+const saleTruckId = (sale: any) => String(sale?.truck?._id || sale?.truck || sale?.truckId || '');
 
 function last30Days() {
   const date = new Date();
@@ -50,6 +53,7 @@ export default function TrucksPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Truck | null>(null);
   const [form, setForm] = useState<any>(emptyForm);
+  const [selectedDriverId, setSelectedDriverId] = useState('');
   const [resetTarget, setResetTarget] = useState<Truck | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
@@ -102,11 +106,14 @@ export default function TrucksPage() {
       sold: totals.sold + Number(row.sold || 0),
       remaining: totals.remaining + Number(row.remaining || 0),
     }), { taken: 0, sold: 0, remaining: 0, salesAmount: 0, pendingAmount: 0 });
-    const moneyTotals = todaySales.data.reduce((totals: any, sale: any) => ({
-      salesAmount: totals.salesAmount + Number(sale.totalAmount || 0),
-      pendingAmount: totals.pendingAmount + Number(sale.balanceAmount || 0),
-    }), { salesAmount: 0, pendingAmount: 0 });
     const visibleTruckIds = new Set(data.map((truck: Truck) => String(truck._id)));
+    const moneyTotals = todaySales.data.reduce((totals: any, sale: any) => {
+      if (!visibleTruckIds.has(saleTruckId(sale))) return totals;
+      return {
+        salesAmount: totals.salesAmount + Number(sale.totalAmount || 0),
+        pendingAmount: totals.pendingAmount + Number(sale.balanceAmount || 0),
+      };
+    }, { salesAmount: 0, pendingAmount: 0 });
     const fuelRows = (Array.isArray(expenseResult?.records) ? expenseResult.records : []).filter((record: any) => {
       const category = String(record.costType || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
       const truckId = String(record.truck?._id || record.truck || '');
@@ -160,7 +167,10 @@ export default function TrucksPage() {
     window.location.reload();
   };
 
-  const driverWorkers = useMemo(() => workers.filter((w) => w.role === 'Driver').sort((a, b) => a.name.localeCompare(b.name)), [workers]);
+  const driverWorkers = useMemo(() => workers
+    .filter((worker) => worker.isActive !== false
+      && !worker.truck)
+    .sort((a, b) => a.name.localeCompare(b.name)), [workers]);
   const visibleTrucks = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return trucks;
@@ -175,6 +185,7 @@ export default function TrucksPage() {
     if (!canManageTrucks) return;
     setEditing(null);
     setForm({ ...emptyForm, branch: selectedBranch || '' });
+    setSelectedDriverId('');
     setError('');
     setModalOpen(true);
   };
@@ -219,7 +230,21 @@ export default function TrucksPage() {
       if (editing) {
         await api.patch(`/trucks/${editing._id}`, form);
       } else {
-        await api.post('/trucks', form);
+        const selectedWorker = driverWorkers.find((worker) => worker._id === selectedDriverId);
+        if (!selectedWorker) {
+          setError('Select an available worker');
+          return;
+        }
+        const { data: createdTruck } = await api.post('/trucks', form);
+        const truckId = String(createdTruck?._id || createdTruck?.truck?._id || '');
+        if (!truckId) throw new Error('Truck was created but could not be linked to the worker');
+        await api.patch(`/workers/${selectedWorker._id}`, {
+          name: selectedWorker.name,
+          phoneNumber: selectedWorker.phoneNumber || '',
+          role: selectedWorker.role || 'Driver',
+          notes: selectedWorker.notes || '',
+          truck: truckId,
+        });
       }
       setModalOpen(false);
       load();
@@ -334,6 +359,7 @@ export default function TrucksPage() {
       const ensure = (date: string) => byDate[date] ||= { date, taken: 0, sold: 0, salesAmount: 0, pendingAmount: 0 };
       for (const row of loadRows.data) ensure(String(row.date).slice(0, 10)).taken += Number(row.quantity || 0);
       for (const sale of saleRows.data) {
+        if (saleTruckId(sale) !== truck._id) continue;
         const row = ensure(String(sale.date).slice(0, 10));
         row.sold += (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0);
         row.salesAmount += Number(sale.totalAmount || 0);
@@ -397,51 +423,38 @@ export default function TrucksPage() {
           </button>}
         </div>
         {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
-        <div className="overflow-x-auto">
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
-          <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs sm:text-sm">
-            <thead className="bg-slate-100 text-navy-900">
-              <tr>
-                <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                {user?.role === 'super_admin' && <th className="w-[10%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
-                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Name</th>
-                <th className="w-[12%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Number</th>
-                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Driver Name</th>
-                <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
-                <th className="w-[11%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Login ID</th>
-                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Ice Bars</th>
-                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Used Today</th>
-                <th className="w-[9%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Cost Today</th>
-                <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
-                <th className="w-[17%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
+          <>
+            <div className="sm:hidden">
               {visibleTrucks.map((t, index) => (
-                <tr key={t._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                  <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                  {user?.role === 'super_admin' && <td className="break-words border border-slate-300 px-2 py-3 text-center text-navy-900">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
-                  <td className="break-words border border-slate-300 px-2 py-3">
-                    <Link href={`/admin/trucks/${t._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
-                      {t.truckName}
-                    </Link>
-                  </td>
-                  <td className="break-words border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{t.truckNumber}</td>
-                  <td className="break-words border border-slate-300 px-2 py-3 text-navy-900">{t.driverName || '-'}</td>
-                  <td className="break-all border border-slate-300 px-2 py-3 text-navy-900">{t.phoneNumber || '-'}</td>
-                  <td className="break-all border border-slate-300 px-2 py-3 text-center font-mono text-xs text-navy-900">{t.loginId || '-'}</td>
-                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{truckStock[t._id] || 0}</td>
-                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{(fuelByTruck[t._id]?.litres || 0).toLocaleString('en-IN')} L</td>
-                  <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{formatCurrency(fuelByTruck[t._id]?.cost || 0)}</td>
-                  <td className="border border-slate-300 px-1 py-3 text-center">
-                    <span className={`pill ${t.status ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                <div key={t._id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
+                        <Link href={`/admin/trucks/${t._id}`} className="min-w-0 truncate font-semibold text-navy-900 underline-offset-2 hover:underline">
+                          {t.truckName}
+                        </Link>
+                      </div>
+                      <p className="mt-1 pl-8 text-xs text-navy-800/55">{t.truckNumber}</p>
+                      {user?.role === 'super_admin' && <p className="mt-0.5 pl-8 text-xs text-navy-800/45">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</p>}
+                    </div>
+                    <span className={`pill shrink-0 ${t.status ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
                       {t.status ? 'Active' : 'Inactive'}
                     </span>
-                  </td>
-                  <td className="border border-slate-300 px-1 py-3">
-                    {canManageTrucks ? <div className="flex flex-wrap items-center justify-center gap-2">
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 pl-8 text-xs">
+                    <p className="text-navy-800/55">Driver: <span className="font-semibold text-navy-900">{t.driverName || '-'}</span></p>
+                    <p className="break-all text-navy-800/55">Phone: <span className="font-semibold text-navy-900">{t.phoneNumber || '-'}</span></p>
+                    <p className="text-navy-800/55">Login: <span className="font-mono font-semibold text-navy-900">{t.loginId || '-'}</span></p>
+                    <p className="text-navy-800/55">Ice Bars: <span className="font-bold text-navy-900">{truckStock[t._id] || 0}</span></p>
+                    <p className="text-navy-800/55">Fuel: <span className="font-bold text-navy-900">{(fuelByTruck[t._id]?.litres || 0).toLocaleString('en-IN')} L</span></p>
+                    <p className="text-navy-800/55">Fuel Cost: <span className="font-bold text-navy-900">{formatCurrency(fuelByTruck[t._id]?.cost || 0)}</span></p>
+                  </div>
+                  {canManageTrucks ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-4 pl-8">
                       <button title="Check daily truck account" aria-label={`Check ${t.truckName} daily account`} onClick={() => openTripCheck(t)} className="text-navy-900 hover:text-black"><FiBox /></button>
                       <button title="Edit" aria-label={`Edit ${t.truckName}`} onClick={() => openEdit(t)} className="text-navy-900 hover:text-black">
                         <FiEdit2 />
@@ -455,17 +468,81 @@ export default function TrucksPage() {
                       <button title="Delete" aria-label={`Delete ${t.truckName}`} onClick={() => remove(t)} className="text-navy-900 hover:text-black">
                         <FiTrash2 />
                       </button>
-                    </div> : <span className="block text-center text-navy-800/35">—</span>}
-                  </td>
-                </tr>
+                    </div>
+                  ) : <span className="mt-2 block pl-8 text-xs text-navy-800/35">—</span>}
+                </div>
               ))}
               {visibleTrucks.length === 0 && (
-                <tr><td colSpan={user?.role === 'super_admin' ? 12 : 11} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">{search ? 'No trucks match your search.' : 'No trucks registered.'}</td></tr>
+                <p className="px-4 py-10 text-center text-sm text-navy-800/50">{search ? 'No trucks match your search.' : 'No trucks registered.'}</p>
               )}
-            </tbody>
-          </table>
+            </div>
+            <div className="hidden overflow-x-auto sm:block">
+              <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs sm:text-sm">
+                <thead className="bg-slate-100 text-navy-900">
+                  <tr>
+                    <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
+                    {user?.role === 'super_admin' && <th className="w-[10%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
+                    <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Name</th>
+                    <th className="w-[12%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Number</th>
+                    <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Driver Name</th>
+                    <th className="w-[13%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
+                    <th className="w-[11%] break-words border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Login ID</th>
+                    <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Ice Bars</th>
+                    <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Used Today</th>
+                    <th className="w-[9%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Fuel Cost Today</th>
+                    <th className="w-[8%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
+                    <th className="w-[17%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleTrucks.map((t, index) => (
+                    <tr key={t._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
+                      <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
+                      {user?.role === 'super_admin' && <td className="break-words border border-slate-300 px-2 py-3 text-center text-navy-900">{typeof t.branch === 'object' ? `${t.branch.name} (${t.branch.code})` : '-'}</td>}
+                      <td className="break-words border border-slate-300 px-2 py-3">
+                        <Link href={`/admin/trucks/${t._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
+                          {t.truckName}
+                        </Link>
+                      </td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{t.truckNumber}</td>
+                      <td className="break-words border border-slate-300 px-2 py-3 text-navy-900">{t.driverName || '-'}</td>
+                      <td className="break-all border border-slate-300 px-2 py-3 text-navy-900">{t.phoneNumber || '-'}</td>
+                      <td className="break-all border border-slate-300 px-2 py-3 text-center font-mono text-xs text-navy-900">{t.loginId || '-'}</td>
+                      <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{truckStock[t._id] || 0}</td>
+                      <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{(fuelByTruck[t._id]?.litres || 0).toLocaleString('en-IN')} L</td>
+                      <td className="border border-slate-300 px-1 py-3 text-center font-bold text-navy-900">{formatCurrency(fuelByTruck[t._id]?.cost || 0)}</td>
+                      <td className="border border-slate-300 px-1 py-3 text-center">
+                        <span className={`pill ${t.status ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {t.status ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="border border-slate-300 px-1 py-3">
+                        {canManageTrucks ? <div className="flex flex-wrap items-center justify-center gap-2">
+                          <button title="Check daily truck account" aria-label={`Check ${t.truckName} daily account`} onClick={() => openTripCheck(t)} className="text-navy-900 hover:text-black"><FiBox /></button>
+                          <button title="Edit" aria-label={`Edit ${t.truckName}`} onClick={() => openEdit(t)} className="text-navy-900 hover:text-black">
+                            <FiEdit2 />
+                          </button>
+                          <button title="Reset password" aria-label={`Reset ${t.truckName} password`} onClick={() => setResetTarget(t)} className="text-navy-900 hover:text-black">
+                            <FiKey />
+                          </button>
+                          <button title={t.status ? 'Deactivate truck' : 'Activate truck'} aria-label={t.status ? `Deactivate ${t.truckName}` : `Activate ${t.truckName}`} onClick={() => toggleStatus(t)} className="text-navy-900 hover:text-black">
+                            <FiPower />
+                          </button>
+                          <button title="Delete" aria-label={`Delete ${t.truckName}`} onClick={() => remove(t)} className="text-navy-900 hover:text-black">
+                            <FiTrash2 />
+                          </button>
+                        </div> : <span className="block text-center text-navy-800/35">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                  {visibleTrucks.length === 0 && (
+                    <tr><td colSpan={user?.role === 'super_admin' ? 12 : 11} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">{search ? 'No trucks match your search.' : 'No trucks registered.'}</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
-        </div>
       </section>
 
       {modalOpen && (
@@ -498,30 +575,46 @@ export default function TrucksPage() {
                 </div>
               </>
             )}
-            <div>
-              <label className="label-text">Driver</label>
-              <select
-                className="input-field"
-                value=""
-                onChange={(e) => {
-                  const selected = driverWorkers.find((w) => w._id === e.target.value);
-                  if (selected) setForm({ ...form, driverName: selected.name, phoneNumber: selected.phoneNumber || '' });
-                }}
-              >
-                <option value="">Select driver</option>
-                {driverWorkers.map((w) => (
-                  <option key={w._id} value={w._id}>{w.name}{w.phoneNumber ? ` (${w.phoneNumber})` : ''}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="label-text">Driver Name</label>
-              <input className="input-field" required value={form.driverName} onChange={(e) => setForm({ ...form, driverName: e.target.value })} />
-            </div>
-            <div>
-              <label className="label-text">Phone Number</label>
-              <input className="input-field" required value={form.phoneNumber} onChange={(e) => setForm({ ...form, phoneNumber: e.target.value })} />
-            </div>
+            {editing ? (
+              <>
+                <div>
+                  <label className="label-text">Driver Name</label>
+                  <input className="input-field" required value={form.driverName} onChange={(e) => setForm({ ...form, driverName: e.target.value })} />
+                </div>
+                <div>
+                  <label className="label-text">Phone Number</label>
+                  <input className="input-field" required value={form.phoneNumber} onChange={(e) => setForm({ ...form, phoneNumber: e.target.value })} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="label-text">Driver</label>
+                  <select
+                    className="input-field"
+                    required
+                    value={selectedDriverId}
+                    onChange={(e) => {
+                      setSelectedDriverId(e.target.value);
+                      const selected = driverWorkers.find((w) => w._id === e.target.value);
+                      setForm({ ...form, driverName: selected?.name || '', phoneNumber: selected?.phoneNumber || '' });
+                    }}
+                  >
+                    <option value="">Select driver</option>
+                    {driverWorkers.map((w) => (
+                      <option key={w._id} value={w._id}>{w.name}{w.role ? ` (${w.role})` : ''}{w.phoneNumber ? ` - ${w.phoneNumber}` : ''}</option>
+                    ))}
+                  </select>
+                  {driverWorkers.length === 0 && (
+                    <p className="mt-1 text-xs text-navy-800/50">No available workers. Add one on the Workers page first.</p>
+                  )}
+                </div>
+                <div>
+                  <label className="label-text">Phone Number</label>
+                  <input className="input-field" required value={form.phoneNumber} onChange={(e) => setForm({ ...form, phoneNumber: e.target.value })} />
+                </div>
+              </>
+            )}
             {error && <p className="text-red-500 text-sm">{error}</p>}
             <button className="btn-primary w-full">{editing ? 'Save Changes' : 'Create Truck'}</button>
           </form>
@@ -707,46 +800,81 @@ export default function TrucksPage() {
               <button type="button" onClick={() => loadHistory(historyTarget, historyRange)} className="btn-secondary">Apply</button>
             </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <div className="overflow-x-auto">
+            <div>
               {historyLoading ? (
                 <p className="text-navy-800/50">Loading...</p>
               ) : (
-                <table className="table-base min-w-[600px]">
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Bars Taken</th>
-                      <th>Bars Sold</th>
-                      <th>Selling Amount</th>
-                      <th>Pending Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+                <>
+                  <div className="sm:hidden">
                     {historyRows.map((row) => (
-                      <tr key={row.date}>
-                        <td>{formatDate(row.date)}</td>
-                        <td>{row.taken}</td>
-                        <td>{row.sold}</td>
-                        <td className="font-semibold">{formatCurrency(row.salesAmount)}</td>
-                        <td className={row.pendingAmount > 0 ? 'font-semibold text-red-500' : ''}>{formatCurrency(row.pendingAmount)}</td>
-                      </tr>
+                      <div key={row.date} className="border-b border-slate-100 py-3 last:border-b-0">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-bold text-navy-900">{formatDate(row.date)}</p>
+                          <p className="shrink-0 text-sm font-semibold text-navy-900">{formatCurrency(row.salesAmount)}</p>
+                        </div>
+                        <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs">
+                          <p className="text-navy-800/55">Taken: <span className="font-semibold text-navy-900">{row.taken}</span></p>
+                          <p className="text-navy-800/55">Sold: <span className="font-semibold text-navy-900">{row.sold}</span></p>
+                          <p className="text-navy-800/55">Pending: <span className={row.pendingAmount > 0 ? 'font-semibold text-red-500' : 'font-semibold text-navy-900'}>{formatCurrency(row.pendingAmount)}</span></p>
+                        </div>
+                      </div>
                     ))}
                     {historyRows.length === 0 && (
-                      <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No records for the selected range.</td></tr>
+                      <p className="py-4 text-center text-sm text-navy-800/50">No records for the selected range.</p>
                     )}
-                  </tbody>
-                  {historyRows.length > 0 && (
-                    <tfoot>
-                      <tr className="font-semibold">
-                        <td>Total</td>
-                        <td>{historyRows.reduce((sum, row) => sum + row.taken, 0)}</td>
-                        <td>{historyRows.reduce((sum, row) => sum + row.sold, 0)}</td>
-                        <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.salesAmount, 0))}</td>
-                        <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.pendingAmount, 0))}</td>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
+                    {historyRows.length > 0 && (
+                      <div className="border-t border-slate-200 pt-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="text-sm font-bold text-navy-900">Total</p>
+                          <p className="shrink-0 text-sm font-semibold text-navy-900">{formatCurrency(historyRows.reduce((sum, row) => sum + row.salesAmount, 0))}</p>
+                        </div>
+                        <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs">
+                          <p className="text-navy-800/55">Taken: <span className="font-semibold text-navy-900">{historyRows.reduce((sum, row) => sum + row.taken, 0)}</span></p>
+                          <p className="text-navy-800/55">Sold: <span className="font-semibold text-navy-900">{historyRows.reduce((sum, row) => sum + row.sold, 0)}</span></p>
+                          <p className="text-navy-800/55">Pending: <span className="font-semibold text-navy-900">{formatCurrency(historyRows.reduce((sum, row) => sum + row.pendingAmount, 0))}</span></p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <div className="hidden overflow-x-auto sm:block">
+                    <table className="table-base min-w-[600px]">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Bars Taken</th>
+                          <th>Bars Sold</th>
+                          <th>Selling Amount</th>
+                          <th>Pending Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {historyRows.map((row) => (
+                          <tr key={row.date}>
+                            <td>{formatDate(row.date)}</td>
+                            <td>{row.taken}</td>
+                            <td>{row.sold}</td>
+                            <td className="font-semibold">{formatCurrency(row.salesAmount)}</td>
+                            <td className={row.pendingAmount > 0 ? 'font-semibold text-red-500' : ''}>{formatCurrency(row.pendingAmount)}</td>
+                          </tr>
+                        ))}
+                        {historyRows.length === 0 && (
+                          <tr><td colSpan={5} className="py-4 text-center text-navy-800/50">No records for the selected range.</td></tr>
+                        )}
+                      </tbody>
+                      {historyRows.length > 0 && (
+                        <tfoot>
+                          <tr className="font-semibold">
+                            <td>Total</td>
+                            <td>{historyRows.reduce((sum, row) => sum + row.taken, 0)}</td>
+                            <td>{historyRows.reduce((sum, row) => sum + row.sold, 0)}</td>
+                            <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.salesAmount, 0))}</td>
+                            <td>{formatCurrency(historyRows.reduce((sum, row) => sum + row.pendingAmount, 0))}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>
