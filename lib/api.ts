@@ -3,6 +3,14 @@ import type { AxiosRequestConfig, AxiosResponse } from 'axios';
 import Cookies from 'js-cookie';
 import { mutationToast, showToast } from './toast';
 
+const GET_CACHE_MS = 2_000;
+const pendingGets = new Map<string, Promise<AxiosResponse<any>>>();
+const recentGets = new Map<string, { response: AxiosResponse<any>; expiresAt: number }>();
+
+function clearRecentGets() {
+  recentGets.clear();
+}
+
 const api = axios.create({
   // Keep browser requests on the application origin. The server proxy forwards
   // them to the configured backend and makes its session cookie work on Vercel.
@@ -28,6 +36,7 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (res) => {
+    if (String(res.config.method || 'GET').toUpperCase() !== 'GET') clearRecentGets();
     const notification = mutationToast(String(res.config.url || ''), String(res.config.method || 'GET'));
     if (notification) showToast(notification.message, notification.tone);
     return res;
@@ -53,14 +62,23 @@ export default api;
 // Reuse identical GET requests that are already in flight. This prevents React
 // development remounts and quick navigation from sending duplicate bursts to
 // rate-limited backend endpoints.
-const pendingGets = new Map<string, Promise<AxiosResponse<any>>>();
-
 export function dedupedGet<T = any>(url: string, config?: AxiosRequestConfig) {
   const key = `${url}:${JSON.stringify(config?.params || {})}`;
+  const cached = recentGets.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return Promise.resolve(cached.response as AxiosResponse<T>);
+  }
+  if (cached) recentGets.delete(key);
+
   const existing = pendingGets.get(key);
   if (existing) return existing as Promise<AxiosResponse<T>>;
 
-  const request = api.get<T>(url, config).finally(() => pendingGets.delete(key));
+  const request = api.get<T>(url, config)
+    .then((response) => {
+      recentGets.set(key, { response, expiresAt: Date.now() + GET_CACHE_MS });
+      return response;
+    })
+    .finally(() => pendingGets.delete(key));
   pendingGets.set(key, request);
   return request;
 }

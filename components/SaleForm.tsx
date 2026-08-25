@@ -143,7 +143,9 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
       ? selectedCustomer?.wholesalePrice
       : selectedCustomer?.retailPrice;
     const notesPrice = String(selectedCustomer?.notes || '').match(new RegExp(`\\[Customer price: ${normalizedType}=([0-9]+(?:\\.[0-9]+)?)\\]`, 'i'))?.[1];
-    const resolved = Number(match?.price ?? match?.pricePerBar ?? customerPrice ?? notesPrice);
+    // The price saved on the customer profile is the current source of truth.
+    // Legacy price-list rows and note markers remain as migration fallbacks.
+    const resolved = Number((Number(customerPrice) > 0 ? customerPrice : undefined) ?? match?.price ?? match?.pricePerBar ?? notesPrice);
     return Number.isFinite(resolved) && resolved > 0 ? resolved : null;
   }, [priceList, saleType, selectedCustomer]);
 
@@ -230,11 +232,9 @@ export default function SaleForm({ trucks, fixedTruckId, onSaved, initial }: Sal
         // Once a daily-closing record exists for today, it is the authoritative
         // source for stock carried into a (possibly reopened) session — same
         // fix as the production page's summary calculation.
-        const openingStock = produced > 0
-          ? (closing
-              ? Math.max(0, Number(closing.openingBalance || 0))
-              : getOpeningProductionStock(allStockRows, today, indiaDateKey, undefined, allProductionRows))
-          : 0;
+        const openingStock = closing
+          ? Math.max(0, Number(closing.openingBalance || 0))
+          : getOpeningProductionStock(allStockRows, today, indiaDateKey, undefined, allProductionRows);
         const stocked = allStockRows
           .filter((row: any) => indiaDateKey(row.date) === today && inCurrentSession(row))
           .reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0);

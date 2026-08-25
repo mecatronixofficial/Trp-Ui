@@ -14,6 +14,7 @@ export interface AuthUser {
   displayName?: string;
   phoneNumber?: string | null;
   email?: string | null;
+  profileImage?: string | null;
 }
 
 interface AuthContextValue {
@@ -64,13 +65,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         displayName: data.displayName,
         phoneNumber: data.phoneNumber,
         email: data.email,
+        profileImage: data.profileImage,
         branch: data.branch,
       };
       if (currentUser.role !== 'super_admin') {
         window.localStorage.removeItem('tii_selected_branch');
       }
       setUser(currentUser);
-      Cookies.set('tii_user', JSON.stringify(currentUser), { expires: 1, sameSite: 'lax' });
+      Cookies.set('tii_user', JSON.stringify({ ...currentUser, profileImage: undefined }), { expires: 1, sameSite: 'lax' });
     } catch {
       if (!active()) return;
       Cookies.remove('tii_user');
@@ -95,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (data.user.role !== 'super_admin') {
       window.localStorage.removeItem('tii_selected_branch');
     }
-    Cookies.set('tii_user', JSON.stringify(data.user), { expires: 1, sameSite: 'lax' });
+    Cookies.set('tii_user', JSON.stringify({ ...data.user, profileImage: undefined }), { expires: 1, sameSite: 'lax' });
     setUser(data.user);
     router.push(data.user.role === 'truck' ? '/truck/dashboard' : '/admin/sample');
   };

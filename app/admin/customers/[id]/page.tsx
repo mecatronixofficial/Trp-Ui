@@ -23,6 +23,8 @@ interface Customer {
   phoneNumber?: string;
   address?: string;
   defaultSaleType?: string;
+  retailPrice?: number;
+  wholesalePrice?: number;
   creditBalance?: number;
   isActive?: boolean;
   customerType?: 'local' | 'truck';
@@ -154,6 +156,7 @@ export default function CustomerProfilePage() {
 
   const truck = typeof customer.truck === 'object' && customer.truck ? customer.truck : null;
   const customerType = customer.customerType || (customer.truck ? 'truck' : 'local');
+  const defaultPrice = Number(customer.defaultSaleType === 'wholesale' ? customer.wholesalePrice : customer.retailPrice) || 0;
 
   return (
     <div className="min-w-0 space-y-5">
@@ -181,6 +184,7 @@ export default function CustomerProfilePage() {
           <ProfileDetail icon={FiTruck} label="Truck / Location" value={truck ? `${truck.truckName}${truck.truckNumber ? ` (${truck.truckNumber})` : ''}` : 'Local'} />
           <ProfileDetail icon={FiCreditCard} label="Current Credit Balance" value={formatCurrency(customer.creditBalance || 0)} danger={Number(customer.creditBalance || 0) > 0} />
           <ProfileDetail icon={FiShoppingBag} label="Default Sale Type" value={customer.defaultSaleType || 'Retail'} capitalize />
+          <ProfileDetail icon={FiDollarSign} label="Default Ice Bar Price" value={defaultPrice > 0 ? `${formatCurrency(defaultPrice)} / bar` : 'Not set'} danger={defaultPrice <= 0} />
           <ProfileDetail icon={FiUser} label="Driver" value={truck?.driverName || 'Not assigned'} />
           <ProfileDetail icon={FiCalendar} label="Customer Since" value={customer.createdAt ? formatDate(customer.createdAt) : 'Not available'} />
           <ProfileDetail icon={FiUser} label="Customer Type" value={customerType} capitalize />

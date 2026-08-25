@@ -15,10 +15,14 @@ import {
   FiDollarSign,
   FiEdit3,
   FiGitBranch,
+  FiGrid,
+  FiLock,
   FiPlus,
   FiRefreshCw,
   FiSearch,
+  FiShield,
   FiTrash2,
+  FiTrendingUp,
   FiUser,
 } from "react-icons/fi";
 import { PieChart, Pie, ResponsiveContainer, Cell, Tooltip } from "recharts";
@@ -437,6 +441,8 @@ export default function ExpensesPage() {
       : filterMode === "date"
         ? selectedDateLabel
         : monthLabel;
+  const overallView = Boolean(isSuperAdmin && !selectedBranch);
+  const scopeName = overallView ? "All branches" : activeBranch?.name || "Assigned branch";
   const isSnackRecord = (record: ExpenseRecord) => {
     const label = displayCategoryName(recordCategory(record));
     const normalized = normalizeCategory(label);
@@ -614,20 +620,59 @@ export default function ExpensesPage() {
   };
 
   return (
-    <div className="-mt-4 space-y-1 sm:-mt-5">
-      {isSuperAdmin && (
-        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Expense view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : "Overall — all branches"}</p></div>
+    <div className="space-y-6 pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100">
+              {isSuperAdmin ? <FiShield /> : <FiLock />}
+              {isSuperAdmin ? "Super admin expense centre" : "Branch expense workspace"}
+            </div>
+            <h1 className="text-3xl font-black tracking-[-0.04em] sm:text-4xl">Expense management</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              {overallView
+                ? `Review consolidated business spending and category patterns across ${branches.length} branches.`
+                : `Record, review, and control operational spending for ${scopeName}.`}
+            </p>
           </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change expense branch" value={selectedBranch || ""} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all branches</option>
-            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiCalendar className="text-emerald-300" />{selectedPeriodLabel}</span>
+            <button type="button" onClick={() => void load()} disabled={refreshing} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50 disabled:opacity-60"><FiRefreshCw className={refreshing ? "animate-spin" : ""} />Refresh</button>
+            {canManageExpenses && <button type="button" onClick={openAddExpense} className="inline-flex items-center gap-2 rounded-xl bg-iceblue-500 px-3 py-2 text-xs font-bold text-white transition hover:bg-iceblue-400"><FiPlus />Add expense</button>}
+          </div>
+        </div>
+      </section>
+
+      {isSuperAdmin ? (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => changeBranch("")} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? "bg-navy-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-navy-900"}`}><FiGrid />All branches<span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? "bg-white/10" : "bg-slate-100"}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => (
+              <button key={branch._id} type="button" onClick={() => changeBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? "bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100" : "text-slate-500 hover:bg-slate-50 hover:text-navy-900"}`}><span className="h-2 w-2 rounded-full bg-emerald-500" />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm"><FiTrendingUp /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Assigned branch active</p><p className="mt-0.5 text-[10px] text-slate-500">Expense records are automatically saved under your assigned branch.</p></div>
         </section>
       )}
-      <section className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-5">
+
+      {overallView && (
+        <section className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-amber-600 shadow-sm"><FiLock /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Network expense view is read-only</p><p className="mt-1 text-[10px] leading-4 text-slate-600">You can search, filter, and compare consolidated spending. Select a branch before adding, editing, or deleting an expense.</p></div>
+        </section>
+      )}
+
+      <section>
+        <div className="mb-4 flex items-center gap-3 px-1"><span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-iceblue-600 shadow-sm ring-1 ring-slate-100"><FiDollarSign /></span><div><h2 className="font-extrabold text-navy-900">Expense snapshot</h2><p className="text-xs text-slate-500">Category totals for {selectedPeriodLabel}.</p></div></div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <ExpenseSummaryCard
           icon={FiDollarSign}
           label="Total Expenses"
@@ -663,24 +708,25 @@ export default function ExpensesPage() {
           helper="Other business expenses"
           tone="violet"
         />
+        </div>
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">Expenses</h1>
+      <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center lg:p-5">
+          <div className="mr-auto flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-xl bg-red-50 text-red-600"><FiDollarSign /></span><div><h2 className="font-extrabold text-navy-900">Expense records</h2><p className="mt-0.5 text-[10px] text-slate-500">{visibleRecords.length} entries · {scopeName}</p></div></div>
           <div className="relative min-w-0 flex-1">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
-            <input className="input-field h-10 pl-9" placeholder="Search by category, worker or notes..." value={search} onChange={(event) => setSearch(event.target.value)} />
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/70 pl-9 pr-3 text-xs font-semibold text-navy-900 outline-none transition placeholder:text-slate-400 focus:border-iceblue-300 focus:bg-white focus:ring-4 focus:ring-iceblue-50" placeholder="Search category, worker, truck, or notes..." value={search} onChange={(event) => setSearch(event.target.value)} />
           </div>
-          <Link href="/admin/expenses/all" className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-            All Records
+          <Link href="/admin/expenses/all" className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-bold text-slate-600 transition hover:bg-slate-50 hover:text-navy-900">
+            Expense archive
           </Link>
-          {canManageExpenses && <button type="button" onClick={openAddExpense} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-            <FiPlus /> Add Expense
+          {canManageExpenses && <button type="button" onClick={openAddExpense} className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-navy-900 px-4 text-xs font-bold text-white transition hover:bg-iceblue-800">
+            <FiPlus /> Add expense
           </button>}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 border-b border-iceblue-100 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/50 px-4 py-3 lg:px-5">
           {/* Today */}
           <button
             type="button"
@@ -810,7 +856,7 @@ export default function ExpensesPage() {
           <>
             <div className="sm:hidden">
               {visibleRecords.map((record, index) => (
-                <div key={record._id} className="border-b border-slate-200 px-4 py-3 last:border-b-0">
+                <div key={record._id} className="border-b border-slate-100 px-4 py-4 last:border-b-0">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -821,7 +867,7 @@ export default function ExpensesPage() {
                         {displayCategoryName(recordCategory(record))}
                       </span>
                     </div>
-                    <p className="shrink-0 font-bold tabular-nums text-navy-900">{formatCurrency(Number(record.amount || 0))}</p>
+                    <p className="shrink-0 font-extrabold tabular-nums text-red-600">{formatCurrency(Number(record.amount || 0))}</p>
                   </div>
                   {isSuperAdmin && (
                     <p className="mt-2 text-xs text-navy-800/60">
@@ -868,48 +914,48 @@ export default function ExpensesPage() {
             </div>
             <div className="hidden overflow-x-auto sm:block">
             <table className={`w-full ${isSuperAdmin ? "min-w-[1060px]" : "min-w-[920px]"} table-fixed border-collapse text-left text-xs sm:text-sm`}>
-              <thead className="bg-slate-100 text-navy-900">
+              <thead className="bg-slate-50/80 text-slate-400">
                 <tr>
-                  <th className="w-[5%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                  {isSuperAdmin && <th className="w-[13%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
-                  <th className="w-[12%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Date</th>
-                  <th className="w-[16%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Category</th>
-                  <th className="w-[16%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker / Truck</th>
-                  <th className="w-[25%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Notes</th>
-                  <th className="w-[14%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Amount</th>
-                  <th className="w-[12%] border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Action</th>
+                  <th className="w-[5%] border-b border-slate-100 px-1 py-3 text-center text-[9px] font-black uppercase tracking-wider">#</th>
+                  {isSuperAdmin && <th className="w-[13%] border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Branch</th>}
+                  <th className="w-[12%] border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Date</th>
+                  <th className="w-[16%] border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Category</th>
+                  <th className="w-[16%] border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Worker / Truck</th>
+                  <th className="w-[25%] border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Notes</th>
+                  <th className="w-[14%] border-b border-slate-100 px-3 py-3 text-right text-[9px] font-black uppercase tracking-wider">Amount</th>
+                  <th className="w-[12%] border-b border-slate-100 px-3 py-3 text-center text-[9px] font-black uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-100">
                 {visibleRecords.map((record, index) => (
                   <tr
                     key={record._id}
-                    className="even:bg-slate-50 hover:bg-iceblue-50/70"
+                    className="transition hover:bg-iceblue-50/40"
                   >
-                    <td className="border border-slate-300 px-1 py-2.5 text-center font-medium text-navy-900">{index + 1}</td>
-                    {isSuperAdmin && <td className="break-words border border-slate-300 px-2 py-2.5 text-center text-navy-900">{record.branchName || branches.find((branch) => branch._id === record.branch)?.name || "Unassigned"}</td>}
-                    <td className="border border-slate-300 px-2 py-2.5 text-center font-medium text-navy-900">
+                    <td className="px-2 py-4 text-center text-slate-400">{index + 1}</td>
+                    {isSuperAdmin && <td className="break-words px-3 py-4 text-xs font-semibold text-navy-900">{record.branchName || branches.find((branch) => branch._id === record.branch)?.name || "Unassigned"}</td>}
+                    <td className="px-3 py-4 text-xs font-semibold text-navy-900">
                       {formatDate(record.date)}
                     </td>
-                    <td className="border border-slate-300 px-2 py-2.5 text-center">
-                      <span className="pill bg-slate-100 text-navy-900">
+                    <td className="px-3 py-4">
+                      <span className="rounded-full bg-amber-50 px-2 py-1 text-[9px] font-bold text-amber-700">
                         {displayCategoryName(recordCategory(record))}
                       </span>
                     </td>
-                    <td className="break-words border border-slate-300 px-2 py-2.5 text-center font-medium text-navy-900">
+                    <td className="break-words px-3 py-4 text-xs font-medium text-navy-900">
                       {record.workerName || record.truckName || "—"}
                       {Number(record.fuelQuantity || 0) > 0 && <span className="mt-0.5 block text-xs text-navy-800/50">{Number(record.fuelQuantity).toLocaleString("en-IN")} L</span>}
                     </td>
                     <td
-                      className="truncate border border-slate-300 px-2 py-2.5 text-center text-navy-800/60"
+                      className="truncate px-3 py-4 text-xs text-slate-500"
                       title={recordNotes(record)}
                     >
                       {recordNotes(record) || "—"}
                     </td>
-                    <td className="border border-slate-300 px-2 py-2.5 text-center font-bold tabular-nums text-navy-900">
+                    <td className="px-3 py-4 text-right text-xs font-extrabold tabular-nums text-red-600">
                       {formatCurrency(Number(record.amount || 0))}
                     </td>
-                    <td className="border border-slate-300 px-2 py-2.5">
+                    <td className="px-3 py-4">
                       {canManageExpenses ? <div className="flex flex-wrap items-center justify-center gap-2">
                         <button
                           type="button"
@@ -935,7 +981,7 @@ export default function ExpensesPage() {
                   </tr>
                 ))}
                 {visibleRecords.length === 0 && (
-                  <tr><td colSpan={isSuperAdmin ? 8 : 7} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No expenses found.</td></tr>
+                  <tr><td colSpan={isSuperAdmin ? 8 : 7} className="px-4 py-14 text-center text-navy-800/50">No expenses found.</td></tr>
                 )}
               </tbody>
             </table>
@@ -963,19 +1009,15 @@ export default function ExpensesPage() {
         )}
       </section>
 
-      <section className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-navy-900 shadow-sm sm:p-5">
-        <div className="flex flex-col gap-3 border-b border-sky-200 pb-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-sky-700/70">
-              Spending by category
-            </p>
-            <h2 className="mt-0.5 font-display text-base font-bold text-navy-900">
-              Expenses Breakdown
-            </h2>
+      <section className="rounded-3xl border border-white/80 bg-white p-4 text-navy-900 shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)] sm:p-5">
+        <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-50 text-violet-600"><FiBriefcase /></span>
+            <div><h2 className="font-extrabold text-navy-900">Spending by category</h2><p className="mt-0.5 text-xs text-slate-500">Category distribution for {selectedPeriodLabel}.</p></div>
           </div>
-          <div className="rounded-xl border border-sky-200 bg-white/70 px-4 py-3 text-right">
+          <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-right">
             <p className="text-[10px] font-bold uppercase tracking-wide text-sky-700/70">
-              Total Spending
+              Total spending
             </p>
             <p className="mt-1 text-sm font-bold text-navy-900">
               {formatCurrency(totalSpending)}
@@ -984,7 +1026,7 @@ export default function ExpensesPage() {
         </div>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <div className="relative overflow-hidden rounded-xl border border-iceblue-100 bg-white p-1">
+          <div className="relative overflow-hidden rounded-2xl border border-slate-100 bg-slate-50/40 p-1">
             <ResponsiveContainer width="100%" height={260}>
               <PieChart>
                 <Pie
@@ -1241,26 +1283,17 @@ export default function ExpensesPage() {
 
 function ExpenseSummaryCard({ icon: Icon, label, value, helper, danger = false, tone = "blue" }: { icon: any; label: string; value: string | number; helper?: string; danger?: boolean; tone?: "blue" | "cyan" | "violet" | "amber" }) {
   const styles = {
-    blue: { card: "from-blue-50 to-white", icon: "bg-blue-600", accent: "bg-blue-500" },
-    cyan: { card: "from-cyan-50 to-white", icon: "bg-cyan-600", accent: "bg-cyan-500" },
-    violet: { card: "from-violet-50 to-white", icon: "bg-violet-600", accent: "bg-violet-500" },
-    amber: { card: "from-amber-50 to-white", icon: "bg-amber-500", accent: "bg-amber-500" },
+    blue: { soft: "bg-blue-50", icon: "bg-blue-500", border: "border-blue-100" },
+    cyan: { soft: "bg-cyan-50", icon: "bg-cyan-500", border: "border-cyan-100" },
+    violet: { soft: "bg-violet-50", icon: "bg-violet-500", border: "border-violet-100" },
+    amber: { soft: "bg-amber-50", icon: "bg-amber-500", border: "border-amber-100" },
   }[tone];
   return (
-    <div className={`relative flex min-h-[108px] min-w-0 items-center gap-3 overflow-hidden rounded-2xl border bg-gradient-to-br px-4 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${styles.card} ${danger ? "border-red-100" : "border-iceblue-100"}`}>
-      <span className={`absolute inset-y-0 left-0 w-1 ${danger ? "bg-red-500" : styles.accent}`} />
-      <span className={`grid h-12 w-12 shrink-0 place-items-center rounded-xl text-lg text-white shadow-sm ${danger ? "bg-red-500" : styles.icon}`}>
-        <Icon />
-      </span>
-
-      <div className="min-w-0">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-navy-800/45">{label}</p>
-        <p className={`mt-1 break-words font-display text-lg font-bold leading-tight ${danger ? "text-red-600" : "text-navy-900"}`}>{value}</p>
-        {helper && (
-          <p className={`mt-0.5 text-xs font-semibold ${danger ? "text-red-600" : "text-navy-800/55"}`}>
-            {helper}
-          </p>
-        )}
+    <div className={`relative min-h-[120px] min-w-0 overflow-hidden rounded-2xl border bg-white p-4 shadow-[0_14px_35px_-28px_rgba(15,43,61,0.45)] transition hover:-translate-y-0.5 hover:shadow-md ${danger ? "border-red-100" : styles.border}`}>
+      <span className={`absolute -right-7 -top-7 h-20 w-20 rounded-full ${danger ? "bg-red-50" : styles.soft}`} />
+      <div className="relative flex items-start justify-between gap-3">
+        <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.15em] text-slate-400">{label}</p><p className={`mt-2 break-words text-lg font-black leading-tight tracking-tight ${danger ? "text-red-600" : "text-navy-900"}`}>{value}</p>{helper && <p className={`mt-2 text-[10px] ${danger ? "text-red-500" : "text-slate-500"}`}>{helper}</p>}</div>
+        <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white shadow-sm ${danger ? "bg-red-500" : styles.icon}`}><Icon /></span>
       </div>
     </div>
   );

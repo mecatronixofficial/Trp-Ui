@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  FiAlertCircle,
   FiCheckCircle,
   FiClock,
   FiCompass,
@@ -123,26 +122,12 @@ export default function TruckDashboardPage() {
   const [customerForm, setCustomerForm] = useState(createCustomerForm);
   const [customerSaving, setCustomerSaving] = useState(false);
   const [customerError, setCustomerError] = useState('');
+  const [customerSuccess, setCustomerSuccess] = useState('');
   const customerSearchBoxRef = useRef<HTMLDivElement>(null);
   const customerSearchRequestRef = useRef(0);
   const [trend, setTrend] = useState<any>(null);
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendError, setTrendError] = useState('');
-  const [logoutPrompt, setLogoutPrompt] = useState<{
-    mode: 'return' | 'review' | 'close' | 'waiting' | 'error';
-    remaining?: number;
-    message?: string;
-    summary?: {
-      taken: number;
-      sold: number;
-      collectedAmount: number;
-      pendingAmount: number;
-      wastage: number;
-      returned: number;
-      remaining: number;
-    };
-  } | null>(null);
-  const [logoutPending, setLogoutPending] = useState(false);
 
   const loadCustomers = useCallback(async (search = '') => {
     const requestId = ++customerSearchRequestRef.current;
@@ -177,27 +162,47 @@ export default function TruckDashboardPage() {
 
   const saveCustomer = async (event: React.FormEvent) => {
     event.preventDefault();
+    const name = customerForm.name.trim();
+    const phoneNumber = customerForm.phoneNumber.replace(/\D/g, '');
     const price = Number(customerForm.price);
+    const truckId = data?.truck?._id || user?.truck || '';
+    if (!name) {
+      setCustomerError('Enter the customer name.');
+      return;
+    }
+    if (phoneNumber && phoneNumber.length !== 10) {
+      setCustomerError('Enter a valid 10-digit phone number.');
+      return;
+    }
     if (!Number.isFinite(price) || price <= 0) {
       setCustomerError('Enter a price greater than zero.');
       return;
     }
+    if (!truckId) {
+      setCustomerError('This login is not connected to a truck. Ask an admin to check the truck account.');
+      return;
+    }
     setCustomerSaving(true);
     setCustomerError('');
+    setCustomerSuccess('');
     try {
-      const createdCustomerName = customerForm.name.trim();
+      const createdCustomerName = name;
       const driverName = data?.truck?.driverName || user?.displayName || user?.username || 'Driver';
       const { price: _price, ...customerFields } = customerForm;
       await api.post('/customers', {
         ...customerFields,
+        name,
+        phoneNumber,
         customerType: 'truck',
-        truck: data?.truck?._id || user?.truck,
+        truck: truckId,
         isActive: true,
-        ...(customerForm.defaultSaleType === 'wholesale' ? { wholesalePrice: price } : { retailPrice: price }),
+        retailPrice: customerForm.defaultSaleType === 'retail' ? price : 0,
+        wholesalePrice: customerForm.defaultSaleType === 'wholesale' ? price : 0,
         notes: `[Created by: ${driverName}]\n[Customer price: ${customerForm.defaultSaleType}=${price}]${customerForm.notes ? `\n${customerForm.notes}` : ''}`,
       });
       setCustomerForm(createCustomerForm());
       setCustomerCreateOpen(false);
+      setCustomerSuccess(`${createdCustomerName} was created and assigned to ${data?.truck?.truckName || 'this truck'}.`);
       setCustomerListOpen(true);
       setCustomerSearch(createdCustomerName);
       await loadCustomers(createdCustomerName);
@@ -234,6 +239,13 @@ export default function TruckDashboardPage() {
     }
   }, []);
 
+  const loadPendingAssignment = useCallback(async () => {
+    const today = indiaDateISO();
+    const { data: rows } = await api.get('/truck-assignments', { params: { date: today } });
+    const assignments = Array.isArray(rows) ? rows : [];
+    setPendingAssignment(assignments.find((row: TruckAssignment) => Number(row.pendingQuantity || 0) > 0) || null);
+  }, []);
+
   useEffect(() => {
     load();
   }, [load]);
@@ -257,8 +269,11 @@ export default function TruckDashboardPage() {
 
   useEffect(() => {
     if (user?.role !== 'truck') return;
+    let lastPresenceAt = 0;
     const sendPresence = () => {
-      if (document.visibilityState === 'visible') {
+      const now = Date.now();
+      if (document.visibilityState === 'visible' && now - lastPresenceAt >= 15_000) {
+        lastPresenceAt = now;
         void api.post('/auth/presence').catch(() => undefined);
       }
     };
@@ -266,7 +281,7 @@ export default function TruckDashboardPage() {
       if (document.visibilityState === 'visible') sendPresence();
     };
     sendPresence();
-    const timer = window.setInterval(sendPresence, 30_000);
+    const timer = window.setInterval(sendPresence, 60_000);
     window.addEventListener('focus', sendPresence);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
@@ -275,63 +290,6 @@ export default function TruckDashboardPage() {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [user?.role]);
-
-  useEffect(() => {
-    const handleLogoutRequired = (event: Event) => {
-      const detail = (event as CustomEvent).detail as {
-        mode: 'return' | 'review' | 'close' | 'waiting' | 'error';
-        remaining?: number;
-        message?: string;
-        summary?: {
-          taken: number;
-          sold: number;
-          collectedAmount: number;
-          pendingAmount: number;
-          wastage: number;
-          returned: number;
-          remaining: number;
-        };
-      };
-      setError('');
-      setLogoutPrompt(detail);
-      if (detail.mode === 'waiting') {
-        window.sessionStorage.setItem('tii_logout_after_return', 'true');
-        setLogoutPending(true);
-      }
-    };
-    window.addEventListener('tii:truck-logout-required', handleLogoutRequired);
-    if (window.sessionStorage.getItem('tii_logout_after_return') === 'true') setLogoutPending(true);
-    return () => window.removeEventListener('tii:truck-logout-required', handleLogoutRequired);
-  }, []);
-
-  useEffect(() => {
-    if (!logoutPending) return;
-    let active = true;
-    const checkApproval = async () => {
-      try {
-        const { data: rows } = await api.get('/truck-loads/reconciliation', { params: { date: indiaDateISO() } });
-        if (!active) return;
-        const closing = Array.isArray(rows) ? rows[0] || null : null;
-        setTripClosing(closing);
-        if (closing?.driverClosed && closing?.checked) {
-          window.sessionStorage.removeItem('tii_logout_after_return');
-          setLogoutPending(false);
-          setLogoutPrompt(null);
-          await logout();
-        }
-      } catch {
-        // Keep the driver online and retry while admin approval is pending.
-      }
-    };
-    void checkApproval();
-    const timer = window.setInterval(() => void checkApproval(), 10_000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-    // `logout` intentionally stays outside dependencies so polling is not restarted on every provider render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logoutPending]);
 
   const loadTrend = useCallback(async () => {
     setTrendLoading(true);
@@ -405,12 +363,17 @@ export default function TruckDashboardPage() {
 
   useEffect(() => {
     if (pendingAssignment) return;
-    const refreshForNewAssignment = () => {
-      if (document.visibilityState === 'visible') void load(true);
+    const refreshForNewAssignment = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        await loadPendingAssignment();
+      } catch {
+        // The regular dashboard refresh continues to surface actionable errors.
+      }
     };
-    const timer = window.setInterval(refreshForNewAssignment, 10_000);
+    const timer = window.setInterval(() => void refreshForNewAssignment(), 15_000);
     return () => window.clearInterval(timer);
-  }, [pendingAssignment, load]);
+  }, [pendingAssignment, loadPendingAssignment]);
   const progress = barsTaken > 0 ? Math.max(0, Math.min(100, Math.round((barsSold / barsTaken) * 100))) : 0;
   const driverAmount = useMemo(() => expenses
     .filter((row) => ['advance_for_employee', 'advance_for_emp', 'advance_employee', 'employee_advance', 'worker_amount'].includes(String(row.costType || row.purpose || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_')))
@@ -494,12 +457,22 @@ export default function TruckDashboardPage() {
   const savePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentTarget) return;
+    const amount = Number(paymentForm.amount);
+    const balance = Number(paymentTarget.balanceAmount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError('Enter a payment amount greater than zero.');
+      return;
+    }
+    if (amount > balance) {
+      setError(`Payment cannot be greater than the pending balance of ${formatCurrency(balance)}.`);
+      return;
+    }
     setSavingPayment(true);
     setError('');
     try {
       await api.post(`/sales/${paymentTarget._id}/payments`, {
         ...paymentForm,
-        amount: Number(paymentForm.amount),
+        amount,
       });
       setPaymentTarget(null);
       setPaymentForm(createPaymentForm());
@@ -555,10 +528,8 @@ export default function TruckDashboardPage() {
       if (logoutRequest) {
         if (closing?.requiresAdminApproval) {
           window.sessionStorage.setItem('tii_logout_after_return', 'true');
-          setLogoutPending(true);
-          setLogoutPrompt({ mode: 'waiting', remaining: 0, summary: closing, message: 'Return submitted. Waiting for admin approval.' });
+          await logout();
         } else {
-          setLogoutPrompt(null);
           await logout({ confirmedTruckClose: true });
           return;
         }
@@ -726,122 +697,6 @@ export default function TruckDashboardPage() {
 
       {error && <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">{error}</p>}
 
-      {logoutPrompt && (
-        <Modal
-          title={logoutPrompt.mode === 'return' ? 'Return Ice Bars Before Logout' : logoutPrompt.mode === 'review' ? 'Admin Verification Required' : logoutPrompt.mode === 'close' ? 'Check All & Close' : logoutPrompt.mode === 'waiting' ? 'Waiting for Admin Approval' : 'Logout Check Failed'}
-          onClose={() => {
-            setLogoutPrompt(null);
-            if (logoutPrompt.mode === 'waiting') {
-              window.sessionStorage.removeItem('tii_logout_after_return');
-              setLogoutPending(false);
-            }
-          }}
-        >
-          <div className="space-y-4">
-            {logoutPrompt.summary && (
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {[
-                  ['Taken', formatBarQuantity(logoutPrompt.summary.taken) || '0'],
-                  ['Sold', formatBarQuantity(logoutPrompt.summary.sold) || '0'],
-                  ['Collection', formatCurrency(logoutPrompt.summary.collectedAmount)],
-                  ['Pending', formatCurrency(logoutPrompt.summary.pendingAmount)],
-                  ['Wastage', formatBarQuantity(logoutPrompt.summary.wastage) || '0'],
-                  ['Balance', formatBarQuantity(Math.max(0, logoutPrompt.summary.remaining)) || '0'],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="rounded-xl border border-iceblue-100 bg-iceblue-50/50 p-3">
-                    <p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p>
-                    <p className="mt-1 font-bold text-navy-900">{value}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-            {logoutPrompt.mode === 'return' ? (
-              <>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                  <p className="flex items-center gap-2 font-semibold"><FiPackage /> {Number(logoutPrompt.remaining || 0) > 0 ? 'Ice bars are still with this truck' : 'Returned bars need Admin approval'}</p>
-                  <p className="mt-2 text-sm leading-6">
-                    {Number(logoutPrompt.remaining || 0) > 0
-                      ? <>You cannot logout or go Offline while carrying <strong>{formatBarQuantity(logoutPrompt.remaining || 0)} bar(s)</strong>. Return all remaining bars and wait for Admin acceptance.</>
-                      : <>Admin must verify and accept <strong>{formatBarQuantity(logoutPrompt.summary?.returned || 0)} returned bar(s)</strong> before this truck can go Offline.</>}
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
-                  <button type="button" onClick={() => void closeTruckDay(true)} disabled={closingDay} className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
-                    <FiTruck /> {closingDay ? 'Submitting...' : Number(logoutPrompt.remaining || 0) > 0 ? `Return ${formatBarQuantity(logoutPrompt.remaining || 0)} Bars` : 'Submit Return'}
-                  </button>
-                </div>
-              </>
-            ) : logoutPrompt.mode === 'review' ? (
-              <>
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
-                  <p className="flex items-center gap-2 font-semibold"><FiAlertCircle /> Entry difference needs Admin verification</p>
-                  <p className="mt-2 text-sm leading-6 text-amber-800/80">
-                    Sold, returned or wastage is {formatBarQuantity(Math.abs(logoutPrompt.remaining || 0))} bar(s) higher than Taken. Submit the closing without deleting any records. The truck remains Online until Admin accepts it.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
-                  <button type="button" onClick={() => void closeTruckDay(true)} disabled={closingDay} className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
-                    <FiCheckCircle /> {closingDay ? 'Submitting...' : 'Submit to Admin'}
-                  </button>
-                </div>
-              </>
-            ) : logoutPrompt.mode === 'close' ? (
-              <>
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900">
-                  <p className="flex items-center gap-2 font-semibold"><FiCheckCircle /> No ice bars remain in this truck</p>
-                  <p className="mt-2 text-sm leading-6 text-emerald-800/80">
-                    Check Taken, Sold, Collection, Pending and Wastage. Because the balance is zero, Admin return approval is not required.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setLogoutPrompt(null)} disabled={closingDay} className="btn-secondary">Cancel</button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (Number(logoutPrompt.summary?.taken || 0) > 0 && tripClosing) void closeTruckDay(true);
-                      else void logout({ confirmedTruckClose: true });
-                    }}
-                    disabled={closingDay}
-                    className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <FiCheckCircle /> {closingDay ? 'Closing...' : 'Check All & Close'}
-                  </button>
-                </div>
-              </>
-            ) : logoutPrompt.mode === 'waiting' ? (
-              <>
-                <div className="rounded-2xl border border-iceblue-200 bg-iceblue-50 p-4 text-navy-900">
-                  <p className="flex items-center gap-2 font-semibold"><FiClock /> Return request sent to Admin</p>
-                  <p className="mt-2 text-sm leading-6 text-navy-800/65">
-                    The truck remains Online until Admin verifies and accepts the returned bars. This screen checks approval automatically.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => {
-                    window.sessionStorage.removeItem('tii_logout_after_return');
-                    setLogoutPending(false);
-                    setLogoutPrompt(null);
-                  }} className="btn-secondary">Stay Online</button>
-                  <button type="button" onClick={() => void load()} className="btn-primary flex items-center justify-center gap-2"><FiRefreshCcw /> Check Approval</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <p className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
-                  {logoutPrompt.message || 'Could not verify the truck balance. Logout was cancelled for safety.'}
-                </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <button type="button" onClick={() => setLogoutPrompt(null)} className="btn-secondary">Cancel</button>
-                  <button type="button" onClick={() => { setLogoutPrompt(null); void logout(); }} className="btn-primary">Try Again</button>
-                </div>
-              </>
-            )}
-          </div>
-        </Modal>
-      )}
-
       {closeStatusOpen && tripClosing && <Modal title="End-of-Day Truck Closing" onClose={() => setCloseStatusOpen(false)}>
         <div className="space-y-4">
           {error && <ErrorAlert message={error} />}
@@ -872,7 +727,7 @@ export default function TruckDashboardPage() {
         <div className="space-y-4">
           {error && <ErrorAlert message={error} />}
           <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-900">
-            Check every value carefully. After closing, no more sales, collections, pickups, returns, wastage, or driver amounts can be entered today.
+            Check every value carefully. After closing, no more sales, pickups, returns, wastage, or driver amounts can be entered today. Pending customer bills can still be collected until the branch day is closed.
           </div>
           <div className="grid grid-cols-2 gap-2">
             {[['Bars Taken', tripClosing.taken], ['Bars Sold', tripClosing.sold], ['Already Returned', tripClosing.returned], ['Wastage', tripClosing.wastage], ['Current Balance', tripClosing.remaining], ['Auto Return', Math.max(Number(tripClosing.remaining || 0), 0)]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-iceblue-50 p-3"><p className="text-[10px] font-semibold uppercase text-navy-800/45">{label}</p><p className="mt-1 text-lg font-bold text-navy-900">{value}</p></div>)}
@@ -951,18 +806,21 @@ export default function TruckDashboardPage() {
                     </div>
                     {customerListLoading ? <p className="px-3 py-6 text-center text-sm text-navy-800/50">Searching...</p> : customerError ? <p className="px-3 py-4 text-sm font-medium text-red-600">{customerError}</p> : customerList.length ? customerList.map((customer) => (
                       <button type="button" key={customer._id} onClick={() => router.push(`/truck/customers/${customer._id}`)} className="block w-full min-w-0 rounded-xl px-3 py-2 text-left hover:bg-iceblue-50">
-                        <p className="break-words text-sm font-bold text-navy-900">{customer.name}</p>
+                        <div className="flex items-start justify-between gap-3"><p className="break-words text-sm font-bold text-navy-900">{customer.name}</p>{Number(customer.creditBalance || 0) > 0 && <span className="shrink-0 rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-black text-red-600">Due {formatCurrency(customer.creditBalance)}</span>}</div>
                         <p className="mt-0.5 break-words text-xs text-navy-800/50">{customer.phoneNumber || 'No phone'}{customer.address ? ` · ${customer.address}` : ''}</p>
+                        <p className="mt-1 text-[9px] font-bold uppercase tracking-wide text-iceblue-700">View all shop and truck bills</p>
                       </button>
                     )) : <p className="px-3 py-6 text-center text-sm text-navy-800/50">No customers found.</p>}
                   </div>
                 )}
               </div>
-              <button type="button" onClick={() => { setCustomerError(''); setCustomerForm(createCustomerForm()); setCustomerCreateOpen(true); }} className="btn-primary flex h-11 items-center justify-center gap-2">
+              <button type="button" onClick={() => { setCustomerError(''); setCustomerSuccess(''); setCustomerForm(createCustomerForm()); setCustomerCreateOpen(true); }} className="btn-primary flex h-11 items-center justify-center gap-2">
                 <FiUserPlus /> Create Customer
               </button>
             </div>
           </div>
+
+          {customerSuccess && <p role="status" className="flex items-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700"><FiCheckCircle className="shrink-0" />{customerSuccess}</p>}
 
           {activeTab === 'overview' && (
             <div className="space-y-5">
@@ -1008,7 +866,7 @@ export default function TruckDashboardPage() {
               ) : (
                 <>
                   <SalesTable title="Daily Customer Buying History" rows={customerHistoryRows} onPay={openPayment} empty="No customer buying history for this truck." showPay={false} />
-                  <SalesTable title="Pending Customer History" rows={pendingCustomerRows} onPay={openPayment} empty="No pending customer payments for this truck." showPay={canRecordTrip} />
+                  <SalesTable title="Pending Customer History" rows={pendingCustomerRows} onPay={openPayment} empty="No pending customer payments for this truck." />
                 </>
               )}
             </div>
@@ -1056,8 +914,9 @@ export default function TruckDashboardPage() {
       {customerCreateOpen && (
         <Modal title="Create Customer" onClose={() => setCustomerCreateOpen(false)}>
           <form onSubmit={saveCustomer} className="space-y-3">
+            <div className="flex items-start gap-3 rounded-xl border border-iceblue-100 bg-iceblue-50/70 p-3"><FiTruck className="mt-0.5 shrink-0 text-iceblue-700" /><div><p className="text-xs font-bold text-navy-900">{data?.truck?.truckName || 'Your truck'}</p><p className="mt-0.5 text-[10px] leading-4 text-slate-500">The customer will be assigned automatically to this truck and its branch.</p></div></div>
             <div><label className="label-text">Customer Name</label><input required className="input-field" value={customerForm.name} onChange={(event) => setCustomerForm({ ...customerForm, name: event.target.value })} /></div>
-            <div><label className="label-text">Phone Number</label><input className="input-field" value={customerForm.phoneNumber} onChange={(event) => setCustomerForm({ ...customerForm, phoneNumber: event.target.value })} /></div>
+            <div><label className="label-text">Phone Number</label><input type="tel" inputMode="numeric" maxLength={10} className="input-field" placeholder="10-digit mobile number" value={customerForm.phoneNumber} onChange={(event) => setCustomerForm({ ...customerForm, phoneNumber: event.target.value.replace(/\D/g, '').slice(0, 10) })} /></div>
             <div><label className="label-text">Address</label><input className="input-field" value={customerForm.address} onChange={(event) => setCustomerForm({ ...customerForm, address: event.target.value })} /></div>
             <div><label className="label-text">Default Sale Type</label><select className="input-field" value={customerForm.defaultSaleType} onChange={(event) => setCustomerForm({ ...customerForm, defaultSaleType: event.target.value })}><option value="retail">Retail</option><option value="wholesale">Wholesale</option></select></div>
             <div><label className="label-text">Price Per Bar</label><input required type="number" min="0.01" step="0.01" inputMode="decimal" className="input-field" placeholder="Enter customer price" value={customerForm.price} onChange={(event) => setCustomerForm({ ...customerForm, price: event.target.value })} /></div>
@@ -1068,7 +927,7 @@ export default function TruckDashboardPage() {
         </Modal>
       )}
 
-      {canRecordTrip && paymentTarget && (
+      {paymentTarget && (
         <Modal title={`Update Payment: ${getCustomerName(paymentTarget)}`} onClose={() => setPaymentTarget(null)}>
           <form onSubmit={savePayment} className="space-y-4">
             {error && <ErrorAlert message={error} />}
@@ -1438,7 +1297,8 @@ function OverviewTab({
   const balanceDue = Number(data?.todayBalance || 0);
   const stats: Array<{ label: string; value: string; icon: React.ComponentType<{ className?: string }>; tone: 'blue' | 'emerald' | 'amber' | 'red' | 'violet' | 'cyan'; danger?: boolean }> = [
     { label: "Today's Sales", value: formatCurrency(data?.todaySales || 0), icon: FiDollarSign, tone: 'blue' },
-    { label: 'Collected', value: formatCurrency(data?.todayCollection || 0), icon: FiCheckCircle, tone: 'emerald' },
+    { label: "Today's Collection", value: formatCurrency(data?.todayCollection || 0), icon: FiCheckCircle, tone: 'emerald' },
+    { label: 'Pending Bills Collected', value: formatCurrency(data?.pendingPaymentCollection || 0), icon: FiClock, tone: 'violet' },
     { label: 'Balance Due', value: formatCurrency(balanceDue), icon: FiClock, tone: 'amber', danger: balanceDue > 0 },
     { label: 'Wastage', value: `${formatBarQuantity(data?.todayWastage || 0) || 0} bar`, icon: FiTrash2, tone: 'red' },
     { label: 'Expenses Amount', value: formatCurrency(expenseAmount), icon: FiDollarSign, tone: 'red' },

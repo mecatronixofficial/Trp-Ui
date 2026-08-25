@@ -35,7 +35,6 @@ interface HistoryEntry {
   amount: number;
   purpose: string;
   notes?: string;
-  status?: string;
 }
 
 const indiaToday = () => new Intl.DateTimeFormat('en-CA', {
@@ -126,7 +125,6 @@ export default function WorkerProfilePage() {
           amount: Number(entry.buyingAmount || 0),
           purpose: 'Daily buying',
           notes: entry.notes || '',
-          status: entry.status,
         }));
         setHistory([...buyingRows, ...advances].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
       }
@@ -172,7 +170,7 @@ export default function WorkerProfilePage() {
   const totals = useMemo(() => ({
     entries: history.length,
     amount: history.reduce((sum, entry) => sum + Number(entry.amount || 0), 0),
-    presentDays: history.filter((entry) => entry.purpose !== 'Worker Amount' && (!entry.status || entry.status === 'present')).length,
+    amountEntryDays: history.filter((entry) => entry.purpose !== 'Worker Amount').length,
   }), [history]);
 
   if (loadingProfile) return <div className="card text-sm text-navy-800/50">Loading worker profile...</div>;
@@ -213,7 +211,7 @@ export default function WorkerProfilePage() {
         <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-navy-800/45">Selected Period Summary</p>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <SummaryCard label="Payment Entries" value={totals.entries} />
-          <SummaryCard label="Entry Days" value={totals.presentDays} />
+          <SummaryCard label="Amount Entry Days" value={totals.amountEntryDays} />
           <SummaryCard label="Amount" value={formatCurrency(totals.amount)} danger={totals.amount > 0} />
           <SummaryCard label="Monthly Salary" value={isDriver ? formatCurrency(truck?.monthlySalary || 0) : 'Not set'} />
         </div>
@@ -232,22 +230,22 @@ export default function WorkerProfilePage() {
 
         {error && <p className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-700" role="alert">{error}</p>}
 
-        {loadingHistory ? <p className="mt-5 text-sm text-navy-800/50">Loading amount history...</p> : <History records={history} total={totals.amount} isDriver={isDriver} />}
+        {loadingHistory ? <p className="mt-5 text-sm text-navy-800/50">Loading amount history...</p> : <History records={history} total={totals.amount} />}
       </section>
     </div>
   );
 }
 
-function History({ records, total, isDriver }: { records: HistoryEntry[]; total: number; isDriver: boolean }) {
+function History({ records, total }: { records: HistoryEntry[]; total: number }) {
   return (
     <div className="mt-5 min-w-0">
       <table className="table-base hidden table-fixed md:table">
-        <thead><tr><th className="w-1/5">Date</th><th className="w-1/5">Amount</th><th className="w-1/4">{isDriver ? 'Purpose' : 'Type / Status'}</th><th>Notes</th></tr></thead>
-        <tbody>{records.map((record) => <tr key={record._id}><td className="font-medium text-navy-900">{formatDate(record.date)}</td><td className="font-semibold text-red-500">{formatCurrency(record.amount)}</td><td className="capitalize">{record.purpose === 'Worker Amount' ? 'Worker Amount' : isDriver ? record.purpose : record.status || 'Present'}</td><td className="break-words text-sm text-navy-800/60">{record.notes || '-'}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-navy-800/50">No worker amount entries for the selected range.</td></tr>}</tbody>
+        <thead><tr><th className="w-1/5">Date</th><th className="w-1/5">Amount</th><th className="w-1/4">Type / Purpose</th><th>Notes</th></tr></thead>
+        <tbody>{records.map((record) => <tr key={record._id}><td className="font-medium text-navy-900">{formatDate(record.date)}</td><td className="font-semibold text-red-500">{formatCurrency(record.amount)}</td><td className="capitalize">{record.purpose}</td><td className="break-words text-sm text-navy-800/60">{record.notes || '-'}</td></tr>)}{records.length === 0 && <tr><td colSpan={4} className="py-8 text-center text-navy-800/50">No worker amount entries for the selected range.</td></tr>}</tbody>
         {records.length > 0 && <tfoot><tr className="font-semibold"><td>Total</td><td className="text-red-500">{formatCurrency(total)}</td><td /><td /></tr></tfoot>}
       </table>
       <div className="space-y-3 md:hidden">
-        {records.map((record) => <article key={record._id} className="rounded-2xl border border-iceblue-100 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-navy-900">{formatDate(record.date)}</p><p className="mt-1 text-xs capitalize text-navy-800/50">{record.purpose === 'Worker Amount' ? 'Worker Amount' : isDriver ? record.purpose : record.status || 'Present'}</p></div><p className="font-display text-lg font-bold text-red-500">{formatCurrency(record.amount)}</p></div>{record.notes && <p className="mt-3 break-words rounded-xl bg-iceblue-50 px-3 py-2 text-sm text-navy-800/60">{record.notes}</p>}</article>)}
+        {records.map((record) => <article key={record._id} className="rounded-2xl border border-iceblue-100 bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-bold text-navy-900">{formatDate(record.date)}</p><p className="mt-1 text-xs capitalize text-navy-800/50">{record.purpose}</p></div><p className="font-display text-lg font-bold text-red-500">{formatCurrency(record.amount)}</p></div>{record.notes && <p className="mt-3 break-words rounded-xl bg-iceblue-50 px-3 py-2 text-sm text-navy-800/60">{record.notes}</p>}</article>)}
         {records.length === 0 && <p className="rounded-2xl bg-iceblue-50 px-4 py-8 text-center text-sm text-navy-800/50">No worker amount entries for the selected range.</p>}
       </div>
     </div>

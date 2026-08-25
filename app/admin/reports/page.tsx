@@ -1,7 +1,19 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FiAlertCircle, FiDownload, FiFileText, FiGitBranch } from 'react-icons/fi';
+import {
+  FiAlertCircle,
+  FiBarChart2,
+  FiCalendar,
+  FiDownload,
+  FiFileText,
+  FiGitBranch,
+  FiGrid,
+  FiLock,
+  FiRefreshCw,
+  FiShield,
+  FiTrendingUp,
+} from 'react-icons/fi';
 import * as XLSX from 'xlsx';
 import api from '../../../lib/api';
 import { formatCurrency } from '../../../lib/api';
@@ -162,6 +174,8 @@ export default function ReportsPage() {
   const reportRequest = useRef(0);
   const isSuperAdmin = user?.role === 'super_admin';
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const overallView = Boolean(isSuperAdmin && !selectedBranch);
+  const scopeName = overallView ? 'All branches' : activeBranch?.name || 'Assigned branch';
   const showTruckFilter = TRUCK_FILTER_TABS.has(tab);
   const { from, to } = useMemo(
     () => periodRange(period, reportDay, reportWeek, reportMonth, reportYear),
@@ -193,9 +207,7 @@ export default function ReportsPage() {
   const changeBranch = (branch: string) => {
     if (branch) window.localStorage.setItem('tii_selected_branch', branch);
     else window.localStorage.removeItem('tii_selected_branch');
-    setTruck('');
-    setData(null);
-    setSelectedBranch(branch);
+    window.location.reload();
   };
 
   const load = async () => {
@@ -290,48 +302,69 @@ export default function ReportsPage() {
   };
 
   return (
-    <div className="-mt-4 min-w-0 space-y-2 overflow-x-hidden sm:-mt-5 sm:space-y-3">
-      {isSuperAdmin && (
-        <section className="mb-3 flex min-w-0 flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-3 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:px-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Company report view</p>
-              <p className="truncate text-sm font-semibold text-navy-900 sm:text-base">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all companies'}</p>
+    <div className="min-w-0 space-y-6 overflow-x-hidden pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100">
+              {isSuperAdmin ? <FiShield /> : <FiLock />}
+              {isSuperAdmin ? 'Super admin analytics centre' : 'Branch analytics workspace'}
             </div>
+            <h1 className="text-3xl font-black tracking-[-0.04em] sm:text-4xl">Reports &amp; analytics</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              {overallView
+                ? `Consolidated sales, profitability, customers, trucks, wastage, and expenses across ${branches.length} branches.`
+                : `Performance reports and business exports for ${scopeName}.`}
+            </p>
           </div>
-          <select className="input-field h-11 w-full text-sm sm:h-10 sm:max-w-xs" aria-label="Change report company" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all companies</option>
-            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
-        </section>
-      )}
-      <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-3 py-3 sm:flex-row sm:items-center sm:px-4">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">Reports &amp; Exports</h1>
-          <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
-            <button onClick={exportExcel} className="btn-secondary flex min-h-11 w-full items-center justify-center gap-2 px-3 sm:h-10 sm:min-h-0 sm:w-auto sm:px-4"><FiDownload /> Excel</button>
-            <button onClick={exportPdf} className="btn-secondary flex min-h-11 w-full items-center justify-center gap-2 px-3 sm:h-10 sm:min-h-0 sm:w-auto sm:px-4"><FiFileText /> PDF</button>
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiCalendar className="text-emerald-300" />{from} – {to}</span>
+            <button onClick={exportExcel} disabled={!data} className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-400 disabled:opacity-40"><FiDownload /> Excel</button>
+            <button onClick={exportPdf} disabled={!data} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50 disabled:opacity-40"><FiFileText /> PDF</button>
           </div>
         </div>
-        <div className="grid grid-cols-4 gap-1.5 border-b border-iceblue-100 px-3 pt-3 sm:flex sm:flex-wrap sm:gap-2 sm:px-4">
+      </section>
+
+      {isSuperAdmin ? (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => changeBranch('')} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? 'bg-navy-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><FiGrid /> All branches <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? 'bg-white/10' : 'bg-slate-100'}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => (
+              <button key={branch._id} type="button" onClick={() => changeBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? 'bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><span className="h-2 w-2 rounded-full bg-emerald-500" />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm"><FiTrendingUp /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Assigned branch reporting</p><p className="mt-0.5 text-[10px] text-slate-500">All reports and exports are automatically limited to your branch.</p></div>
+        </section>
+      )}
+
+      <section className="min-w-0 overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex items-center gap-3 border-b border-slate-100 p-4 sm:p-5"><span className="grid h-10 w-10 place-items-center rounded-xl bg-iceblue-50 text-iceblue-600"><FiCalendar /></span><div><h2 className="font-extrabold text-navy-900">Report period</h2><p className="mt-0.5 text-[10px] text-slate-500">Choose the reporting window and optional truck scope.</p></div></div>
+        <div className="grid grid-cols-4 gap-1.5 border-b border-slate-100 bg-slate-50/50 px-3 pt-3 sm:flex sm:flex-wrap sm:gap-2 sm:px-5">
           {(['day', 'week', 'month', 'year'] as ReportPeriod[]).map((item) => (
             <button
               key={item}
               type="button"
               onClick={() => setPeriod(item)}
-              className={`min-h-11 rounded-t-xl px-2 py-2 text-xs font-bold capitalize transition sm:min-h-0 sm:px-4 sm:text-sm ${period === item ? 'bg-navy-900 text-white' : 'bg-iceblue-50 text-navy-900 hover:bg-iceblue-100'}`}
+              className={`min-h-11 rounded-t-xl px-2 py-2 text-xs font-bold capitalize transition sm:min-h-0 sm:px-4 sm:text-sm ${period === item ? 'bg-navy-900 text-white shadow-sm' : 'bg-white text-slate-500 ring-1 ring-inset ring-slate-100 hover:text-navy-900'}`}
             >
               {item}
             </button>
           ))}
         </div>
-        <div className="grid min-w-0 grid-cols-1 items-end gap-3 border-b border-iceblue-100 px-3 py-3 sm:flex sm:flex-wrap sm:px-4">
+        <div className="grid min-w-0 grid-cols-1 items-end gap-3 px-3 py-4 sm:flex sm:flex-wrap sm:px-5">
           {period === 'day' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Day</label><input type="date" className="input-field h-11 sm:h-10" value={reportDay} onChange={(event) => setReportDay(event.target.value)} /></div>}
           {period === 'week' && <div className="w-full sm:w-[180px]"><label className="label-text">Report Week</label><input type="week" className="input-field h-11 sm:h-10" value={reportWeek} onChange={(event) => setReportWeek(event.target.value)} /></div>}
           {period === 'month' && <div className="w-full sm:w-[170px]"><label className="label-text">Report Month</label><input type="month" className="input-field h-11 sm:h-10" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} /></div>}
           {period === 'year' && <div className="w-full sm:w-[150px]"><label className="label-text">Report Year</label><input type="number" min="2000" max="9999" step="1" className="input-field h-11 sm:h-10" value={reportYear} onChange={(event) => setReportYear(event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>}
-          <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50 px-3 py-2 text-xs text-navy-800/70 sm:w-auto">
+          <div className="min-w-0 rounded-xl border border-iceblue-100 bg-iceblue-50 px-3 py-2.5 text-xs text-navy-800/70 sm:w-auto">
             <span className="font-semibold text-navy-900">{from}</span> to <span className="font-semibold text-navy-900">{to}</span>
           </div>
           {showTruckFilter && (
@@ -343,31 +376,35 @@ export default function ReportsPage() {
               </select>
             </div>
           )}
-          <button onClick={load} className="btn-secondary min-h-11 w-full sm:min-h-0 sm:w-auto">Refresh</button>
+          <button onClick={load} disabled={loading} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-navy-900 px-4 text-xs font-bold text-white transition hover:bg-iceblue-800 disabled:opacity-50 sm:min-h-10 sm:w-auto"><FiRefreshCw className={loading ? 'animate-spin' : ''} />Refresh report</button>
         </div>
       </section>
 
-      <div className="-mx-1 flex min-w-0 snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-1 pb-2 touch-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
-        {REPORT_TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => { setData(null); setError(''); setTab(t.key); }}
-            className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium transition ${
-              tab === t.key ? 'bg-iceblue-600 text-white shadow-sm' : 'border border-slate-200 bg-white text-navy-900 hover:bg-iceblue-50'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
-          <h2 className="font-display text-base font-bold text-navy-900">{REPORT_TABS.find((item) => item.key === tab)?.label}</h2>
+      <section>
+        <div className="mb-4 flex items-center gap-3 px-1"><span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-iceblue-600 shadow-sm ring-1 ring-slate-100"><FiBarChart2 /></span><div><h2 className="font-extrabold text-navy-900">Report type</h2><p className="text-xs text-slate-500">Switch between operational and financial analysis.</p></div></div>
+        <div className="-mx-1 flex min-w-0 snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-1 pb-2 touch-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+          {REPORT_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => { setData(null); setError(''); setTab(t.key); }}
+              className={`min-h-11 shrink-0 snap-start whitespace-nowrap rounded-xl px-4 py-2 text-xs font-bold transition ${
+                tab === t.key ? 'bg-navy-900 text-white shadow-sm' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-navy-900'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
-        <div className="min-w-0 p-3 sm:p-4">
+      </section>
+
+      <section className="min-w-0 overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+          <div><h2 className="font-extrabold text-navy-900">{REPORT_TABS.find((item) => item.key === tab)?.label}</h2><p className="mt-0.5 text-[10px] text-slate-500">{scopeName} · {from} to {to}</p></div>
+          <span className="rounded-full bg-iceblue-50 px-2.5 py-1 text-[9px] font-bold text-iceblue-700">Live report</span>
+        </div>
+        <div className="min-w-0 p-4 sm:p-5">
           {loading ? (
-            <p className="text-navy-800/50">Loading report...</p>
+            <div className="grid min-h-48 place-items-center text-center"><div><FiRefreshCw className="mx-auto animate-spin text-xl text-iceblue-600" /><p className="mt-3 text-xs font-semibold text-slate-500">Loading report...</p></div></div>
           ) : error ? (
             <p role="alert" className="flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
               <FiAlertCircle className="mt-0.5 shrink-0" />
@@ -379,10 +416,10 @@ export default function ReportsPage() {
         </div>
       </section>
 
-      <div className="grid min-w-0 gap-3 md:grid-cols-2 md:gap-4">
-        <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
-          <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
-            <h2 className="font-display text-sm font-bold text-navy-900">Top Customers</h2>
+      <div className="grid min-w-0 gap-5 md:grid-cols-2">
+        <section className="min-w-0 overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600"><FiTrendingUp /></span><div><h2 className="font-extrabold text-navy-900">Top customers</h2><p className="mt-0.5 text-[10px] text-slate-500">Highest sales value in this period.</p></div>
           </div>
           <div className="sm:hidden">
             {topCustomers.map((c, index) => (
@@ -423,9 +460,9 @@ export default function ReportsPage() {
             </table>
           </div>
         </section>
-        <section className="min-w-0 overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
-          <div className="border-b border-iceblue-100 bg-white px-3 py-3 sm:px-4">
-            <h2 className="font-display text-sm font-bold text-navy-900">Top Selling Sizes</h2>
+        <section className="min-w-0 overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-violet-50 text-violet-600"><FiBarChart2 /></span><div><h2 className="font-extrabold text-navy-900">Top-selling sizes</h2><p className="mt-0.5 text-[10px] text-slate-500">Most requested ice-bar sizes.</p></div>
           </div>
           <div className="sm:hidden">
             {topSizes.map((s, index) => (
@@ -663,22 +700,19 @@ function ReportMetric({ label, value, trend, index = 0 }: { label: string; value
   const tones = ['blue', 'cyan', 'violet', 'amber'] as const;
   const tone = tones[index % tones.length];
   const styles = {
-    blue: { card: 'from-blue-50 to-white', icon: 'bg-blue-600', accent: 'bg-blue-500' },
-    cyan: { card: 'from-cyan-50 to-white', icon: 'bg-cyan-600', accent: 'bg-cyan-500' },
-    violet: { card: 'from-violet-50 to-white', icon: 'bg-violet-600', accent: 'bg-violet-500' },
-    amber: { card: 'from-amber-50 to-white', icon: 'bg-amber-500', accent: 'bg-amber-500' },
+    blue: { soft: 'bg-blue-50', icon: 'bg-blue-500', border: 'border-blue-100' },
+    cyan: { soft: 'bg-cyan-50', icon: 'bg-cyan-500', border: 'border-cyan-100' },
+    violet: { soft: 'bg-violet-50', icon: 'bg-violet-500', border: 'border-violet-100' },
+    amber: { soft: 'bg-amber-50', icon: 'bg-amber-500', border: 'border-amber-100' },
   }[tone];
   const danger = trend === 'down';
 
   return (
-    <div className={`flex min-h-[72px] min-w-0 items-center gap-2 overflow-hidden rounded-lg border bg-gradient-to-br px-3 py-2.5 shadow-sm transition sm:min-h-[66px] sm:px-2.5 sm:py-2 sm:hover:-translate-y-0.5 sm:hover:shadow-md ${styles.card} ${danger ? 'border-red-100' : 'border-iceblue-100'}`}>
-      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}>
-        <FiFileText />
-      </span>
-
-      <div className="min-w-0">
-        <p className="truncate text-[9px] font-bold uppercase tracking-wide text-navy-800/45 sm:text-[9px]">{label}</p>
-        <p className={`break-words font-display text-sm font-bold leading-tight sm:truncate ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
+    <div className={`relative min-h-[105px] min-w-0 overflow-hidden rounded-2xl border bg-white p-3.5 shadow-[0_14px_35px_-28px_rgba(15,43,61,0.45)] transition hover:-translate-y-0.5 hover:shadow-md ${danger ? 'border-red-100' : styles.border}`}>
+      <span className={`absolute -right-6 -top-6 h-16 w-16 rounded-full ${danger ? 'bg-red-50' : styles.soft}`} />
+      <div className="relative flex items-start justify-between gap-2">
+        <div className="min-w-0"><p className="truncate text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">{label}</p><p className={`mt-2 break-words text-base font-black leading-tight ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p></div>
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-xs text-white shadow-sm ${danger ? 'bg-red-500' : styles.icon}`}><FiFileText /></span>
       </div>
     </div>
   );

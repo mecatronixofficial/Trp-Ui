@@ -32,7 +32,7 @@ function resourceName(url: string) {
     workers: 'Worker', trucks: 'Truck', sales: 'Sale', expenses: 'Expense',
     production: 'Production', payments: 'Payment', wastage: 'Wastage',
     settings: 'Settings', 'price-list': 'Price', 'truck-assignments': 'Truck assignment',
-    'truck-loads': 'Truck load', purchases: 'Purchase', attendance: 'Attendance',
+    'truck-loads': 'Truck load', purchases: 'Purchase',
   };
   return names[firstPart] || firstPart.replace(/-/g, ' ').replace(/^./, (letter) => letter.toUpperCase());
 }
