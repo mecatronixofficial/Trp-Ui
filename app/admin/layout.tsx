@@ -26,7 +26,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const title = pathname?.startsWith('/admin/customers/')
     ? 'Customer Profile'
     : pathname?.startsWith('/admin/trucks/')
-      ? 'Truck Profile'
+      ? 'Truck Dashboard'
     : pathname?.startsWith('/admin/workers/buying-history')
       ? 'Daily Buying History'
     : pathname?.startsWith('/admin/workers/')
@@ -38,7 +38,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <div className="flex min-h-screen w-full max-w-full overflow-x-hidden">
         <div className="min-w-0 flex-1 overflow-x-hidden">
           <Topbar title={title} />
-          <main className="mx-auto w-full min-w-0 max-w-7xl px-3 py-4 pb-24 sm:px-4 md:p-8 md:pb-24">{children}</main>
+          <main className={`mx-auto w-full min-w-0 px-3 py-4 pb-24 sm:px-4 md:p-8 md:pb-24 ${pathname?.startsWith('/admin/settings/company') ? 'max-w-none' : 'max-w-7xl'}`}>{children}</main>
           <AdminQuickActions />
         </div>
       </div>

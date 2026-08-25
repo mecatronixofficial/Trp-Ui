@@ -8,1163 +8,554 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 import {
-  FiBox,
   FiAlertCircle,
-  FiCalendar,
+  FiArrowRight,
+  FiBarChart2,
+  FiBox,
+  FiBriefcase,
   FiCheckCircle,
   FiClock,
   FiDollarSign,
+  FiGitBranch,
   FiGrid,
   FiPackage,
+  FiSettings,
+  FiShield,
+  FiShoppingCart,
   FiTrendingUp,
   FiTruck,
+  FiUserCheck,
   FiUsers,
-  FiArrowUpRight,
-  FiArrowDownRight,
 } from 'react-icons/fi';
-import api from '../../../lib/api';
-import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
-import { selectedBranchHeaders } from '../../../lib/branch-fetch';
+import api, { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed, todayISO } from '../../../lib/api';
+import { useAuth } from '../../../context/AuthContext';
 import DashboardLoader from '../../../components/DashboardLoader';
 
-const chartColors = ['#1ca6d1', '#16a34a', '#f59e0b', '#ef4444', '#6366f1', '#14b8a6'];
+type Branch = {
+  _id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  admin?: { displayName?: string; username?: string; isActive?: boolean } | null;
+};
 
-// Expense records store a full timestamp; comparing it to "today" must go
-// through the India calendar day (like the /api/expenses backend does),
-// not a raw slice of the ISO string, or entries near midnight IST land on
-// the wrong day.
+type BranchSnapshot = {
+  branch: Branch;
+  production: number;
+  sales: number;
+  expenses: number;
+  stock: number;
+  collection: number;
+  pending: number;
+};
+
+type ComparisonMetric = 'sales' | 'production' | 'expenses';
+
+type ActivityItem = {
+  id: string;
+  type: 'sale' | 'expense' | 'production';
+  title: string;
+  detail: string;
+  value: string;
+  date: string;
+  branch?: string;
+};
+
 const indiaDateKey = (date: string | Date) => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
 }).format(new Date(date));
 
+const compactCurrency = (value: number) => new Intl.NumberFormat('en-IN', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+}).format(Number(value || 0));
+
+const branchIdOf = (row: any) => String(row?.branch?._id || row?.branch || row?.branchId || '');
+
+function dashboardStock(payload: any) {
+  const opening = Number(payload?.barStock?.openingStock || 0);
+  const produced = Number(payload?.barStock?.newProduction ?? payload?.today?.production ?? 0);
+  const sold = Number(payload?.barStock?.sold || 0);
+  return Math.max(0, Number(payload?.barStock?.balance ?? opening + produced - sold));
+}
+
 export default function AdminDashboardPage() {
+  const { user, loading: authLoading } = useAuth();
+  const isSuperAdmin = user?.role === 'super_admin';
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [data, setData] = useState<any>(null);
-  const [profitChart, setProfitChart] = useState<any[]>([]);
-  const [dailyClosings, setDailyClosings] = useState<any[]>([]);
-  const [reportDate, setReportDate] = useState(todayISO());
-  const [closingLoading, setClosingLoading] = useState(true);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [branchSnapshots, setBranchSnapshots] = useState<BranchSnapshot[]>([]);
+  const [expenseRows, setExpenseRows] = useState<any[]>([]);
+  const [salesRows, setSalesRows] = useState<any[]>([]);
+  const [closingRows, setClosingRows] = useState<any[]>([]);
+  const [trucks, setTrucks] = useState<any[]>([]);
+  const [workers, setWorkers] = useState<any[]>([]);
+  const [settings, setSettings] = useState<any>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [closingError, setClosingError] = useState('');
-  const [todayExpenses, setTodayExpenses] = useState(0);
-  const [employeeExpenseRows, setEmployeeExpenseRows] = useState<any[]>([]);
-  const [salesTrendRange, setSalesTrendRange] = useState<'weekly' | 'monthly'>('weekly');
-  const [salesTrend, setSalesTrend] = useState<{ date: string; label: string; total: number; count: number }[]>([]);
-  const [salesTrendSummary, setSalesTrendSummary] = useState<{ totalAmount: number; totalSales: number; averagePerDay: number } | null>(null);
-  const [salesTrendLoading, setSalesTrendLoading] = useState(true);
-  const [salesTrendError, setSalesTrendError] = useState('');
-  const [selectedPerformanceName, setSelectedPerformanceName] = useState('Today Sales');
-  const [todaySalesBars, setTodaySalesBars] = useState<number | null>(null);
-  const [todaySales, setTodaySales] = useState<any[]>([]);
-  const [todayTruckReturns, setTodayTruckReturns] = useState(0);
-  const [todayTruckBalances, setTodayTruckBalances] = useState<Array<{ id: string; name: string; driverName: string; balance: number }>>([]);
-  const [managementCounts, setManagementCounts] = useState({
-    totalCustomers: 0,
-    localCustomers: 0,
-    truckCustomers: 0,
-    totalWorkers: 0,
-  });
+  const [comparisonMetric, setComparisonMetric] = useState<ComparisonMetric>('sales');
 
   useEffect(() => {
-    (async () => {
+    if (authLoading || !user) return;
+    let active = true;
+
+    const load = async () => {
+      setLoading(true);
+      setLoadError('');
+      const today = todayISO();
+      const storedBranch = isSuperAdmin ? window.localStorage.getItem('tii_selected_branch') || '' : '';
+      setSelectedBranch(storedBranch);
+      const requestHeaders = storedBranch ? { 'X-Branch-Id': storedBranch } : {};
+
       try {
-        setLoadError('');
-        const today = todayISO();
-        const [dashResult, profitResult, customerResult, workerResult, truckResult, reconciliationResult, salesResult, expenseResult] = await Promise.allSettled([
-          api.get('/dashboard/admin'),
-          api.get('/dashboard/monthly-profit'),
-          api.get('/customers'),
-          api.get('/workers'),
-          api.get('/trucks'),
-          api.get('/truck-loads/reconciliation', { params: { date: today } }),
-          api.get('/sales', {
-            params: {
-              from: `${today}T00:00:00.000+05:30`,
-              to: `${today}T23:59:59.999+05:30`,
-            },
-          }),
-          fetch('/api/expenses', {
-            cache: 'no-store',
-            headers: selectedBranchHeaders(),
-          }).then(async (response) => {
+        const [dashboardResult, branchResult, expenseResult, salesResult, closingResult, truckResult, workerResult, settingsResult] = await Promise.allSettled([
+          api.get('/dashboard/admin', { headers: requestHeaders }),
+          api.get('/branches'),
+          fetch('/api/expenses', { cache: 'no-store', headers: requestHeaders }).then(async (response) => {
             const payload = await response.json();
-            if (!response.ok) throw new Error(payload?.message || 'Could not load today expenses.');
+            if (!response.ok) throw new Error(payload?.message || 'Could not load expenses.');
             return payload;
           }),
+          api.get('/sales', {
+            headers: requestHeaders,
+            params: { from: `${today}T00:00:00.000+05:30`, to: `${today}T23:59:59.999+05:30` },
+          }),
+          api.get('/daily-closing', { headers: requestHeaders, params: { date: today } }),
+          api.get('/trucks', { headers: requestHeaders }),
+          api.get('/workers', { headers: requestHeaders }),
+          api.get('/settings'),
         ]);
-        if (dashResult.status === 'rejected') throw dashResult.reason;
-        setData(dashResult.value.data);
-        setProfitChart(profitResult.status === 'fulfilled' ? profitResult.value.data : []);
-        // Use the same branch-scoped expense source as Expenses, Reports and
-        // Production so every page reconciles to one daily total.
-        const expenseRows = expenseResult.status === 'fulfilled' && Array.isArray(expenseResult.value?.records)
-          ? expenseResult.value.records
-          : [];
-        setTodayExpenses(expenseRows
-          .filter((row: any) => row.date && indiaDateKey(row.date) === today)
-          .reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0));
-        setEmployeeExpenseRows(expenseRows);
-        const customers = customerResult.status === 'fulfilled' && Array.isArray(customerResult.value.data) ? customerResult.value.data : [];
-        const workers = workerResult.status === 'fulfilled' && Array.isArray(workerResult.value.data) ? workerResult.value.data : [];
-        const trucks = truckResult.status === 'fulfilled' && Array.isArray(truckResult.value.data) ? truckResult.value.data : [];
-        const reconciliations = reconciliationResult.status === 'fulfilled' && Array.isArray(reconciliationResult.value.data) ? reconciliationResult.value.data : [];
-        const truckIds = new Set(trucks.map((truck: any) => String(truck._id || '')));
-        const trucksById = new Map(trucks.map((truck: any) => [String(truck._id || ''), truck]));
-        setTodayTruckBalances(reconciliations.filter((row: any) => {
-          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
-          return truckId && truckIds.has(truckId) && Number(row.taken || 0) > 0;
-        }).map((row: any) => {
-          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
-          const truck: any = row.truck && typeof row.truck === 'object' ? row.truck : trucksById.get(truckId);
-          return { id: truckId, name: truck?.truckName || 'Truck', driverName: truck?.driverName || '', balance: Number(row.remaining || 0) };
-        }));
-        setTodayTruckReturns(reconciliations.reduce((total: number, row: any) => {
-          const truckId = String(row.truckId || row.truck?._id || row.truck || '');
-          if (!truckId || !truckIds.has(truckId) || Number(row.taken || 0) <= 0) return total;
-          return total + Math.max(0, Number(row.returned || 0));
-        }, 0));
-        const customerType = (customer: any) => String(customer.customerType || (customer.truck ? 'truck' : 'local')).toLowerCase();
-        setManagementCounts({
-          totalCustomers: customers.length,
-          localCustomers: customers.filter((customer: any) => customerType(customer) === 'local').length,
-          truckCustomers: customers.filter((customer: any) => customerType(customer) === 'truck').length,
-          totalWorkers: workers.length,
-        });
-        if (salesResult.status === 'fulfilled' && Array.isArray(salesResult.value.data)) {
-          setTodaySales(salesResult.value.data);
-          const bars = salesResult.value.data.reduce((saleTotal: number, sale: any) => (
-            saleTotal + (Array.isArray(sale.items) ? sale.items.reduce((itemTotal: number, item: any) => itemTotal + getItemBarUsed(item), 0) : 0)
-          ), 0);
-          setTodaySalesBars(bars);
+
+        if (dashboardResult.status === 'rejected') throw dashboardResult.reason;
+        if (!active) return;
+
+        const dashboardData = dashboardResult.value.data || {};
+        const branchData: Branch[] = branchResult.status === 'fulfilled' && Array.isArray(branchResult.value.data) ? branchResult.value.data : [];
+        const expenses = expenseResult.status === 'fulfilled' && Array.isArray(expenseResult.value?.records) ? expenseResult.value.records : [];
+        const sales = salesResult.status === 'fulfilled' && Array.isArray(salesResult.value.data) ? salesResult.value.data : [];
+        const closings = closingResult.status === 'fulfilled' && Array.isArray(closingResult.value.data) ? closingResult.value.data : [];
+
+        setData(dashboardData);
+        setBranches(branchData);
+        setExpenseRows(expenses);
+        setSalesRows(sales);
+        setClosingRows(closings);
+        setTrucks(truckResult.status === 'fulfilled' && Array.isArray(truckResult.value.data) ? truckResult.value.data : []);
+        setWorkers(workerResult.status === 'fulfilled' && Array.isArray(workerResult.value.data) ? workerResult.value.data : []);
+        setSettings(settingsResult.status === 'fulfilled' ? settingsResult.value.data || {} : {});
+
+        if (isSuperAdmin && !storedBranch && branchData.length) {
+          const snapshots = await Promise.all(branchData.map(async (branch) => {
+            let branchDashboard: any = null;
+            try {
+              branchDashboard = (await api.get('/dashboard/admin', { headers: { 'X-Branch-Id': branch._id } })).data;
+            } catch {
+              branchDashboard = null;
+            }
+            const branchExpenses = expenses
+              .filter((row: any) => branchIdOf(row) === branch._id && row.date && indiaDateKey(row.date) === today)
+              .reduce((sum: number, row: any) => sum + Number(row.amount || 0), 0);
+            return {
+              branch,
+              production: Number(branchDashboard?.today?.production || 0),
+              sales: Number(branchDashboard?.today?.sales || 0),
+              expenses: branchExpenses,
+              stock: dashboardStock(branchDashboard),
+              collection: Number(branchDashboard?.today?.collection || 0),
+              pending: Number(branchDashboard?.today?.balance || 0),
+            } satisfies BranchSnapshot;
+          }));
+          if (active) setBranchSnapshots(snapshots);
+        } else {
+          setBranchSnapshots([]);
         }
       } catch (error: any) {
-        setLoadError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the application service. Please try again.' : error?.message) || 'Could not load dashboard data.');
+        if (active) setLoadError(error?.response?.data?.message || error?.message || 'Could not load dashboard data.');
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
-    })();
-  }, []);
-
-  useEffect(() => {
-    setSalesTrendLoading(true);
-    setSalesTrendError('');
-    api.get('/dashboard/sales-trend', { params: { range: salesTrendRange } })
-      .then((response) => {
-        const days = Array.isArray(response.data?.days) ? response.data.days : [];
-        setSalesTrend(days.map((row: any) => ({
-          ...row,
-          label: formatDate(`${row.date}T12:00:00+05:30`).replace(/ 202\d/, ''),
-        })));
-        setSalesTrendSummary({
-          totalAmount: Number(response.data?.totalAmount || 0),
-          totalSales: Number(response.data?.totalSales || 0),
-          averagePerDay: Number(response.data?.averagePerDay || 0),
-        });
-      })
-      .catch((error: any) => {
-        setSalesTrend([]);
-        setSalesTrendSummary(null);
-        setSalesTrendError(error?.response?.data?.message || error?.message || 'Could not load the sales report.');
-      })
-      .finally(() => setSalesTrendLoading(false));
-  }, [salesTrendRange]);
-
-  useEffect(() => {
-    setClosingLoading(true);
-    setClosingError('');
-    api.get('/daily-closing', { params: { date: reportDate } })
-      .then((response) => setDailyClosings(response.data || []))
-      .catch((error: any) => {
-        setDailyClosings([]);
-        setClosingError(error?.response?.data?.message || (error?.message === 'Network Error' ? 'Cannot connect to the API.' : error?.message) || 'Could not load the daily closing report.');
-      })
-      .finally(() => setClosingLoading(false));
-  }, [reportDate]);
-
-  const dailyReport = useMemo(() => dailyClosings.reduce((total, row) => ({
-    opening: total.opening + Number(row.openingBalance || 0),
-    made: total.made + Number(row.produced || 0),
-    sold: total.sold + Number(row.sold || 0),
-    returned: total.returned + Number(row.returned || 0),
-    wastage: total.wastage + Number(row.wastage || 0),
-    sales: total.sales + Number(row.sellingAmount || 0),
-    cost: total.cost + Number(row.makingCost || 0),
-    profit: total.profit + Number(row.profit || 0),
-    closed: total.closed + (row.status === 'closed' ? 1 : 0),
-  }), { opening: 0, made: 0, sold: 0, returned: 0, wastage: 0, sales: 0, cost: 0, profit: 0, closed: 0 }), [dailyClosings]);
-
-  const dashboard = useMemo(() => {
-    if (!data) return null;
-
-    const today = todayISO();
-    const truckRows = Object.entries(data.truckWiseSalesToday || {}).map(([id, row]: any) => {
-      const truckName = row.truckName || 'Truck';
-      const truckExpenses = employeeExpenseRows.filter((expense: any) => expense.date && indiaDateKey(expense.date) === today && (
-        String(expense.truck?._id || expense.truck || '') === String(id)
-        || String(expense.truckName || '').toLowerCase().includes(String(truckName).toLowerCase())
-      ));
-      const expenseAmount = row.expenseAmount == null
-        ? truckExpenses.reduce((sum: number, expense: any) => sum + Number(expense.amount || 0), 0)
-        : Number(row.expenseAmount || 0);
-      const totalAmount = Number(row.totalAmount || 0);
-      const collectionAmount = Number(row.collectionAmount ?? row.totalPaid ?? 0);
-      return {
-        id,
-        truckName,
-        driverName: row.driverName || truckExpenses.find((expense: any) => expense.workerName)?.workerName || '-',
-        quantity: Number(row.quantity || 0),
-        totalAmount,
-        collectionAmount,
-        expenseAmount,
-        balanceAmount: Number(row.balanceAmount ?? collectionAmount - expenseAmount),
-      };
-    });
-    // Sales items are the source of truth. The dashboard aggregate remains a
-    // fallback for older backend responses or a failed sales request.
-    const soldBars = todaySalesBars ?? truckRows.reduce((sum, row) => sum + row.quantity, 0);
-    const stockRows = data.pendingStock?.sizeWise || [];
-    const stockChart = stockRows
-      .filter((row: any) => !['2', '3'].includes(String(row.size).trim()))
-      .map((row: any) => ({
-        size: `${row.size} bar`,
-        quantity: Math.max(0, Number(row.quantity || 0)),
-      }));
-    const paymentMix = [
-      { name: 'Collected', value: Number(data.today.collection || 0), color: '#16a34a' },
-      { name: 'Balance', value: Number(data.today.balance || 0), color: '#ef4444' },
-      { name: 'Old Payments', value: Number(data.payments?.todayCollectedLater || 0), color: '#1ca6d1' },
-    ].filter((row) => row.value > 0);
-    const last7DaysSales = (data.last7DaysSales || []).map((row: any) => ({
-      ...row,
-      label: formatDate(row.date).replace(/ 202\d/, ''),
-    }));
-    const employeeByMonth = employeeExpenseRows.reduce((months: Record<string, { advance: number; petrolDiesel: number }>, row: any) => {
-      const month = row.date ? indiaDateKey(row.date).slice(0, 7) : '';
-      if (!month) return months;
-      months[month] ||= { advance: 0, petrolDiesel: 0 };
-      const costType = String(row.costType || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
-      if (['advance', 'employee_advance', 'advance_employee', 'advance_for_employee', 'advance_for_emp'].includes(costType)) months[month].advance += Number(row.amount || 0);
-      if (['petrol_diesel', 'petrol', 'diesel'].includes(String(row.costType))) months[month].petrolDiesel += Number(row.amount || 0);
-      return months;
-    }, {});
-    const monthlyProfit = profitChart.map((row) => {
-      const month = String(row.month || '');
-      return { ...row, label: month.slice(5) || month, sales: Math.abs(Number(row.sales || 0)), cost: Math.abs(Number(row.cost || 0)), profit: Math.abs(Number(row.profit || 0)), advance: Math.abs(employeeByMonth[month]?.advance || 0), petrolDiesel: Math.abs(employeeByMonth[month]?.petrolDiesel || 0) };
-    });
-
-    return {
-      truckRows,
-      soldBars,
-      stockChart,
-      paymentMix,
-      last7DaysSales,
-      monthlyProfit,
-      pendingPayments: (data.payments?.pendingBills || []).filter((sale: any) => sale?.date && indiaDateKey(sale.date) === todayISO()),
-      recentPayments: data.payments?.recentToday || [],
-      truckCustomerRows: Object.entries(data.customers?.truckWise || {}),
-      recentCustomers: data.customers?.recent || [],
     };
-  }, [data, profitChart, employeeExpenseRows, todaySalesBars]);
 
-  if (loading) {
+    void load();
+    return () => { active = false; };
+  }, [authLoading, isSuperAdmin, user]);
+
+  const selectBranch = (branchId: string) => {
+    if (!isSuperAdmin) return;
+    if (branchId) window.localStorage.setItem('tii_selected_branch', branchId);
+    else window.localStorage.removeItem('tii_selected_branch');
+    window.location.reload();
+  };
+
+  const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const overallView = Boolean(isSuperAdmin && selectedBranch === '');
+  const today = todayISO();
+  const todayExpenses = useMemo(() => expenseRows
+    .filter((row) => row.date && indiaDateKey(row.date) === today)
+    .reduce((sum, row) => sum + Number(row.amount || 0), 0), [expenseRows, today]);
+  const soldBars = useMemo(() => salesRows.reduce((total, sale) => total + (Array.isArray(sale.items)
+    ? sale.items.reduce((itemTotal: number, item: any) => itemTotal + getItemBarUsed(item), 0)
+    : 0), 0), [salesRows]);
+
+  const production = Number(data?.today?.production || 0);
+  const sales = Number(data?.today?.sales || 0);
+  const collection = Number(data?.today?.collection || 0);
+  const pendingPaymentCollection = Number(data?.today?.pendingPaymentCollection || 0);
+  const pendingBalance = Number(data?.today?.balance || 0);
+  const availableStock = dashboardStock(data);
+  const netBalance = collection - todayExpenses;
+  const activeTrucks = trucks.filter((truck) => truck.isActive !== false).length;
+  const activeWorkers = workers.filter((worker) => worker.isActive !== false).length;
+  const lowStockThreshold = Number(settings?.lowStockThreshold || 0);
+
+  const salesTrend = useMemo(() => (data?.last7DaysSales || []).map((row: any) => ({
+    ...row,
+    label: formatDate(row.date).replace(/ 202\d/, ''),
+    total: Number(row.total || 0),
+  })), [data]);
+
+  const alerts = useMemo(() => {
+    const rows: { id: string; title: string; detail: string; tone: 'danger' | 'warning' | 'info'; href: string }[] = [];
+
+    if (overallView) {
+      branchSnapshots.forEach((snapshot) => {
+        if (!snapshot.branch.isActive) rows.push({ id: `inactive-${snapshot.branch._id}`, title: `${snapshot.branch.name} is inactive`, detail: 'Enable the branch before daily operations resume.', tone: 'danger', href: '/admin/branches' });
+        if (!snapshot.branch.admin || snapshot.branch.admin.isActive === false) rows.push({ id: `admin-${snapshot.branch._id}`, title: `${snapshot.branch.name} needs an active admin`, detail: 'Review administrator access for this location.', tone: 'warning', href: '/admin/admins' });
+        if (snapshot.branch.isActive && snapshot.production <= 0) rows.push({ id: `production-${snapshot.branch._id}`, title: `No production at ${snapshot.branch.name}`, detail: 'Today’s production entry has not been recorded.', tone: 'warning', href: '/admin/production' });
+        if (lowStockThreshold > 0 && snapshot.stock <= lowStockThreshold) rows.push({ id: `stock-${snapshot.branch._id}`, title: `Low stock at ${snapshot.branch.name}`, detail: `${formatBarQuantity(snapshot.stock) || 0} bars currently available.`, tone: 'danger', href: '/admin/production' });
+        if (snapshot.expenses > snapshot.sales && snapshot.expenses > 0) rows.push({ id: `expense-${snapshot.branch._id}`, title: `Expenses exceed sales at ${snapshot.branch.name}`, detail: `${formatCurrency(snapshot.expenses)} spent against ${formatCurrency(snapshot.sales)} sales.`, tone: 'danger', href: '/admin/expenses' });
+      });
+    } else {
+      if (production <= 0) rows.push({ id: 'production', title: 'Production not entered today', detail: 'Add today’s production to keep stock accurate.', tone: 'warning', href: '/admin/production' });
+      if (lowStockThreshold > 0 && availableStock <= lowStockThreshold) rows.push({ id: 'stock', title: 'Stock is below the alert level', detail: `${formatBarQuantity(availableStock) || 0} bars remain.`, tone: 'danger', href: '/admin/production' });
+      if (todayExpenses > sales && todayExpenses > 0) rows.push({ id: 'expense', title: 'Today’s expenses exceed sales', detail: `${formatCurrency(todayExpenses)} spent against ${formatCurrency(sales)} sales.`, tone: 'danger', href: '/admin/expenses' });
+    }
+
+    if (pendingBalance > 0) rows.push({ id: 'pending', title: 'Customer payments pending', detail: `${formatCurrency(pendingBalance)} remains uncollected today.`, tone: 'info', href: '/admin/customers' });
+    if (!closingRows.length) rows.push({ id: 'closing', title: 'Daily closing is pending', detail: 'No closing record has been submitted for today.', tone: 'info', href: '/admin/production' });
+    return rows.slice(0, 6);
+  }, [overallView, branchSnapshots, lowStockThreshold, production, availableStock, todayExpenses, sales, pendingBalance, closingRows]);
+
+  const activities = useMemo<ActivityItem[]>(() => {
+    const saleItems = salesRows.map((sale: any, index: number) => ({
+      id: `sale-${sale._id || index}`,
+      type: 'sale' as const,
+      title: sale.customer?.name || sale.customerName || 'Customer sale',
+      detail: `${(sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0)} bars sold`,
+      value: formatCurrency(Number(sale.totalAmount || 0)),
+      date: sale.createdAt || sale.date,
+      branch: sale.branch?.name,
+    }));
+    const expenses = expenseRows
+      .filter((row: any) => row.date && indiaDateKey(row.date) === today)
+      .map((row: any, index: number) => ({
+        id: `expense-${row._id || index}`,
+        type: 'expense' as const,
+        title: row.workerName || row.truckName || String(row.costType || 'Business expense').replace(/_/g, ' '),
+        detail: String(row.costType || 'Expense').replace(/_/g, ' '),
+        value: `-${formatCurrency(Number(row.amount || 0))}`,
+        date: row.createdAt || row.date,
+        branch: row.branch?.name,
+      }));
+    const productions = closingRows.map((row: any, index: number) => ({
+      id: `production-${row._id || index}`,
+      type: 'production' as const,
+      title: row.branch?.name ? `${row.branch.name} production` : 'Production update',
+      detail: `${Number(row.produced || 0)} produced · ${row.status || 'open'}`,
+      value: `${Number(row.sold || 0)} sold`,
+      date: row.updatedAt || row.date || new Date().toISOString(),
+      branch: row.branch?.name,
+    }));
+    return [...saleItems, ...expenses, ...productions]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 8);
+  }, [salesRows, expenseRows, closingRows, today]);
+
+  if (authLoading || loading || selectedBranch === null) {
+    return <div className="grid min-h-[55vh] place-items-center"><DashboardLoader label="Building your dashboard..." /></div>;
+  }
+
+  if (!data) {
     return (
-      <div className="grid min-h-[45vh] place-items-center">
-        <DashboardLoader label="Loading dashboard..." />
+      <div className="rounded-[2rem] border border-red-100 bg-white px-5 py-16 text-center shadow-sm">
+        <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-red-50 text-xl text-red-600"><FiAlertCircle /></div>
+        <h2 className="mt-4 text-lg font-extrabold text-navy-900">Dashboard unavailable</h2>
+        <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{loadError || 'Could not load dashboard data.'}</p>
+        <button type="button" onClick={() => window.location.reload()} className="btn-secondary mt-5">Try again</button>
       </div>
     );
   }
-  if (!data || !dashboard) return <div className="rounded-2xl border border-red-100 bg-red-50 p-5 text-red-700"><p className="font-semibold">Dashboard unavailable</p><p className="mt-2 text-sm">{loadError || 'Could not load dashboard data.'}</p><button type="button" onClick={() => window.location.reload()} className="btn-secondary mt-4">Retry</button></div>;
 
-  const todayPendingBills = Number(data.today.balance || 0);
-  const todayInHand = Number(data.today.collection || 0) - Number(todayExpenses || 0);
-  const todayExpenseReport = Object.values(employeeExpenseRows
-    .filter((row: any) => row.date && indiaDateKey(row.date) === todayISO())
-    .reduce((groups: Record<string, any>, row: any) => {
-      const truckName = row.truckName || 'General / Shop';
-      const driverName = row.driverName || row.workerName || '-';
-      const key = `${truckName}::${driverName}`;
-      groups[key] ||= { truckName, driverName, amount: 0, entries: 0 };
-      groups[key].amount += Number(row.amount || 0);
-      groups[key].entries += 1;
-      return groups;
-    }, {})) as any[];
-  const todayProfit = todayInHand;
-  const indiaDayOfMonth = Number(new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric' }).format(new Date())) || 1;
-  const monthlyDailyAverage = Number(data.monthlySales || 0) / indiaDayOfMonth;
-  const salesHighlight: 'high' | 'low' = Number(data.today.sales || 0) > 0 && Number(data.today.sales || 0) >= monthlyDailyAverage ? 'high' : 'low';
-  const performanceMix = [
-    { name: 'Production', value: Math.max(0, Number(data.today.production || 0)), displayValue: `${Number(data.today.production || 0)} bars`, color: '#3b82f6' },
-    { name: 'Today Sales', value: Math.max(0, Number(data.today.sales || 0)), displayValue: formatCurrency(data.today.sales), color: '#10b981' },
-    { name: 'Collection', value: Math.max(0, Number(data.today.collection || 0)), displayValue: formatCurrency(data.today.collection), color: '#06b6d4' },
-    { name: 'Profit', value: Math.abs(todayProfit), displayValue: formatCurrency(todayProfit), color: todayProfit < 0 ? '#f43f5e' : '#8b5cf6' },
-    { name: 'Bar Used', value: Math.max(0, dashboard.soldBars), displayValue: `${dashboard.soldBars} bars`, color: '#6366f1' },
-    { name: 'Today Expenses', value: Math.max(0, todayExpenses), displayValue: formatCurrency(todayExpenses), color: '#ef4444' },
-    { name: 'Today In Hand', value: Math.abs(todayInHand), displayValue: formatCurrency(todayInHand), color: todayInHand < 0 ? '#e11d48' : '#0d9488' },
-    { name: 'Today Returns', value: Math.max(0, todayTruckReturns), displayValue: `${todayTruckReturns} bars`, color: '#f59e0b' },
-    { name: 'Today Pending Bills', value: Math.max(0, todayPendingBills), displayValue: formatCurrency(todayPendingBills), color: '#f97316' },
+  const scopeName = overallView ? 'All branches' : activeBranch?.name || (isSuperAdmin ? 'Selected branch' : 'Your branch');
+  const summary = [
+    { label: 'Today production', value: formatBarQuantity(production) || '0', suffix: 'bars', icon: FiPackage, tone: 'blue', href: '/admin/production', helper: `${formatBarQuantity(soldBars) || '0'} bars sold` },
+    { label: 'Today sales', value: formatCurrency(sales), icon: FiTrendingUp, tone: 'emerald', href: '/admin/sales', helper: `${salesRows.length} bills today` },
+    { label: "Today's collection", value: formatCurrency(collection), icon: FiCheckCircle, tone: 'emerald', href: '/admin/sales', helper: 'Sales and pending-bill payments' },
+    { label: 'Pending bills collected', value: formatCurrency(pendingPaymentCollection), icon: FiClock, tone: 'violet', href: '/admin/customers', helper: 'Outstanding payments received today' },
+    { label: 'Total expenses', value: formatCurrency(todayExpenses), icon: FiDollarSign, tone: 'red', href: '/admin/expenses', helper: `${expenseRows.filter((row) => row.date && indiaDateKey(row.date) === today).length} entries` },
+    { label: 'Net balance', value: formatCurrency(netBalance), icon: FiBarChart2, tone: netBalance >= 0 ? 'violet' : 'red', href: '/admin/reports', helper: 'Collection after expenses' },
+    { label: 'Available stock', value: formatBarQuantity(availableStock) || '0', suffix: 'bars', icon: FiBox, tone: availableStock <= lowStockThreshold && lowStockThreshold > 0 ? 'amber' : 'cyan', href: '/admin/production', helper: lowStockThreshold ? `Alert level: ${lowStockThreshold}` : 'Current ready stock' },
+    { label: 'Active team', value: `${activeTrucks} / ${activeWorkers}`, icon: FiUsers, tone: 'indigo', href: '/admin/workers', helper: 'Trucks / workers' },
   ];
-  const visiblePerformanceMix = performanceMix.filter((row) => row.value > 0);
-  const selectedPerformance = performanceMix.find((row) => row.name === selectedPerformanceName) || performanceMix[1];
-  const openingStockBars = Math.max(0, Number(data.barStock?.openingStock || 0));
-  const newProductionBars = Math.max(0, Number(data.barStock?.newProduction ?? data.today.production ?? 0));
-  const stockTotalBars = Math.max(0, Number(data.barStock?.totalAvailable ?? openingStockBars + newProductionBars));
-  const stockSoldBars = Math.max(0, Number(data.barStock?.sold ?? dashboard.soldBars));
-  const stockBalanceBars = Math.max(0, Number(data.barStock?.balance ?? stockTotalBars - stockSoldBars));
-  const truckBalanceBars = todayTruckBalances.reduce((total, row) => total + Number(row.balance || 0), 0);
-  const shopBalanceBars = stockBalanceBars - truckBalanceBars;
-  const todayBarChart = [
-    { name: 'Sold Bars', value: stockSoldBars, color: '#16a34a' },
-    { name: 'Balance Bars', value: stockBalanceBars, color: '#f59e0b' },
-  ].filter((row) => row.value > 0);
+
+  const comparisonData = branchSnapshots.map((snapshot) => ({
+    name: snapshot.branch.code || snapshot.branch.name,
+    value: snapshot[comparisonMetric],
+  }));
 
   return (
-    <div className="space-y-4 pb-8">
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-r from-navy-900 via-sky-900 to-iceblue-700 text-white shadow-lg shadow-iceblue-900/10">
-        <div className="flex items-center gap-3 px-4 py-5 sm:px-6">
-          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-xl ring-1 ring-white/15"><FiGrid /></span>
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100/80">Overview</p>
-            <h1 className="mt-0.5 font-display text-xl font-bold sm:text-2xl">Dashboard</h1>
-            <p className="mt-1 text-sm text-iceblue-50/80">Today&apos;s production, sales, collection and stock at a glance.</p>
+    <div className="space-y-6 pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="absolute right-10 top-8 hidden h-28 w-28 rounded-full border border-white/10 lg:block" />
+
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-iceblue-100 backdrop-blur-sm">
+              {isSuperAdmin ? <FiShield /> : <FiBriefcase />}
+              {isSuperAdmin ? 'Super admin command centre' : 'Branch operations'}
+            </div>
+            <h1 className="max-w-2xl text-3xl font-black tracking-[-0.04em] sm:text-4xl">
+              {overallView ? 'Your entire network, in one view.' : `${scopeName}, today.`}
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
+              {overallView ? `Combined performance across ${branches.length} branches with live operational attention points.` : 'Production, sales, cash, stock, people, and action items for the selected branch.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiClock className="text-emerald-300" />{formatDate(`${today}T12:00:00+05:30`)}</span>
           </div>
         </div>
       </section>
 
-      <section>
-
-    {/* Today Overview - one card, summary grid on the left, donut on the right, equal widths */}
-    <div className="relative overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-iceblue-50 via-white to-sky-50 shadow-sm">
-      <span className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-iceblue-400 via-sky-400 to-teal-400" />
-      <div className="flex items-center justify-between gap-3 border-b border-iceblue-100 bg-white/70 px-4 py-3">
-        <div>
-          <p className="font-display text-sm font-bold text-navy-900">Today Overview</p>
-          <p className="mt-1 text-[10px] font-medium text-navy-800/45">Tap a slice to see the breakdown</p>
-        </div>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-iceblue-500 text-white shadow-sm">
-          <FiTrendingUp size={14} />
-        </span>
-      </div>
-
-      <div className="grid gap-3 p-4 lg:grid-cols-[minmax(0,2fr)_minmax(220px,1fr)] lg:items-center">
-
-        {/* Right: donut chart */}
-        <div className="flex min-h-[230px] items-center justify-center overflow-visible sm:min-h-[280px] lg:order-2">
-          {visiblePerformanceMix.length === 0 ? (
-            <p className="text-center text-xs font-medium text-slate-400">No activity recorded today.</p>
-          ) : (
-            <div className="relative h-[220px] w-[220px] max-w-full sm:h-[270px] sm:w-[270px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={visiblePerformanceMix}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius="55%"
-                    outerRadius="88%"
-                    paddingAngle={3}
-                    stroke="none"
-                    onClick={(entry: any) => setSelectedPerformanceName(entry.name)}
-                  >
-                    {visiblePerformanceMix.map((entry) => (
-                      <Cell
-                        key={entry.name}
-                        fill={entry.color}
-                        cursor="pointer"
-                        opacity={selectedPerformance.name === entry.name ? 1 : 0.72}
-                        stroke={selectedPerformance.name === entry.name ? '#ffffff' : 'none'}
-                        strokeWidth={selectedPerformance.name === entry.name ? 4 : 0}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    content={<SummaryChartTooltip />}
-                    allowEscapeViewBox={{ x: true, y: true }}
-                    wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="pointer-events-none absolute left-1/2 top-1/2 flex h-[116px] w-[116px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full bg-white text-center shadow-inner sm:h-[142px] sm:w-[142px]">
-                <p className="max-w-[100px] text-[8px] font-bold uppercase tracking-[0.08em] text-slate-400 sm:max-w-[122px] sm:text-[9px]">{selectedPerformance.name}</p>
-                <p className="mt-1 max-w-[104px] truncate font-display text-sm font-black text-navy-900 sm:max-w-[126px] sm:text-base">{selectedPerformance.displayValue}</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Left: summary grid */}
-        <div className="grid auto-rows-fr grid-cols-2 gap-3 sm:grid-cols-4 lg:order-1">
-
-          <DashboardSummaryCard
-            icon={FiPackage}
-            label="Production"
-            value={data.today.production}
-            suffix="bars"
-            tone="blue"
-            href="/admin/production"
-          />
-
-          <DashboardSummaryCard
-            icon={FiBox}
-            label="Bar Used"
-            value={dashboard.soldBars}
-            suffix="bars"
-            tone="indigo"
-            href="/admin/production"
-          />
-
-          <DashboardSummaryCard
-            icon={FiTrendingUp}
-            label="Today Sales"
-            value={formatCurrency(data.today.sales)}
-            highlight={salesHighlight}
-            tone="emerald"
-            href="/admin/sales"
-          />
-
-          <DashboardSummaryCard
-            icon={FiDollarSign}
-            label="Collection"
-            value={formatCurrency(data.today.collection)}
-            tone="cyan"
-            href="/admin/sales"
-          />
-
-          <DashboardSummaryCard
-            icon={FiArrowUpRight}
-            label="Profit"
-            value={formatCurrency(todayProfit)}
-            danger={todayProfit < 0}
-            positive={todayProfit >= 0}
-            tone="violet"
-            href="/admin/reports"
-          />
-
-          <DashboardSummaryCard
-            icon={FiDollarSign}
-            label="Today Expenses"
-            value={formatCurrency(todayExpenses)}
-            danger={todayExpenses > 0}
-            tone="red"
-            href="/admin/expenses"
-          />
-
-          <DashboardSummaryCard
-            icon={FiDollarSign}
-            label="Today's Net Collection"
-            value={formatCurrency(todayInHand)}
-            danger={todayInHand < 0}
-            positive={todayInHand >= 0}
-            tone="emerald"
-            href="/admin/reports"
-          />
-
-          <DashboardSummaryCard
-            icon={FiArrowDownRight}
-            label="Today Returns"
-            value={todayTruckReturns}
-            suffix="bars"
-            tone="amber"
-            href="/admin/reports"
-          />
-
-          <DashboardSummaryCard
-            icon={FiClock}
-            label="Today Pending Bills"
-            value={formatCurrency(todayPendingBills)}
-            danger={todayPendingBills > 0}
-            tone="orange"
-            href="/admin/customers"
-          />
-
-          <CustomerCountCard counts={managementCounts} />
-
-          <Link
-            href="/admin/workers"
-            className="relative flex min-h-[112px] min-w-0 flex-col justify-center gap-2 overflow-hidden rounded-2xl border border-sky-200 bg-gradient-to-br from-sky-50 to-white px-4 py-4 shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-sky-400"
-          >
-            <span className="absolute inset-y-0 left-0 w-1 bg-sky-500" />
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Total Workers</p>
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500 text-white shadow-sm"><FiUsers size={13} /></span>
-            </div>
-            <p className="font-display text-2xl font-black text-sky-700">{managementCounts.totalWorkers}</p>
-          </Link>
-
-        </div>
-
-      </div>
-    </div>
-
-</section>
-
-      <section>
-        <div className="hidden">
-        <Panel title="Last 7 Days Sales" icon={FiTrendingUp}>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
-            {dashboard.last7DaysSales.map((day: any, index: number) => (
-              <div key={`${day.label}-${index}`} className="rounded-lg border border-iceblue-100 bg-gradient-to-b from-white to-iceblue-50 p-2.5 text-center">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">{day.label}</p>
-                <p className="mt-1 break-words text-xs font-bold text-iceblue-700">{formatCurrency(Number(day.total || 0))}</p>
-              </div>
+      {isSuperAdmin && (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => selectBranch('')} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? 'bg-navy-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><FiGrid /> All branches <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? 'bg-white/10' : 'bg-slate-100'}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.map((branch) => (
+              <button key={branch._id} type="button" onClick={() => selectBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? 'bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><span className={`h-2 w-2 rounded-full ${branch.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
             ))}
           </div>
-          {/*
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={dashboard.last7DaysSales}>
-              <defs>
-                <linearGradient id="salesFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#1ca6d1" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#1ca6d1" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 9, fill: '#a5f3fc', fontFamily: 'monospace' }} tickFormatter={(v) => `${Number(v) < 0 ? '-' : ''}₹${Math.abs(Number(v)) / 1000}k`} axisLine={false} tickLine={false} />
-              <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-              <Area type="monotone" dataKey="total" stroke="#1284ac" strokeWidth={3} fill="url(#salesFill)" />
-            </AreaChart>
-          </ResponsiveContainer>
-          */}
-        </Panel>
-        </div>
+        </section>
+      )}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
-        <div className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-          <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 bg-white px-4 py-4">
-            <div><p className="font-display text-sm font-bold text-navy-900">Today Sales Report</p><p className="mt-1 text-[10px] font-medium text-navy-800/45">{salesTrendRange === 'weekly' ? 'Last 7 days trend' : 'This month, day by day'}</p></div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
-                <button type="button" onClick={() => setSalesTrendRange('weekly')} className={`rounded-md px-3 py-1.5 text-[10px] font-bold transition ${salesTrendRange === 'weekly' ? 'bg-navy-900 text-white shadow-sm' : 'text-navy-900 hover:bg-white'}`}>Weekly</button>
-                <button type="button" onClick={() => setSalesTrendRange('monthly')} className={`rounded-md px-3 py-1.5 text-[10px] font-bold transition ${salesTrendRange === 'monthly' ? 'bg-navy-900 text-white shadow-sm' : 'text-navy-900 hover:bg-white'}`}>Monthly</button>
-              </div>
-              <Link href="/admin/sales/all" className="inline-flex h-8 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-bold text-navy-900 transition hover:bg-white">View Details</Link>
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {summary.map((item) => <SummaryCard key={item.label} {...item} />)}
+      </section>
+
+      {overallView && (
+        <section>
+          <SectionHeading icon={FiGitBranch} title="Branch comparison" subtitle="Today’s location-by-location performance" action={<Link href="/admin/branches" className="inline-flex items-center gap-1.5 text-xs font-bold text-iceblue-700 hover:text-iceblue-900">Manage branches <FiArrowRight /></Link>} />
+          {branchSnapshots.length ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {branchSnapshots.map((snapshot) => <BranchCard key={snapshot.branch._id} snapshot={snapshot} onView={() => selectBranch(snapshot.branch._id)} lowStockThreshold={lowStockThreshold} />)}
             </div>
-          </div>
-          {salesTrendLoading ? <p className="py-12 text-center text-xs font-medium text-slate-400">Loading sales report...</p> : salesTrendError ? <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-xs font-medium text-red-600">{salesTrendError}</div> : salesTrend.length === 0 ? <div className="p-4"><EmptyState text="No sales recorded for this period." /></div> : (
-            <div className="p-4">
-              {salesTrendSummary && (
-                <div className="mb-4 grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Total Sales</p>
-                    <p className="mt-0.5 truncate font-display text-sm font-bold text-navy-900">{formatCurrency(salesTrendSummary.totalAmount)}</p>
-                  </div>
-                  <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Bills</p>
-                    <p className="mt-0.5 truncate font-display text-sm font-bold text-navy-900">{salesTrendSummary.totalSales}</p>
-                  </div>
-                  <div className="rounded-xl bg-iceblue-50 px-2 py-2.5">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-navy-800/45">Avg / Day</p>
-                    <p className="mt-0.5 truncate font-display text-sm font-bold text-navy-900">{formatCurrency(salesTrendSummary.averagePerDay)}</p>
-                  </div>
+          ) : <EmptyState icon={FiGitBranch} title="No branch snapshots" text="Branch comparison data is not available yet." />}
+        </section>
+      )}
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.75fr)]">
+        <Panel>
+          {overallView ? (
+            <>
+              <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+                <div><h2 className="font-extrabold text-navy-900">Compare branches</h2><p className="mt-1 text-xs text-slate-500">Switch the metric to compare every location.</p></div>
+                <div className="flex rounded-xl bg-slate-100 p-1">
+                  {(['sales', 'production', 'expenses'] as ComparisonMetric[]).map((metric) => <button key={metric} type="button" onClick={() => setComparisonMetric(metric)} className={`rounded-lg px-3 py-2 text-[10px] font-bold capitalize transition ${comparisonMetric === metric ? 'bg-white text-navy-900 shadow-sm' : 'text-slate-500'}`}>{metric}</button>)}
                 </div>
-              )}
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={salesTrend}>
-                  <defs>
-                    <linearGradient id="salesTrendFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#1ca6d1" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#1ca6d1" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10 }} interval={salesTrendRange === 'monthly' ? 'preserveStartEnd' : 0} />
-                  <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} axisLine={false} tickLine={false} width={42} />
-                  <Tooltip formatter={(v: any) => formatCurrency(Number(v))} />
-                  <Area type="monotone" dataKey="total" name="Sales" stroke="#1284ac" strokeWidth={3} fill="url(#salesTrendFill)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-
-        <div className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-          <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-4">
-            <div><p className="font-display text-sm font-bold text-navy-900">Today Collection</p><p className="mt-1 text-[10px] font-medium text-navy-800/45">Payment method breakdown</p></div>
-            <Link href="/admin/sales/all" className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-semibold text-navy-900 transition hover:bg-white">View Details</Link>
-          </div>
-          {dashboard.paymentMix.length === 0 ? (
-            <div className="p-4"><EmptyState text="No collection data today." /></div>
+              </div>
+              <div className="p-4 sm:p-5">
+                {comparisonData.some((row) => row.value > 0) ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={comparisonData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 9, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={(value) => comparisonMetric === 'production' ? `${value}` : compactCurrency(value)} width={46} />
+                      <Tooltip cursor={{ fill: '#f0fbff' }} formatter={(value: any) => comparisonMetric === 'production' ? [`${Number(value)} bars`, 'Production'] : [formatCurrency(Number(value)), comparisonMetric === 'sales' ? 'Sales' : 'Expenses']} />
+                      <Bar dataKey="value" fill={comparisonMetric === 'sales' ? '#10b981' : comparisonMetric === 'production' ? '#1ca6d1' : '#ef4444'} radius={[8, 8, 0, 0]} maxBarSize={56} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : <EmptyState icon={FiBarChart2} title="No comparison activity" text="Data will appear as branches record today’s activity." />}
+              </div>
+            </>
           ) : (
-            <div className="px-4 pb-5">
-              <div className="relative mx-auto h-[250px] max-w-md">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={dashboard.paymentMix} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={58} outerRadius={86} paddingAngle={3} stroke="none" labelLine={false} label={renderCollectionLabel}>
-                      {dashboard.paymentMix.map((entry, index) => (
-                        <Cell key={entry.name} fill={entry.color || chartColors[index % chartColors.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(v: any) => formatCurrency(Number(v))} contentStyle={{ borderRadius: 12, borderColor: '#e2e8f0', fontSize: 11 }} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="pointer-events-none absolute left-1/2 top-1/2 flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full text-center">
-                  <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total</p>
-                  <p className="mt-1 max-w-[84px] truncate font-display text-sm font-black text-navy-900">{formatCurrency(data.today.collection)}</p>
-                </div>
+            <>
+              <div className="border-b border-slate-100 p-5"><h2 className="font-extrabold text-navy-900">Sales trend</h2><p className="mt-1 text-xs text-slate-500">Last seven days for {scopeName}.</p></div>
+              <div className="p-4 sm:p-5">
+                {salesTrend.some((row: any) => row.total > 0) ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <AreaChart data={salesTrend} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                      <defs><linearGradient id="dashboardSalesFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#1ca6d1" stopOpacity={0.35} /><stop offset="95%" stopColor="#1ca6d1" stopOpacity={0.02} /></linearGradient></defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 9, fill: '#94a3b8' }} axisLine={false} tickLine={false} tickFormatter={compactCurrency} width={46} />
+                      <Tooltip formatter={(value: any) => [formatCurrency(Number(value)), 'Sales']} />
+                      <Area type="monotone" dataKey="total" stroke="#1284ac" strokeWidth={3} fill="url(#dashboardSalesFill)" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : <EmptyState icon={FiTrendingUp} title="No sales trend yet" text="Sales activity will appear here as bills are created." />}
               </div>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-slate-100 pt-4 sm:grid-cols-3">
-              {dashboard.paymentMix.map((entry, index) => (
-                <div key={entry.name} className="min-w-0 text-center">
-                  <div className="flex items-center justify-center gap-1.5"><span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: entry.color || chartColors[index % chartColors.length] }} /><p className="truncate text-[9px] font-semibold text-slate-500">{entry.name}</p></div>
-                  <p className="mt-1 truncate text-xs font-bold text-navy-900">{formatCurrency(Number(entry.value || 0))}</p>
-                </div>
-              ))}
-              </div>
-            </div>
+            </>
           )}
-        </div>
-        </div>
+        </Panel>
+
+        <Panel>
+          <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="font-extrabold text-navy-900">Attention required</h2><p className="mt-1 text-xs text-slate-500">Items that may need action today.</p></div><span className={`grid h-9 min-w-9 place-items-center rounded-xl px-2 text-xs font-black ${alerts.length ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}`}>{alerts.length}</span></div>
+          <div className="space-y-2 p-3">
+            {alerts.length ? alerts.map((alert) => <AlertRow key={alert.id} {...alert} />) : (
+              <div className="grid min-h-[250px] place-items-center px-5 text-center"><div><span className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-emerald-50 text-xl text-emerald-600"><FiCheckCircle /></span><h3 className="mt-4 font-extrabold text-navy-900">Everything looks good</h3><p className="mt-1 text-xs leading-5 text-slate-500">No operational alerts require attention.</p></div></div>
+            )}
+          </div>
+        </Panel>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
+        <Panel>
+          <div className="border-b border-slate-100 p-5"><h2 className="font-extrabold text-navy-900">Stock position</h2><p className="mt-1 text-xs text-slate-500">Today’s production-to-stock movement.</p></div>
+          <div className="p-5">
+            <div className="rounded-2xl bg-gradient-to-br from-navy-900 to-iceblue-800 p-5 text-white">
+              <p className="text-[9px] font-black uppercase tracking-[0.18em] text-iceblue-200">Available now</p>
+              <p className="mt-2 text-4xl font-black tracking-tight">{formatBarQuantity(availableStock) || '0'} <span className="text-sm font-semibold text-slate-300">bars</span></p>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-iceblue-300" style={{ width: `${Math.min(100, Math.max(0, production ? (soldBars / production) * 100 : 0))}%` }} /></div>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2">
+              <StockMini label="Produced" value={production} tone="blue" />
+              <StockMini label="Sold" value={soldBars} tone="emerald" />
+              <StockMini label="Remaining" value={availableStock} tone="amber" />
+            </div>
+          </div>
+        </Panel>
+
+        <Panel>
+          <div className="flex items-center justify-between border-b border-slate-100 p-5"><div><h2 className="font-extrabold text-navy-900">Recent activity</h2><p className="mt-1 text-xs text-slate-500">Latest sales, expenses, and production updates.</p></div><FiClock className="text-slate-400" /></div>
+          <div className="divide-y divide-slate-100 px-4">
+            {activities.length ? activities.map((activity) => <ActivityRow key={activity.id} activity={activity} />) : <div className="py-14"><EmptyState icon={FiClock} title="No activity today" text="New activity will appear here automatically." compact /></div>}
+          </div>
+        </Panel>
       </section>
 
       <section>
-        {false && <Panel title="Today Report" icon={FiTrendingUp}>
-          <div className="overflow-hidden rounded-xl border border-cyan-400/30 bg-[radial-gradient(circle_at_top,#123b5a_0%,#071824_58%,#031019_100%)] p-3 shadow-inner shadow-cyan-500/10">
-          <div className="mb-2 flex items-center justify-between gap-2 border-b border-cyan-300/15 pb-2"><div><div className="flex items-center gap-2"><span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_10px_#67e8f9]" /><p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-200">Neon Market Trend</p></div><p className="mt-1 font-mono text-[9px] text-cyan-100/50">Monthly Sales, Cost &amp; Profit</p></div><Link href="/admin/reports?view=monthly-sales" className="shrink-0 rounded-lg border border-cyan-300/25 bg-cyan-300/10 px-2.5 py-1.5 font-mono text-[9px] font-bold uppercase text-cyan-100 transition hover:bg-cyan-300/20">Monthly Sales Report</Link></div>
-          <ResponsiveContainer width="100%" height={185}>
-            <BarChart data={dashboard.monthlyProfit} barGap={2} barCategoryGap="22%">
-              <CartesianGrid strokeDasharray="2 5" stroke="#67e8f9" strokeOpacity={0.18} vertical={false} />
-              <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#a5f3fc', fontFamily: 'monospace' }} axisLine={{ stroke: '#22d3ee', strokeOpacity: 0.35 }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
-              <Tooltip formatter={(v: any) => formatCurrency(Math.abs(Number(v)))} />
-              <Legend wrapperStyle={{ fontSize: 9, color: '#cffafe', fontFamily: 'monospace' }} />
-              <Bar dataKey="sales" name="Sales" fill="#22d3ee" radius={[3, 3, 0, 0]} maxBarSize={18} />
-              <Bar dataKey="cost" name="Cost" fill="#fbbf24" radius={[3, 3, 0, 0]} maxBarSize={18} />
-              <Bar dataKey="profit" name="Profit" fill="#34d399" radius={[3, 3, 0, 0]} maxBarSize={18} />
-              <Bar dataKey="advance" name="Employee Advance" fill="#a78bfa" radius={[3, 3, 0, 0]} maxBarSize={18} />
-              <Bar dataKey="petrolDiesel" name="Petrol / Diesel" fill="#fb7185" radius={[3, 3, 0, 0]} maxBarSize={18} />
-            </BarChart>
-          </ResponsiveContainer>
-          </div>
-        </Panel>}
-
-        <Panel title="Truck-wise Sales Today" icon={FiBox}>
-          {dashboard.truckRows.length === 0 ? (
-            <EmptyState icon={FiTruck} text="No truck sales recorded today." />
-          ) : (
-            <>
-            <div className="sm:hidden">
-              {dashboard.truckRows.map((row: any, index: number) => (
-                <div key={`${row.truckName}-${index}`} className="border-b border-slate-100 px-3 py-3 last:border-b-0">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
-                    <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{row.truckName}</p>
-                  </div>
-                  <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
-                    <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{row.quantity}</span> Bars Used</p>
-                    <p className="shrink-0 text-sm font-bold tabular-nums text-emerald-700">{formatCurrency(row.totalAmount)}</p>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
-                    <p className="text-[10px] font-medium text-navy-800/45">Collection Amount</p>
-                    <p className="text-xs font-semibold tabular-nums text-sky-700">{formatCurrency(row.collectionAmount)}</p>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
-                    <p className="text-[10px] font-medium text-navy-800/45">{row.driverName} · Expense</p>
-                    <p className="text-xs font-semibold tabular-nums text-red-600">-{formatCurrency(row.expenseAmount)}</p>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between gap-3 pl-9">
-                    <p className="text-[10px] font-medium text-navy-800/45">Balance Amount</p>
-                    <p className={`text-xs font-bold tabular-nums ${row.balanceAmount < 0 ? 'text-red-600' : 'text-navy-900'}`}>{formatCurrency(row.balanceAmount)}</p>
-                  </div>
-                </div>
-              ))}
-              <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-emerald-50 px-3 py-3">
-                <p className="text-xs font-bold uppercase text-navy-900">Total</p>
-                <div className="text-right">
-                  <p className="text-xs font-bold text-navy-900">{dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0)} bars</p>
-                  <p className="text-sm font-bold text-emerald-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0))}</p>
-                  <p className="text-xs font-bold text-sky-700">Collection {formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.collectionAmount || 0), 0))}</p>
-                  <p className="text-xs font-bold text-red-600">-{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.expenseAmount || 0), 0))}</p>
-                  <p className="text-xs font-bold text-navy-900">Balance {formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.balanceAmount || 0), 0))}</p>
-                </div>
-              </div>
-            </div>
-            <div className="hidden overflow-x-auto rounded-lg border border-slate-300 sm:block">
-              <table className="w-full min-w-[1040px] table-fixed border-collapse text-xs">
-                <thead className="bg-emerald-700 text-white"><tr><th className="w-[60px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">S.No</th><th className="border border-emerald-800 px-3 py-3 text-left text-[10px] font-bold uppercase">Truck Name</th><th className="border border-emerald-800 px-3 py-3 text-left text-[10px] font-bold uppercase">Driver Name</th><th className="w-[100px] border border-emerald-800 px-3 py-3 text-center text-[10px] font-bold uppercase">Bars Used</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Sales Amount</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Collection Amount</th><th className="w-[130px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Expenses</th><th className="w-[140px] border border-emerald-800 px-3 py-3 text-right text-[10px] font-bold uppercase">Balance Amount</th></tr></thead>
-                <tbody>
-                  {dashboard.truckRows.map((row: any, index: number) => <tr key={`${row.truckName}-${index}`} className="even:bg-slate-50 hover:bg-emerald-50/70"><td className="border border-slate-300 px-3 py-3 text-center text-slate-500">{index + 1}</td><td className="border border-slate-300 px-3 py-3 font-semibold text-navy-900">{row.truckName}</td><td className="border border-slate-300 px-3 py-3">{row.driverName}</td><td className="border border-slate-300 px-3 py-3 text-center font-semibold">{row.quantity}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-emerald-700">{formatCurrency(row.totalAmount)}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-sky-700">{formatCurrency(row.collectionAmount)}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">-{formatCurrency(row.expenseAmount)}</td><td className={`border border-slate-300 px-3 py-3 text-right font-bold ${row.balanceAmount < 0 ? 'text-red-600' : 'text-navy-900'}`}>{formatCurrency(row.balanceAmount)}</td></tr>)}
-                </tbody>
-                <tfoot className="bg-emerald-50 font-bold text-navy-900"><tr><td className="border border-slate-300 px-3 py-3 text-center" colSpan={3}>TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center">{dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.quantity || 0), 0)}</td><td className="border border-slate-300 px-3 py-3 text-right text-emerald-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.totalAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right text-sky-700">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.collectionAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">-{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.expenseAmount || 0), 0))}</td><td className="border border-slate-300 px-3 py-3 text-right">{formatCurrency(dashboard.truckRows.reduce((sum: number, row: any) => sum + Number(row.balanceAmount || 0), 0))}</td></tr></tfoot>
-              </table>
-            </div>
-            {false && <ResponsiveContainer width="100%" height={310}>
-              <BarChart data={dashboard.truckRows}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#dff5fd" />
-                <XAxis dataKey="truckName" tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} tickFormatter={(v) => `₹${Number(v) / 1000}k`} />
-                <Tooltip formatter={(v: any, name: any) => (name === 'Sales' ? formatCurrency(Number(v)) : v)} />
-                <Legend />
-                <Bar yAxisId="left" dataKey="quantity" name="Bar Used" fill="#6366f1" radius={[6, 6, 0, 0]} />
-                <Bar yAxisId="right" dataKey="totalAmount" name="Sales" fill="#14b8a6" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>}
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Today's Expense Report" icon={FiDollarSign}>
-          {todayExpenseReport.length === 0 ? <EmptyState text="No expenses recorded today." /> : <>
-            <div className="space-y-2 sm:hidden">
-              {todayExpenseReport.map((row) => <div key={`${row.truckName}-${row.driverName}`} className="rounded-xl border border-slate-200 p-3"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="break-words text-sm font-bold text-navy-900">{row.truckName}</p><p className="mt-1 text-xs text-navy-800/50">{row.driverName} · {row.entries} entr{row.entries === 1 ? 'y' : 'ies'}</p></div><p className="shrink-0 font-bold text-red-600">-{formatCurrency(row.amount)}</p></div></div>)}
-              <div className="flex justify-between rounded-xl bg-red-50 px-3 py-3 text-sm font-bold"><span>Total Expenses</span><span className="text-red-600">-{formatCurrency(todayExpenses)}</span></div>
-            </div>
-            <div className="hidden overflow-x-auto rounded-lg border border-slate-300 sm:block"><table className="w-full min-w-[620px] border-collapse text-xs"><thead className="bg-red-600 text-white"><tr><th className="border border-red-700 px-3 py-3 text-left">Truck Name</th><th className="border border-red-700 px-3 py-3 text-left">Driver / Worker</th><th className="border border-red-700 px-3 py-3 text-center">Entries</th><th className="border border-red-700 px-3 py-3 text-right">Expenses</th></tr></thead><tbody>{todayExpenseReport.map((row) => <tr key={`${row.truckName}-${row.driverName}`}><td className="border border-slate-300 px-3 py-3 font-bold text-navy-900">{row.truckName}</td><td className="border border-slate-300 px-3 py-3">{row.driverName}</td><td className="border border-slate-300 px-3 py-3 text-center">{row.entries}</td><td className="border border-slate-300 px-3 py-3 text-right font-bold text-red-600">-{formatCurrency(row.amount)}</td></tr>)}</tbody><tfoot className="bg-red-50 font-bold"><tr><td colSpan={3} className="border border-slate-300 px-3 py-3 text-right">TOTAL EXPENSES</td><td className="border border-slate-300 px-3 py-3 text-right text-red-600">-{formatCurrency(todayExpenses)}</td></tr></tfoot></table></div>
-          </>}
-        </Panel>
-      </section>
-
-      <section className="space-y-4">
-        <div className="overflow-hidden rounded-[20px] border border-sky-200 bg-white shadow-[0_8px_30px_rgba(15,55,80,0.06)]">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-sky-100 px-4 py-3 sm:px-5">
-            <div><p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-600">Today Overview</p><h2 className="font-display text-lg font-bold text-navy-900">Sales Report &amp; Bar Stock</h2></div>
-            <Link href="/admin/sales/all" className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-[10px] font-bold text-navy-900 transition hover:bg-white">View Details</Link>
-          </div>
-          <div className="grid lg:grid-cols-[minmax(0,3fr)_minmax(300px,2fr)]">
-        <div className="min-w-0 border-b border-sky-100 p-4 lg:border-b-0 lg:border-r sm:p-5">
-          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-emerald-50"><FiDollarSign className="text-emerald-600" /></span> Daily Sales Report</h3>
-          <p className="mb-3 mt-1 pl-10 text-[11px] font-medium text-slate-400">Latest 10 sales recorded today</p>
-          {todaySales.length === 0 ? <EmptyState text="No sales recorded today." /> : (
-            <>
-              <div className="sm:hidden">
-                {todaySales.slice(0, 10).map((sale) => {
-                  const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0);
-                  return (
-                    <div key={sale._id} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</p>
-                        <p className="shrink-0 text-xs font-medium text-slate-500">{formatDate(sale.date)}</p>
-                      </div>
-                      <div className="mt-1.5 flex items-center justify-between gap-3">
-                        <p className="text-xs font-semibold text-navy-800/60"><span className="font-bold text-navy-900">{bars}</span> Bars</p>
-                        <p className="text-sm font-bold tabular-nums text-emerald-700">{formatCurrency(sale.totalAmount)}</p>
-                      </div>
-                      <div className="mt-1 flex items-center justify-between gap-3">
-                        <p className="text-[10px] font-medium text-navy-800/45">Balance</p>
-                        <p className="text-xs font-semibold tabular-nums text-red-500">{formatCurrency(sale.balanceAmount)}</p>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="flex items-center justify-between gap-3 border-t border-sky-200 bg-sky-50 px-1 py-3">
-                  <p className="text-xs font-bold uppercase text-navy-900">Total</p>
-                  <div className="text-right">
-                    <p className="text-xs font-bold text-navy-900">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)} bars</p>
-                    <p className="text-sm font-bold text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</p>
-                    <p className="text-xs font-bold text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</p>
-                  </div>
-                </div>
-              </div>
-              <div className="hidden overflow-x-auto rounded-xl border border-slate-200 sm:block"><table className="w-full min-w-[560px] table-fixed border-collapse text-xs"><thead className="bg-sky-50/80 text-navy-900"><tr><th className="w-[19%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Date</th><th className="w-[27%] border-b border-slate-200 px-3 py-2.5 text-left font-bold uppercase">Customer</th><th className="w-[13%] border-b border-slate-200 px-3 py-2.5 text-center font-bold uppercase">Bars</th><th className="w-[21%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Amount</th><th className="w-[20%] border-b border-slate-200 px-3 py-2.5 text-right font-bold uppercase">Balance</th></tr></thead><tbody>{todaySales.slice(0, 10).map((sale) => { const bars = (sale.items || []).reduce((sum: number, item: any) => sum + getItemBarUsed(item), 0); return <tr key={sale._id} className="border-b border-slate-100 last:border-0 even:bg-slate-50/60 hover:bg-sky-50/70"><td className="px-3 py-2.5 text-slate-600">{formatDate(sale.date)}</td><td className="truncate px-3 py-2.5 font-semibold text-navy-900">{sale.customer?.name || sale.customerName || 'Customer'}</td><td className="px-3 py-2.5 text-center font-semibold">{bars}</td><td className="px-3 py-2.5 text-right font-semibold text-emerald-700">{formatCurrency(sale.totalAmount)}</td><td className="px-3 py-2.5 text-right font-semibold text-red-500">{formatCurrency(sale.balanceAmount)}</td></tr>; })}</tbody><tfoot className="border-t border-sky-200 bg-sky-50 font-bold text-navy-900"><tr><td colSpan={2} className="px-3 py-2.5 text-right">TOTAL</td><td className="px-3 py-2.5 text-center">{todaySales.reduce((sum, sale) => sum + (sale.items || []).reduce((itemSum: number, item: any) => itemSum + getItemBarUsed(item), 0), 0)}</td><td className="px-3 py-2.5 text-right text-emerald-700">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="px-3 py-2.5 text-right text-red-500">{formatCurrency(todaySales.reduce((sum, sale) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot></table></div>
-            </>
-          )}
+        <SectionHeading icon={isSuperAdmin ? FiShield : FiGrid} title={isSuperAdmin ? 'Super admin controls' : 'Branch shortcuts'} subtitle={isSuperAdmin ? 'Manage the network and review company-wide reporting.' : 'Open the tools used for daily branch operations.'} />
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {(isSuperAdmin ? [
+            { href: '/admin/branches', label: 'Manage branches', detail: `${branches.length} locations`, icon: FiGitBranch, tone: 'blue' },
+            { href: '/admin/admins', label: 'Branch admins', detail: 'Access and credentials', icon: FiUserCheck, tone: 'violet' },
+            { href: '/admin/reports', label: 'Network reports', detail: 'Compare performance', icon: FiBarChart2, tone: 'emerald' },
+            { href: '/admin/settings/company', label: 'Company settings', detail: 'Business configuration', icon: FiSettings, tone: 'amber' },
+          ] : [
+            { href: '/admin/production', label: 'Production', detail: 'Record daily output', icon: FiPackage, tone: 'blue' },
+            { href: '/admin/sales', label: 'Sales', detail: 'Create and review bills', icon: FiShoppingCart, tone: 'emerald' },
+            { href: '/admin/expenses', label: 'Expenses', detail: 'Record branch costs', icon: FiDollarSign, tone: 'red' },
+            { href: '/admin/trucks', label: 'Trucks', detail: 'Manage distribution', icon: FiTruck, tone: 'amber' },
+          ]).map((action) => <QuickAction key={action.href} {...action} />)}
         </div>
-
-        <div className="min-w-0 bg-sky-50/25 p-4 sm:p-5">
-          <h3 className="flex items-center gap-2 font-display text-base font-bold text-navy-900"><span className="grid h-8 w-8 place-items-center rounded-lg bg-sky-100"><FiPackage className="text-sky-600" /></span> Bar Stock Summary</h3>
-          <p className="mb-3 mt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">Opening stock + new production, sold and remaining bars</p>
-          <div className="grid gap-3">
-            <div className="rounded-2xl border border-sky-100 bg-gradient-to-br from-navy-900 via-sky-900 to-iceblue-700 p-4 text-white shadow-sm">
-              <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-sky-100">Total Available Bars</p>
-              <p className="mt-2 font-display text-3xl font-black">{formatBarQuantity(stockTotalBars) || '0'}</p>
-              <p className="mt-1 text-[10px] font-semibold text-sky-100">
-                Opening {formatBarQuantity(openingStockBars) || '0'} + New production {formatBarQuantity(newProductionBars) || '0'}
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Sold Bars</p>
-                <p className="mt-2 font-display text-2xl font-black text-emerald-700">{formatBarQuantity(stockSoldBars) || '0'}</p>
-              </div>
-              <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
-                <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Balance Bars</p>
-                <p className="mt-2 font-display text-2xl font-black text-amber-700">{formatBarQuantity(stockBalanceBars) || '0'}</p>
-              </div>
-            </div>
-            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <table className="w-full min-w-[420px] border-collapse text-xs">
-                <thead className="bg-amber-50 text-navy-900"><tr><th className="border-b border-slate-200 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Balance Source</th><th className="border-b border-slate-200 px-3 py-2.5 text-left text-[10px] font-bold uppercase">Driver</th><th className="border-b border-slate-200 px-3 py-2.5 text-right text-[10px] font-bold uppercase">Balance Bars</th></tr></thead>
-                <tbody>
-                  <tr><td className="border-b border-slate-100 px-3 py-2.5 font-semibold text-navy-900">Shop / Factory</td><td className="border-b border-slate-100 px-3 py-2.5 text-slate-500">-</td><td className={`border-b border-slate-100 px-3 py-2.5 text-right font-bold ${shopBalanceBars < 0 ? 'text-red-600' : 'text-amber-700'}`}>{formatBarQuantity(shopBalanceBars) || '0'}</td></tr>
-                  {todayTruckBalances.map((row) => <tr key={row.id}><td className="border-b border-slate-100 px-3 py-2.5 font-semibold text-navy-900">{row.name}</td><td className="border-b border-slate-100 px-3 py-2.5 text-slate-600">{row.driverName || '-'}</td><td className={`border-b border-slate-100 px-3 py-2.5 text-right font-bold ${row.balance < 0 ? 'text-red-600' : 'text-amber-700'}`}>{formatBarQuantity(row.balance) || '0'}</td></tr>)}
-                  {todayTruckBalances.length === 0 && <tr><td colSpan={3} className="px-3 py-4 text-center text-slate-500">No truck balance entries today.</td></tr>}
-                  <tr className="bg-slate-50"><td colSpan={2} className="px-3 py-2.5 font-black uppercase text-navy-900">Total Balance</td><td className="px-3 py-2.5 text-right font-black text-navy-900">{formatBarQuantity(shopBalanceBars + truckBalanceBars) || '0'}</td></tr>
-                </tbody>
-              </table>
-            </div>
-            <div className="relative h-[190px] rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-              {todayBarChart.length > 0 ? (
-                <>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie data={todayBarChart} dataKey="value" nameKey="name" innerRadius={52} outerRadius={76} paddingAngle={3} stroke="transparent">
-                        {todayBarChart.map((row) => <Cell key={row.name} fill={row.color} />)}
-                      </Pie>
-                      <Tooltip formatter={(value: any) => [`${value} bars`]} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                    <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Total Bars</p>
-                    <p className="font-display text-2xl font-black text-navy-900">{formatBarQuantity(stockTotalBars) || '0'}</p>
-                  </div>
-                </>
-              ) : <EmptyState text="No production recorded today." />}
-            </div>
-          </div>
-        </div>
-          </div>
-        </div>
-
-        <div>
-        <Panel title="Today's Pending Customer Payments" icon={FiClock}>
-          {dashboard.pendingPayments.length === 0 ? (
-            <EmptyState text="No pending payments." />
-          ) : (
-            <>
-            <div className="sm:hidden">
-              {dashboard.pendingPayments.map((sale: any, index: number) => (
-                <div key={sale._id} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
-                  <div className="flex min-w-0 items-start gap-2">
-                    <span className="w-7 shrink-0 pt-0.5 text-xs font-semibold tabular-nums text-navy-800/45">{String(index + 1).padStart(2, '0')}</span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold text-navy-900">{sale.customer?.name}</p>
-                      <p className="text-[10px] text-slate-400">{sale.customer?.phoneNumber || 'No phone'}</p>
-                      <p className="mt-0.5 text-[10px] font-medium text-slate-500">{formatDate(sale.date)} · {sale.truck?.truckName || '-'}</p>
-                    </div>
-                  </div>
-                  <div className="mt-1.5 grid grid-cols-3 gap-2 pl-9 text-right">
-                    <div>
-                      <p className="text-[10px] font-medium text-navy-800/45">Total</p>
-                      <p className="text-xs font-semibold text-navy-900">{formatCurrency(sale.totalAmount)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-medium text-navy-800/45">Paid</p>
-                      <p className="text-xs font-semibold text-emerald-600">{formatCurrency(sale.paidAmount)}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] font-medium text-navy-800/45">Balance</p>
-                      <p className="text-xs font-bold text-red-600">{formatCurrency(sale.balanceAmount)}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <div className="flex items-center justify-between gap-3 border-t border-sky-200 bg-sky-50 px-1 py-3">
-                <p className="text-xs font-bold uppercase text-navy-900">Total</p>
-                <div className="flex gap-3 text-right">
-                  <p className="text-xs font-bold text-navy-900">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.totalAmount || 0), 0))}</p>
-                  <p className="text-xs font-bold text-emerald-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.paidAmount || 0), 0))}</p>
-                  <p className="text-xs font-bold text-red-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.balanceAmount || 0), 0))}</p>
-                </div>
-              </div>
-            </div>
-            <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white sm:block">
-              <table className="w-full min-w-[760px] table-fixed border-collapse text-xs text-navy-900">
-                <thead className="bg-sky-50 text-navy-900">
-                  <tr>
-                    <th className="w-[7%] border-b border-r border-slate-200 px-2 py-3 text-center text-[10px] font-bold uppercase">S.No</th>
-                    {['Bill Date', 'Customer', 'Truck', 'Total', 'Paid', 'Balance'].map((heading) => <th key={heading} className={`border-b border-r border-slate-200 px-2 py-3 text-[10px] font-bold uppercase last:border-r-0 ${['Total', 'Paid', 'Balance'].includes(heading) ? 'text-right' : 'text-left'}`}>{heading}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {dashboard.pendingPayments.map((sale: any, index: number) => (
-                    <tr key={sale._id} className="bg-white even:bg-slate-50/70 hover:bg-sky-50/70">
-                      <td className="border-b border-r border-slate-200 px-2 py-3 text-center font-medium text-slate-500">{index + 1}</td>
-                      <td className="border-b border-r border-slate-200 px-2 py-3 text-slate-600">{formatDate(sale.date)}</td>
-                      <td className="break-words border-b border-r border-slate-200 px-2 py-3">
-                        <p className="font-semibold text-navy-900">{sale.customer?.name}</p>
-                        <p className="text-[10px] text-slate-400">{sale.customer?.phoneNumber || 'No phone'}</p>
-                      </td>
-                      <td className="break-words border-b border-r border-slate-200 px-2 py-3 text-slate-600">{sale.truck?.truckName || '-'}</td>
-                      <td className="border-b border-r border-slate-200 px-2 py-3 text-right font-semibold">{formatCurrency(sale.totalAmount)}</td>
-                      <td className="border-b border-r border-slate-200 px-2 py-3 text-right font-semibold text-emerald-600">{formatCurrency(sale.paidAmount)}</td>
-                      <td className="border-b border-slate-200 px-2 py-3 text-right font-bold text-red-600">{formatCurrency(sale.balanceAmount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot className="bg-sky-50 font-bold text-navy-900"><tr><td colSpan={4} className="border-r border-slate-200 px-3 py-3 text-right">TOTAL</td><td className="border-r border-slate-200 px-2 py-3 text-right">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.totalAmount || 0), 0))}</td><td className="border-r border-slate-200 px-2 py-3 text-right text-emerald-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.paidAmount || 0), 0))}</td><td className="px-2 py-3 text-right text-red-600">{formatCurrency(dashboard.pendingPayments.reduce((sum: number, sale: any) => sum + Number(sale.balanceAmount || 0), 0))}</td></tr></tfoot>
-              </table>
-            </div>
-            </>
-          )}
-        </Panel>
-        </div>
-      </section>
-
-      <section className="hidden">
-        <Panel title="Payments Collected Today" icon={FiDollarSign}>
-          {dashboard.recentPayments.length === 0 ? (
-            <EmptyState text="No old payments collected today." />
-          ) : (
-            <>
-            <div className="sm:hidden">
-              {dashboard.recentPayments.map((payment: any, index: number) => (
-                <div key={`${payment.saleId}-${index}`} className="border-b border-slate-100 px-1 py-3 last:border-b-0">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="min-w-0 flex-1 truncate text-sm font-bold text-navy-900">{payment.customer?.name}</p>
-                    <p className="shrink-0 text-sm font-bold tabular-nums text-emerald-600">{formatCurrency(payment.amount)}</p>
-                  </div>
-                  <p className="mt-0.5 text-[10px] text-navy-800/45">Bill: {formatDate(payment.billDate)}</p>
-                  <div className="mt-1.5 flex items-center justify-between gap-3">
-                    <p className="text-xs text-navy-800/55">{payment.truck?.truckName || '-'}</p>
-                    <p className="text-xs capitalize text-navy-800/55">{payment.paymentMode}</p>
-                    <p className="text-xs text-navy-800/55">{formatDate(payment.date)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="hidden overflow-x-auto sm:block">
-              <table className="table-base min-w-[620px]">
-                <thead>
-                  <tr>
-                    <th>Payment Date</th>
-                    <th>Customer</th>
-                    <th>Truck</th>
-                    <th>Mode</th>
-                    <th>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {dashboard.recentPayments.map((payment: any, index: number) => (
-                    <tr key={`${payment.saleId}-${index}`}>
-                      <td>{formatDate(payment.date)}</td>
-                      <td>
-                        <p className="font-medium">{payment.customer?.name}</p>
-                        <p className="text-xs text-navy-800/45">Bill: {formatDate(payment.billDate)}</p>
-                      </td>
-                      <td>{payment.truck?.truckName || '-'}</td>
-                      <td className="capitalize">{payment.paymentMode}</td>
-                      <td className="font-semibold text-emerald-600">{formatCurrency(payment.amount)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            </>
-          )}
-        </Panel>
-
-        <Panel title="Recent Customers" icon={FiUsers}>
-          {dashboard.recentCustomers.length === 0 ? (
-            <EmptyState text="No customers yet." />
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {dashboard.recentCustomers.map((customer: any) => (
-                <div key={customer._id} className="rounded-xl border border-iceblue-100 bg-iceblue-50/60 p-3">
-                  <div className="flex items-start gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-iceblue-600">
-                      <FiUsers />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold text-navy-900">{customer.name}</p>
-                      <p className="mt-1 text-xs text-navy-800/55">{customer.phoneNumber || 'No phone'}</p>
-                      <p className="mt-1 text-xs text-navy-800/45">
-                        {customer.truck?.truckName || 'Local'} · {formatDate(customer.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
       </section>
     </div>
   );
 }
 
-function CustomerCountCard({ counts }: { counts: { totalCustomers: number; localCustomers: number; truckCustomers: number } }) {
+const toneStyles: Record<string, { icon: string; text: string; border: string; soft: string }> = {
+  blue: { icon: 'bg-blue-500', text: 'text-blue-700', border: 'border-blue-100', soft: 'bg-blue-50' },
+  emerald: { icon: 'bg-emerald-500', text: 'text-emerald-700', border: 'border-emerald-100', soft: 'bg-emerald-50' },
+  red: { icon: 'bg-red-500', text: 'text-red-700', border: 'border-red-100', soft: 'bg-red-50' },
+  violet: { icon: 'bg-violet-500', text: 'text-violet-700', border: 'border-violet-100', soft: 'bg-violet-50' },
+  cyan: { icon: 'bg-cyan-500', text: 'text-cyan-700', border: 'border-cyan-100', soft: 'bg-cyan-50' },
+  indigo: { icon: 'bg-indigo-500', text: 'text-indigo-700', border: 'border-indigo-100', soft: 'bg-indigo-50' },
+  amber: { icon: 'bg-amber-500', text: 'text-amber-700', border: 'border-amber-100', soft: 'bg-amber-50' },
+};
+
+function SummaryCard({ label, value, suffix, icon: Icon, tone, href, helper }: any) {
+  const palette = toneStyles[tone] || toneStyles.blue;
   return (
-    <Link
-      href="/admin/customers"
-      className="relative flex min-h-[112px] min-w-0 flex-col justify-center overflow-hidden rounded-2xl border border-teal-200 bg-gradient-to-br from-teal-50 to-white px-4 py-4 shadow-sm transition hover:-translate-y-0.5 hover:border-teal-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-teal-400"
-    >
-      <span className="absolute inset-y-0 left-0 w-1 bg-teal-500" />
-      <div className="mb-1.5 flex items-center justify-between gap-2">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Total Customers</p>
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-500 text-white shadow-sm"><FiUsers size={13} /></span>
+    <Link href={href} className={`group relative overflow-hidden rounded-2xl border bg-white p-4 shadow-[0_14px_35px_-28px_rgba(15,43,61,0.45)] transition hover:-translate-y-0.5 hover:shadow-md ${palette.border}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{label}</p><p className={`mt-2 truncate text-2xl font-black tracking-tight ${palette.text}`}>{value}{suffix && <span className="ml-1 text-[10px] font-bold text-slate-400">{suffix}</span>}</p><p className="mt-1 truncate text-[10px] text-slate-500">{helper}</p></div>
+        <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-white shadow-sm ${palette.icon}`}><Icon size={15} /></span>
       </div>
-      <div className="grid grid-cols-3 divide-x divide-teal-200">
-        <div className="pr-2">
-          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Total</p>
-          <p className="font-display text-2xl font-black text-teal-700">{counts.totalCustomers}</p>
-        </div>
-        <div className="px-2">
-          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Local</p>
-          <p className="font-display text-2xl font-black text-navy-900">{counts.localCustomers}</p>
-        </div>
-        <div className="pl-2">
-          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-500">Truck</p>
-          <p className="font-display text-2xl font-black text-navy-900">{counts.truckCustomers}</p>
-        </div>
-      </div>
+      <FiArrowRight className="absolute bottom-4 right-4 translate-x-2 text-slate-300 opacity-0 transition group-hover:translate-x-0 group-hover:opacity-100" />
     </Link>
   );
 }
 
-function DashboardSummaryCard({ label, value, suffix, danger = false, positive = false, icon: Icon, highlight, tone = 'blue', href }: { label: string; value: string | number; suffix?: string; danger?: boolean; positive?: boolean; icon?: any; highlight?: 'high' | 'low'; tone?: 'blue' | 'emerald' | 'cyan' | 'violet' | 'indigo' | 'red' | 'amber' | 'orange'; href: string }) {
-  const toneColors = {
-    blue: { icon: 'bg-blue-500', text: 'text-blue-700', card: 'border-blue-200 from-blue-50 to-white', accent: 'bg-blue-500' },
-    emerald: { icon: 'bg-emerald-500', text: 'text-emerald-700', card: 'border-emerald-200 from-emerald-50 to-white', accent: 'bg-emerald-500' },
-    cyan: { icon: 'bg-cyan-500', text: 'text-cyan-700', card: 'border-cyan-200 from-cyan-50 to-white', accent: 'bg-cyan-500' },
-    violet: { icon: 'bg-violet-500', text: 'text-violet-700', card: 'border-violet-200 from-violet-50 to-white', accent: 'bg-violet-500' },
-    indigo: { icon: 'bg-indigo-500', text: 'text-indigo-700', card: 'border-indigo-200 from-indigo-50 to-white', accent: 'bg-indigo-500' },
-    red: { icon: 'bg-red-500', text: 'text-red-700', card: 'border-red-200 from-red-50 to-white', accent: 'bg-red-500' },
-    amber: { icon: 'bg-amber-500', text: 'text-amber-700', card: 'border-amber-200 from-amber-50 to-white', accent: 'bg-amber-500' },
-    orange: { icon: 'bg-orange-500', text: 'text-orange-700', card: 'border-orange-200 from-orange-50 to-white', accent: 'bg-orange-500' },
-  };
-  const palette = toneColors[tone];
-
+function BranchCard({ snapshot, onView, lowStockThreshold }: { snapshot: BranchSnapshot; onView: () => void; lowStockThreshold: number }) {
+  const { branch } = snapshot;
+  const stockLow = lowStockThreshold > 0 && snapshot.stock <= lowStockThreshold;
   return (
-    <Link href={href} className={`relative flex min-h-[112px] min-w-0 flex-col justify-center gap-2 overflow-hidden rounded-2xl border bg-gradient-to-br px-4 py-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-current ${palette.card}`}>
-      <span className={`absolute inset-y-0 left-0 w-1 ${danger ? 'bg-red-500' : positive ? 'bg-emerald-500' : palette.accent}`} />
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">{label}</p>
-        {Icon && (
-          <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-white shadow-sm ${palette.icon}`}>
-            <Icon size={13} />
-          </span>
-        )}
+    <article className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)] transition hover:-translate-y-1 hover:border-iceblue-200 hover:shadow-md">
+      <div className={`h-1.5 ${branch.isActive ? 'bg-gradient-to-r from-emerald-400 to-iceblue-400' : 'bg-slate-300'}`} />
+      <div className="flex items-start justify-between gap-3 p-5 pb-4">
+        <div className="flex min-w-0 items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-iceblue-50 text-xs font-black text-iceblue-700 ring-1 ring-iceblue-100">{branch.code.slice(0, 2).toUpperCase()}</span><div className="min-w-0"><p className="text-[9px] font-black uppercase tracking-[0.16em] text-slate-400">{branch.code}</p><h3 className="truncate text-base font-extrabold text-navy-900">{branch.name}</h3></div></div>
+        <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[9px] font-black uppercase ${branch.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className={`h-1.5 w-1.5 rounded-full ${branch.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />{branch.isActive ? 'Live' : 'Offline'}</span>
       </div>
-
-      <div>
-        <p className={`truncate font-display text-2xl font-black ${danger ? 'text-red-600' : positive ? 'text-emerald-600' : palette.text}`}>
-          {value}
-          {suffix && <span className="ml-1 text-xs font-medium text-navy-800/40">{suffix}</span>}
-        </p>
-        {highlight && (
-          <span className={`mt-1.5 inline-flex rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-white ${palette.icon}`}>
-            {highlight} sales
-          </span>
-        )}
+      <div className="grid grid-cols-2 border-y border-slate-100 bg-slate-50/60 sm:grid-cols-4 md:grid-cols-2 xl:grid-cols-4">
+        <BranchMetric label="Production" value={`${formatBarQuantity(snapshot.production) || 0}`} />
+        <BranchMetric label="Sales" value={formatCurrency(snapshot.sales)} positive />
+        <BranchMetric label="Expenses" value={formatCurrency(snapshot.expenses)} danger={snapshot.expenses > snapshot.sales && snapshot.expenses > 0} />
+        <BranchMetric label="Stock" value={`${formatBarQuantity(snapshot.stock) || 0}`} danger={stockLow} />
       </div>
-    </Link>
+      <div className="flex items-center gap-3 p-4">
+        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-navy-900 text-white"><FiUserCheck size={13} /></span>
+        <div className="min-w-0 flex-1"><p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">Administrator</p><p className="truncate text-xs font-bold text-navy-900">{branch.admin?.displayName || 'Not assigned'}</p></div>
+        <button type="button" onClick={onView} className="inline-flex items-center gap-1.5 rounded-xl bg-iceblue-50 px-3 py-2 text-[10px] font-bold text-iceblue-700 transition hover:bg-iceblue-100">View branch <FiArrowRight /></button>
+      </div>
+    </article>
   );
 }
 
-function metricPercent(value: number, total: number) {
-  if (!total) return 0;
-  return Math.min(100, Math.max(0, Math.round((Number(value || 0) / Number(total)) * 100)));
+function BranchMetric({ label, value, positive, danger }: { label: string; value: string; positive?: boolean; danger?: boolean }) {
+  return <div className="border-b border-r border-slate-100 px-2 py-3 text-center last:border-r-0 sm:border-b-0 md:border-b xl:border-b-0"><p className="text-[8px] font-black uppercase tracking-wider text-slate-400">{label}</p><p className={`mt-1 truncate text-[11px] font-extrabold ${danger ? 'text-red-600' : positive ? 'text-emerald-700' : 'text-navy-900'}`}>{value}</p></div>;
 }
 
-function SummaryChartTooltip({ active, payload }: any) {
-  if (!active || !payload?.length) return null;
-  const item = payload[0]?.payload;
-  if (!item) return null;
+function Panel({ children }: { children: React.ReactNode }) {
+  return <div className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">{children}</div>;
+}
 
+function SectionHeading({ icon: Icon, title, subtitle, action }: { icon: any; title: string; subtitle: string; action?: React.ReactNode }) {
+  return <div className="mb-4 flex items-center justify-between gap-4 px-1"><div className="flex items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-iceblue-600 shadow-sm ring-1 ring-slate-100"><Icon /></span><div><h2 className="font-extrabold text-navy-900">{title}</h2><p className="text-xs text-slate-500">{subtitle}</p></div></div>{action}</div>;
+}
+
+function AlertRow({ title, detail, tone, href }: { title: string; detail: string; tone: 'danger' | 'warning' | 'info'; href: string }) {
+  const palette = tone === 'danger' ? 'bg-red-50 text-red-600 ring-red-100' : tone === 'warning' ? 'bg-amber-50 text-amber-600 ring-amber-100' : 'bg-iceblue-50 text-iceblue-600 ring-iceblue-100';
+  return <Link href={href} className="group flex items-start gap-3 rounded-2xl p-3 transition hover:bg-slate-50"><span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${palette}`}><FiAlertCircle /></span><div className="min-w-0 flex-1"><p className="text-xs font-extrabold text-navy-900">{title}</p><p className="mt-1 text-[10px] leading-4 text-slate-500">{detail}</p></div><FiArrowRight className="mt-2 shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-iceblue-600" /></Link>;
+}
+
+function StockMini({ label, value, tone }: { label: string; value: number; tone: 'blue' | 'emerald' | 'amber' }) {
+  const classes = tone === 'blue' ? 'bg-blue-50 text-blue-700' : tone === 'emerald' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
+  return <div className={`rounded-xl px-2 py-3 text-center ${classes}`}><p className="text-[8px] font-black uppercase tracking-wider opacity-70">{label}</p><p className="mt-1 text-lg font-black">{formatBarQuantity(value) || '0'}</p></div>;
+}
+
+function ActivityRow({ activity }: { activity: ActivityItem }) {
+  const icon = activity.type === 'sale' ? FiShoppingCart : activity.type === 'expense' ? FiDollarSign : FiPackage;
+  const Icon = icon;
+  const palette = activity.type === 'sale' ? 'bg-emerald-50 text-emerald-600' : activity.type === 'expense' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600';
+  const valueColor = activity.type === 'expense' ? 'text-red-600' : activity.type === 'sale' ? 'text-emerald-700' : 'text-blue-700';
   return (
-    <div className="min-w-[170px] whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2.5 shadow-xl">
-      <div className="flex items-center gap-2">
-        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: item.color }} />
-        <p className="text-xs font-bold text-slate-600">{item.name}</p>
-      </div>
-      <p className="mt-1.5 font-display text-base font-black text-navy-900">{item.displayValue}</p>
+    <div className="flex items-center gap-3 py-3.5">
+      <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ${palette}`}><Icon size={14} /></span>
+      <div className="min-w-0 flex-1"><p className="truncate text-xs font-extrabold text-navy-900">{activity.title}</p><p className="mt-0.5 truncate text-[10px] text-slate-500">{activity.detail}{activity.branch ? ` · ${activity.branch}` : ''}</p></div>
+      <div className="shrink-0 text-right"><p className={`text-[11px] font-extrabold ${valueColor}`}>{activity.value}</p><p className="mt-0.5 text-[9px] text-slate-400">{new Date(activity.date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</p></div>
     </div>
   );
 }
 
-function renderCollectionLabel({ x, y, percent }: { x: number; y: number; percent: number }) {
-  if (!percent) return null;
-  return <g><circle cx={x} cy={y} r="18" fill="white" stroke="#e2e8f0" strokeWidth="1" /><text x={x} y={y} dy="0.35em" textAnchor="middle" fill="#0f172a" fontSize="9" fontWeight="800">{`${Math.round(percent * 100)}%`}</text></g>;
+function QuickAction({ href, label, detail, icon: Icon, tone }: any) {
+  const palette = toneStyles[tone] || toneStyles.blue;
+  return <Link href={href} className={`group flex items-center gap-3 rounded-2xl border bg-white p-4 transition hover:-translate-y-0.5 hover:shadow-md ${palette.border}`}><span className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl text-white ${palette.icon}`}><Icon /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-extrabold text-navy-900">{label}</span><span className="mt-0.5 block truncate text-[10px] text-slate-500">{detail}</span></span><FiArrowRight className="shrink-0 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-iceblue-600" /></Link>;
 }
 
-function TallyValue({ value, label, emphasis = false, danger = false }: { value: string | number; label: string; emphasis?: boolean; danger?: boolean }) {
-  return <div className={`flex min-h-[64px] min-w-0 flex-1 flex-col items-center justify-center rounded-xl border px-3 py-2 text-center sm:min-w-[105px] ${danger ? 'border-red-200 bg-red-50' : emphasis ? 'border-iceblue-200 bg-white shadow-sm' : 'border-white/80 bg-white/70'}`}><span className={`font-display text-xl font-black ${danger ? 'text-red-600' : emphasis ? 'text-iceblue-700' : 'text-navy-900'}`}>{value}</span><span className="mt-0.5 text-[9px] font-bold uppercase tracking-wider text-navy-800/45">{label}</span></div>;
-}
-
-function TallyOperator({ symbol }: { symbol: '=' | '+' }) {
-  return <span className="grid min-h-[64px] w-7 shrink-0 place-items-center font-display text-lg font-black text-navy-800/35">{symbol}</span>;
-}
-
-function BranchMetric({ label, value, tone }: { label: string; value: string | number; tone?: 'success' | 'warning' | 'danger' }) {
-  const valueColor = tone === 'success' ? 'text-emerald-600' : tone === 'warning' ? 'text-amber-600' : tone === 'danger' ? 'text-red-600' : 'text-navy-900';
-  return <div className="min-w-0 bg-white px-3 py-3 text-center"><p className="text-[9px] font-bold uppercase tracking-wider text-navy-800/40">{label}</p><p className={`mt-1 truncate font-display text-base font-black ${valueColor}`}>{value}</p></div>;
-}
-
-function DailyMetric({ label, value, progress, trend, danger = false, helper }: { label: string; value: string | number; progress: number; trend: 'up' | 'down'; danger?: boolean; helper?: string }) {
-  const accent = danger ? '#ef4444' : trend === 'up' ? '#10b981' : '#f59e0b';
-  const TrendIcon = trend === 'up' ? FiArrowUpRight : FiArrowDownRight;
-
-  return (
-    <div className="flex h-full min-h-[132px] items-center gap-3 overflow-hidden rounded-2xl border border-iceblue-100 bg-gradient-to-br from-white to-iceblue-50/70 p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-      <div className="relative grid h-20 w-20 shrink-0 place-items-center rounded-full" style={{ background: `conic-gradient(${accent} ${progress * 3.6}deg, #e2e8f0 0deg)` }}>
-        <span className="grid h-14 w-14 place-items-center rounded-full border border-slate-200 bg-white text-sm font-black text-navy-900">{progress}%</span>
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            <p className="min-h-[28px] text-[10px] font-semibold uppercase leading-3.5 tracking-[0.12em] text-slate-500">{label}</p>
-            <p className={`mt-2 break-words text-xl font-semibold leading-none ${danger ? 'text-red-600' : 'text-navy-900'}`}>{value}</p>
-          </div>
-          <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full ${trend === 'up' && !danger ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
-            <TrendIcon size={17} />
-          </span>
-        </div>
-        {helper && <p className="mt-1 text-xs leading-4 text-slate-500">{helper}</p>}
-      </div>
-    </div>
-  );
-}
-
-function Panel({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="-mx-4 -mt-4 mb-4 flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
-        <p className="font-display text-sm font-semibold text-navy-900">{title}</p>
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-navy-700">
-          <Icon size={15} />
-        </span>
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function EmptyState({ text, icon: Icon }: { text?: string; icon?: any }) {
-  return (
-    <div className="grid min-h-[220px] place-items-center gap-3 rounded-xl border border-dashed border-iceblue-100 bg-iceblue-50/50 px-4 text-center">
-      {Icon && (
-        <span className="grid h-14 w-14 place-items-center rounded-2xl bg-iceblue-100/70 text-2xl text-iceblue-400">
-          <Icon />
-        </span>
-      )}
-      {text && <p className="text-sm font-medium text-navy-800/50">{text}</p>}
-    </div>
-  );
-}
-
-function IceBlockIcon({ gradientId, className }: { gradientId: string; className?: string }) {
-  return (
-    <svg viewBox="0 0 48 48" className={className} xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#f0fbff" />
-          <stop offset="45%" stopColor="#bae6fd" />
-          <stop offset="100%" stopColor="#38bdf8" />
-        </linearGradient>
-      </defs>
-      {/* top face (pseudo-3D) */}
-      <path d="M11 8 L18 3 L42 3 L36 8 Z" fill="#e0f7ff" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
-      {/* right face (pseudo-3D) */}
-      <path d="M36 8 L42 3 L42 30 L36 36 Z" fill="#7dd3fc" stroke="#0284c7" strokeWidth="1" strokeLinejoin="round" />
-      {/* block body (front face) */}
-      <rect x="6" y="8" width="30" height="30" rx="4" fill={`url(#${gradientId})`} stroke="#0284c7" strokeWidth="1.5" />
-      {/* crack lines */}
-      <path d="M13 8 L19 20 L12 27" stroke="#0ea5e9" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.55" />
-      <path d="M29 12 L24 23 L31 30" stroke="#0ea5e9" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity="0.45" />
-      {/* shine */}
-      <rect x="10" y="12" width="5" height="14" rx="2.5" fill="white" opacity="0.5" />
-    </svg>
-  );
+function EmptyState({ icon: Icon, title, text, compact = false }: { icon: any; title: string; text: string; compact?: boolean }) {
+  return <div className={`grid place-items-center px-5 text-center ${compact ? 'min-h-32' : 'min-h-[280px]'}`}><div><span className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-iceblue-50 text-xl text-iceblue-500"><Icon /></span><h3 className="mt-3 text-sm font-extrabold text-navy-900">{title}</h3><p className="mt-1 text-xs leading-5 text-slate-500">{text}</p></div></div>;
 }

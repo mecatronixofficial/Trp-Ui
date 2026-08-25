@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
   FiGrid, FiTruck, FiUsers, FiBox, FiShoppingCart,
@@ -70,7 +71,7 @@ export default function Sidebar() {
       <div className="border-t border-white/10 px-4 py-4">
         <div className="mb-2 flex items-center gap-3 px-1">
           <span className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${isSuperAdmin ? 'bg-gradient-to-br from-amber-400 to-amber-600' : 'bg-white/15'}`}>
-            {initial}
+            {user?.profileImage ? <Image src={user.profileImage} alt={`${userName} profile`} width={36} height={36} unoptimized className="h-9 w-9 rounded-full object-cover" /> : initial}
             {isSuperAdmin && (
               <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-white text-amber-600 ring-1 ring-amber-200">
                 <FiShield size={9} />

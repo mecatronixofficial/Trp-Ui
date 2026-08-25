@@ -7,14 +7,18 @@ import {
   FiActivity,
   FiAlertCircle,
   FiBox,
+  FiCalendar,
   FiCheck,
   FiCheckCircle,
   FiEdit2,
   FiDollarSign,
   FiGitBranch,
+  FiGrid,
+  FiLock,
   FiPlus,
   FiRefreshCw,
   FiSettings,
+  FiShield,
   FiTrash2,
   FiTruck,
 } from "react-icons/fi";
@@ -150,7 +154,6 @@ export default function ProductionPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const loadInFlightRef = useRef<Promise<void> | null>(null);
   const loadDayRef = useRef("");
-  const midnightClosingRef = useRef(false);
   const autoOpenProductionRef = useRef(false);
   const isSuperAdmin = user?.role === "super_admin";
   const canManageProduction = !isSuperAdmin || Boolean(selectedBranch);
@@ -285,7 +288,6 @@ export default function ProductionPage() {
 
   useEffect(() => {
     void load(true);
-    void fetchNextBox().catch(() => setBoxInfo(null));
   }, [load]);
 
   useEffect(() => {
@@ -326,9 +328,7 @@ export default function ProductionPage() {
     const carriedStock = todaysClosing
       ? Math.max(0, Number(todaysClosing.openingBalance || 0))
       : getOpeningProductionStock(stockEntries, today, indiaDateKey, undefined, records);
-    const openingStock = madeToday > 0
-      ? carriedStock
-      : 0;
+    const openingStock = carriedStock;
     const produced = madeToday + openingStock;
     const shopSold = sales
       .filter((sale) => indiaDateKey(sale.date) === today && !sale.truck && isCurrentSessionEntry(sale))
@@ -366,7 +366,7 @@ export default function ProductionPage() {
       produced,
       sold: shopSold,
       wasted,
-      stocked: madeToday > 0 ? movedToStock : carriedStock + movedToStock,
+      stocked: movedToStock,
       movedToStock,
       outsourced,
       assigned,
@@ -481,7 +481,7 @@ export default function ProductionPage() {
       const carriedStock = closing
         ? Math.max(0, Number(closing.openingBalance || 0))
         : getOpeningProductionStock(stockEntries, activeDay, indiaDateKey, branch._id, records);
-      const openingStock = produced > 0 ? carriedStock : 0;
+      const openingStock = carriedStock;
       const availableProduction = produced + openingStock;
       const branchSales = sales.filter((sale) => indiaDateKey(sale.date) === activeDay && belongsToBranch(sale));
       const liveBranchSales = closing?.status === "closed" ? branchSales : branchSales.filter(inActiveSession);
@@ -1230,35 +1230,26 @@ export default function ProductionPage() {
   };
 
   useEffect(() => {
-    const closeAtMidnight = async () => {
+    const moveToNewDay = () => {
       const currentIndiaDay = todayIndiaISO();
-      if (currentIndiaDay === activeDay || midnightClosingRef.current) return;
-      midnightClosingRef.current = true;
-      try {
-        const needsClosing = canManageProduction && Boolean(openClosing) && !dayClosed;
-        const closed = needsClosing ? await closeDay(openClosing) : true;
-        if (closed) {
-          setActiveDay(currentIndiaDay);
-          setDate(currentIndiaDay);
-          setStockDate(currentIndiaDay);
-          setOutsourceDate(currentIndiaDay);
-        }
-      } finally {
-        midnightClosingRef.current = false;
-      }
+      if (currentIndiaDay === activeDay) return;
+      setActiveDay(currentIndiaDay);
+      setDate(currentIndiaDay);
+      setStockDate(currentIndiaDay);
+      setOutsourceDate(currentIndiaDay);
     };
     const handleVisibility = () => {
-      if (document.visibilityState === "visible") void closeAtMidnight();
+      if (document.visibilityState === "visible") moveToNewDay();
     };
-    const dayWatcher = window.setInterval(() => void closeAtMidnight(), 30_000);
-    window.addEventListener("focus", closeAtMidnight);
+    const dayWatcher = window.setInterval(moveToNewDay, 30_000);
+    window.addEventListener("focus", moveToNewDay);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.clearInterval(dayWatcher);
-      window.removeEventListener("focus", closeAtMidnight);
+      window.removeEventListener("focus", moveToNewDay);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [activeDay, canManageProduction, dayClosed, openClosing]);
+  }, [activeDay]);
 
   const reopenDay = async () => {
     if (!currentClosing || !canManageProduction) return;
@@ -1287,35 +1278,33 @@ export default function ProductionPage() {
     closingError?.unclosedDrivers ||
     closingError?.message?.unclosedDrivers ||
     [];
+  const overallView = Boolean(isSuperAdmin && !selectedBranch);
+  const scopeName = overallView ? "All branches" : activeBranch?.name || "Assigned branch";
+  const activeDayLabel = formatDate(`${activeDay}T12:00:00+05:30`);
   return (
-    <div className="space-y-4 pb-16 sm:pb-20">
-      {isSuperAdmin && (
-        <section className="flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Production view</p>
-              <p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : "Overall — all branches"}</p>
-              {!activeBranch && <p className="mt-0.5 text-xs text-navy-800/45">Combined production details are read-only. Select a branch to manage production.</p>}
+    <div className="space-y-6 pb-16 sm:pb-20">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100">
+              {isSuperAdmin ? <FiShield /> : <FiLock />}
+              {isSuperAdmin ? "Super admin production centre" : "Branch production workspace"}
+            </div>
+            <h1 className="text-3xl font-black tracking-[-0.04em] sm:text-4xl">Production control</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              {overallView
+                ? `Combined production, stock, wastage, and financial position across ${branches.length} branches.`
+                : `Manage production, shop stock, truck distribution, sales, and daily closing for ${scopeName}.`}
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+              <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiCalendar className="text-emerald-300" />{activeDayLabel}</span>
+              <span className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-bold ${dayClosed ? "border-emerald-300/20 bg-emerald-400/10 text-emerald-200" : "border-amber-300/20 bg-amber-400/10 text-amber-200"}`}><span className={`h-2 w-2 rounded-full ${dayClosed ? "bg-emerald-400" : "bg-amber-400"}`} />{dayClosed ? "Day closed" : "Operations open"}</span>
             </div>
           </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change production branch" value={selectedBranch || ""} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all branches</option>
-            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
-        </section>
-      )}
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-r from-navy-900 via-sky-900 to-iceblue-700 text-white shadow-lg shadow-iceblue-900/10">
-        <div className="flex flex-col gap-4 px-4 py-5 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-start gap-3">
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white/10 text-xl ring-1 ring-white/15"><FiActivity /></span>
-            <div className="min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100/80">Factory operations</p>
-              <h1 className="mt-0.5 font-display text-xl font-bold sm:text-2xl">Production Control</h1>
-              <p className="mt-1 text-sm text-iceblue-50/80">Production, shop stock, truck distribution, sales and daily closing in one view.</p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex flex-wrap gap-2 xl:max-w-xl xl:justify-end">
             {dayClosed ? (
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => currentClosing && setCloseTarget(currentClosing)} disabled={!canManageProduction || !currentClosing} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-emerald-400/15 px-3 text-xs font-bold text-emerald-100 ring-1 ring-emerald-300/30 transition hover:bg-emerald-400/25 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1356,11 +1345,35 @@ export default function ProductionPage() {
             </button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 bg-black/10 px-4 py-2 text-[11px] text-iceblue-50/70 sm:px-6">
-          <span>Automatic truck status refresh runs once per minute while this page is visible.</span>
+        <div className="relative mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-4 text-[10px] text-slate-400">
+          <span>Truck status refreshes automatically once per minute.</span>
           <span>{lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "Loading latest data..."}</span>
         </div>
       </section>
+
+      {isSuperAdmin ? (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => changeBranch("")} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? "bg-navy-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-navy-900"}`}><FiGrid /> All branches <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? "bg-white/10" : "bg-slate-100"}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.filter((branch) => branch.isActive !== false).map((branch) => (
+              <button key={branch._id} type="button" onClick={() => changeBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? "bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100" : "text-slate-500 hover:bg-slate-50 hover:text-navy-900"}`}><span className="h-2 w-2 rounded-full bg-emerald-500" />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm"><FiCheckCircle /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Assigned branch active</p><p className="mt-0.5 text-[10px] text-slate-500">Production entries, truck movements, and closing records are automatically scoped to your branch.</p></div>
+        </section>
+      )}
+
+      {overallView && (
+        <section className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-amber-600 shadow-sm"><FiLock /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Network production view is read-only</p><p className="mt-1 text-[10px] leading-4 text-slate-600">Review combined production and branch comparison below. Select a branch before adding production, wastage, stock, truck assignments, or closing the day.</p></div>
+        </section>
+      )}
 
       {loadError && (
         <div role="alert" className="flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 sm:flex-row sm:items-center sm:justify-between">
@@ -1378,7 +1391,12 @@ export default function ProductionPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-8">
+      <section>
+        <div className="mb-4 flex items-center gap-3 px-1">
+          <span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-iceblue-600 shadow-sm ring-1 ring-slate-100"><FiActivity /></span>
+          <div><h2 className="font-extrabold text-navy-900">Production snapshot</h2><p className="text-xs text-slate-500">Live bar movement for {scopeName}.</p></div>
+        </div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4 2xl:grid-cols-8">
         <ProductionSummary
           label={dayClosed ? "Production Bars" : "Produced Today"}
           value={fmtBars(liveSummary.produced)}
@@ -1421,13 +1439,14 @@ export default function ProductionPage() {
           value={!canManageProduction || closingBoxNumber == null ? "-" : fmtBars(closingBoxNumber)}
           icon={<FiBox />}
         />
-      </div>
+        </div>
+      </section>
 
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+      <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div>
-            <h2 className="flex items-center gap-2 font-display text-lg font-bold text-navy-900"><FiDollarSign className="text-emerald-600" /> Today Financial Check</h2>
-            <p className="mt-1 text-sm text-navy-800/50">Matches the Sales and Expenses pages. Profit is collection minus expenses.</p>
+            <h2 className="flex items-center gap-2 font-extrabold text-navy-900"><span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600"><FiDollarSign /></span> Today&apos;s financial position</h2>
+            <p className="mt-1 text-xs text-slate-500">Sales, collections, outstanding payments, expenses, and net result.</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link href="/admin/sales" className="btn-secondary px-3 py-1.5 text-xs">Check Sales</Link>
@@ -1436,7 +1455,7 @@ export default function ProductionPage() {
           </div>
         </div>
         {expenseLoadError && <p className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">Expense check unavailable: {expenseLoadError}</p>}
-        <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6 lg:p-5">
           <FinancialMetric label="Sales Count" value={String(financialSummary.salesCount)} />
           <FinancialMetric label="Total Sales" value={formatCurrency(financialSummary.salesAmount)} />
           <FinancialMetric label="Collection" value={formatCurrency(financialSummary.collectionAmount)} positive />
@@ -1447,10 +1466,10 @@ export default function ProductionPage() {
       </section>
 
       {isSuperAdmin && !selectedBranch && (
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-200 px-4 py-3 sm:px-5">
-            <h2 className="font-display text-lg font-bold text-navy-900">All Branch Production Today</h2>
-            <p className="mt-1 text-sm text-navy-800/50">Combined view of every active branch. Select a branch above to add, edit, assign bars, or close production.</p>
+        <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+          <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-iceblue-50 text-iceblue-600"><FiGitBranch /></span>
+            <div><h2 className="font-extrabold text-navy-900">Branch production comparison</h2><p className="mt-0.5 text-xs text-slate-500">Today&apos;s output, stock, wastage, expenses, and closing status.</p></div>
           </div>
           <div className="sm:hidden">
             {overallBranchRows.map((branch) => (
@@ -3646,22 +3665,23 @@ function ProductionSummary({
 }) {
   return (
     <div
-      className={`flex min-w-0 items-center gap-2.5 rounded-xl border bg-white px-3 py-2.5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${danger ? "border-red-200" : "border-iceblue-100"}`}
+      className={`relative min-w-0 overflow-hidden rounded-2xl border bg-white p-4 shadow-[0_14px_35px_-28px_rgba(15,43,61,0.45)] transition hover:-translate-y-0.5 hover:shadow-md ${danger ? "border-red-100" : "border-iceblue-100"}`}
     >
+      <span className={`absolute -right-6 -top-6 h-16 w-16 rounded-full ${danger ? "bg-red-50" : "bg-iceblue-50"}`} />
+      <div className="relative flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-[8px] font-black uppercase tracking-[0.14em] text-slate-400">
+            {label}
+          </p>
+          <p className={`mt-2 truncate text-xl font-black tracking-tight ${danger ? "text-red-600" : "text-navy-900"}`}>
+            {value}{value !== "-" && <span className="ml-1 text-[9px] font-bold text-slate-400">bars</span>}
+          </p>
+        </div>
       <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sm ${danger ? "bg-red-50 text-red-600" : "bg-iceblue-50 text-iceblue-700"}`}
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm text-white shadow-sm ${danger ? "bg-red-500" : "bg-iceblue-500"}`}
       >
         {icon}
       </span>
-      <div className="min-w-0">
-        <p className="truncate text-[9px] font-bold uppercase tracking-wide text-navy-800/45">
-          {label}
-        </p>
-        <p
-          className={`truncate font-display text-base font-bold ${danger ? "text-red-600" : "text-navy-900"}`}
-        >
-          {value}
-        </p>
       </div>
     </div>
   );

@@ -1,8 +1,26 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiArrowRight, FiDollarSign, FiEdit2, FiGitBranch, FiPlus, FiTrash2, FiUserCheck, FiUsers } from 'react-icons/fi';
+import {
+  FiAlertTriangle,
+  FiArrowRight,
+  FiCheckCircle,
+  FiDollarSign,
+  FiEdit2,
+  FiGitBranch,
+  FiGrid,
+  FiLock,
+  FiPhone,
+  FiPlus,
+  FiRefreshCcw,
+  FiSearch,
+  FiShield,
+  FiTrash2,
+  FiTruck,
+  FiUserCheck,
+  FiUsers,
+} from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatCurrency, formatDate } from '../../../lib/api';
 import Modal from '../../../components/Modal';
@@ -105,14 +123,23 @@ export default function WorkersPage() {
   const [roleMode, setRoleMode] = useState('');
   const [buyingForm, setBuyingForm] = useState<any>(emptyBuyingForm);
   const [error, setError] = useState('');
+  const [pageError, setPageError] = useState('');
   const [recentBuying, setRecentBuying] = useState<any[]>([]);
+  const [search, setSearch] = useState('');
+  const [assignmentFilter, setAssignmentFilter] = useState<'all' | 'assigned' | 'available'>('all');
+  const [submitting, setSubmitting] = useState(false);
+  const [removingId, setRemovingId] = useState('');
   const isSuperAdmin = user?.role === 'super_admin';
-  const canManageWorkers = !isSuperAdmin || Boolean(selectedBranch);
+  const canManageWorkers = Boolean(selectedBranch);
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const assignedBranch = workers.find((worker) => worker.branch && typeof worker.branch === 'object')?.branch as Branch | undefined;
+  const overallView = Boolean(isSuperAdmin && !selectedBranch);
+  const scopeBranch = activeBranch || assignedBranch;
+  const scopeName = scopeBranch ? `${scopeBranch.name} (${scopeBranch.code})` : isSuperAdmin ? 'All branches' : 'Assigned branch';
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
-    setError('');
+    setPageError('');
     try {
       const { from, to } = monthRange(month);
       const [year, monthNumber] = month.split('-');
@@ -156,27 +183,37 @@ export default function WorkersPage() {
         .sort((a, b) => new Date(b.entryDateTime || b.date).getTime() - new Date(a.entryDateTime || a.date).getTime()));
       setAdvanceExpenses(advanceRows.filter(isAdvanceExpense));
     } catch (err: any) {
-      setError(err?.response?.data?.message || 'Could not load workers');
+      setPageError(err?.response?.data?.message || 'Could not load workers');
     } finally {
       setLoading(false);
     }
-  };
+  }, [month]);
 
   useEffect(() => {
     if (authLoading) return;
-    const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
-    setSelectedBranch(isSuperAdmin ? storedBranch : (user?.branch || ''));
     if (isSuperAdmin) {
       api.get('/branches')
-        .then(({ data }) => setBranches(Array.isArray(data) ? data : []))
-        .catch(() => setBranches([]));
+        .then(({ data }) => {
+          const activeBranches = (Array.isArray(data) ? data : []).filter((branch: Branch) => branch.isActive !== false);
+          const storedBranch = window.localStorage.getItem('tii_selected_branch') || '';
+          const validBranch = activeBranches.some((branch: Branch) => branch._id === storedBranch) ? storedBranch : '';
+          if (storedBranch && !validBranch) window.localStorage.removeItem('tii_selected_branch');
+          setBranches(activeBranches);
+          setSelectedBranch(validBranch);
+        })
+        .catch(() => {
+          setBranches([]);
+          setSelectedBranch('');
+        });
+    } else {
+      setSelectedBranch(user?.branch || '');
     }
   }, [authLoading, isSuperAdmin, user?.branch]);
 
   useEffect(() => {
     if (authLoading || selectedBranch === null) return;
     void load();
-  }, [authLoading, month, selectedBranch]);
+  }, [authLoading, selectedBranch, load]);
 
   const changeBranch = (branch: string) => {
     if (branch) window.localStorage.setItem('tii_selected_branch', branch);
@@ -235,7 +272,7 @@ export default function WorkersPage() {
       return {
         id: worker._id,
         name: worker.name,
-        role: driver?.truckName || worker.role || '-',
+        role: worker.role || 'Worker',
         buyingAmount: buyingAmount + advances.reduce((sum, expense) => sum + Number(expense.amount || 0), 0),
         buyingDays: (driver ? driverRows.length : 0) + (summaryRow?.buyingDays || 0),
         isDriver: Boolean(driver),
@@ -256,6 +293,20 @@ export default function WorkersPage() {
     () => recentBuying.reduce((total, row) => total + Number(row.buyingAmount || row.amount || 0), 0),
     [recentBuying],
   );
+
+  const assignedWorkerCount = useMemo(() => peopleSummary.filter((row) => row.isDriver).length, [peopleSummary]);
+  const availableWorkerCount = peopleSummary.length - assignedWorkerCount;
+  const visiblePeople = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return peopleSummary.filter((row) => {
+      if (assignmentFilter === 'assigned' && !row.isDriver) return false;
+      if (assignmentFilter === 'available' && row.isDriver) return false;
+      if (!query) return true;
+      const branchLabel = typeof row.branch === 'object' && row.branch ? `${row.branch.name} ${row.branch.code}` : '';
+      return [row.name, row.role, row.worker?.phoneNumber, row.driver?.truckName, row.driver?.truckNumber, branchLabel]
+        .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    });
+  }, [assignmentFilter, peopleSummary, search]);
 
   const driverDetailRows = useMemo(() => {
     if (!driverDetailTarget) return [];
@@ -298,9 +349,16 @@ export default function WorkersPage() {
     setError('');
     const normalizedName = String(workerForm.name || '').trim().toLocaleLowerCase();
     const normalizedPhone = String(workerForm.phoneNumber || '').replace(/\D/g, '');
+    if (!normalizedName) { setError('Enter the worker name.'); return; }
+    if (normalizedPhone && normalizedPhone.length !== 10) { setError('Enter a valid 10-digit phone number.'); return; }
+    if (editingWorker?.truck && String(workerForm.role || '').trim().toLocaleLowerCase() !== 'driver') {
+      setError('This worker is assigned to a truck, so the role must remain Driver. Change the truck assignment first.');
+      return;
+    }
     const duplicate = workers.find((worker) => worker._id !== editingWorker?._id && (worker.name.trim().toLocaleLowerCase() === normalizedName || (normalizedPhone && String(worker.phoneNumber || '').replace(/\D/g, '') === normalizedPhone)));
     if (duplicate) { setError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'Worker name already exists' : 'Worker phone number already exists'); return; }
     const payload = { ...workerForm };
+    setSubmitting(true);
     try {
       if (editingWorker) await api.patch(`/workers/${editingWorker._id}`, payload);
       else await api.post('/workers', payload);
@@ -308,14 +366,28 @@ export default function WorkersPage() {
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Could not save worker');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const removeWorker = async (worker: Worker) => {
     if (!canManageWorkers) return;
+    if (referenceId(worker.truck)) {
+      setPageError(`${worker.name} is assigned to a truck. Change or remove the driver assignment on the Trucks page first.`);
+      return;
+    }
     if (!confirm(`Remove worker "${worker.name}"?`)) return;
-    await api.delete(`/workers/${worker._id}`);
-    load();
+    setPageError('');
+    setRemovingId(worker._id);
+    try {
+      await api.delete(`/workers/${worker._id}`);
+      await load();
+    } catch (actionError: any) {
+      setPageError(actionError?.response?.data?.message || 'Could not remove the worker.');
+    } finally {
+      setRemovingId('');
+    }
   };
 
   const openCreateBuying = (workerId = '') => {
@@ -348,7 +420,10 @@ export default function WorkersPage() {
     }
     setError('');
     const amount = Number(buyingForm.buyingAmount) || 0;
+    if (!buyingForm.worker) { setError('Select a worker.'); return; }
+    if (amount <= 0) { setError('Enter an amount greater than zero.'); return; }
     const payload = { ...buyingForm, buyingAmount: amount };
+    setSubmitting(true);
     try {
       if (editingBuying?.isExpenseAdvance) {
         const worker = workers.find((row) => row._id === buyingForm.worker);
@@ -390,162 +465,235 @@ export default function WorkersPage() {
       await load();
     } catch (err: any) {
       setError(err?.response?.data?.message || err?.message || 'Could not save buying amount');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  return (
-    <div className="-mt-4 space-y-1 sm:-mt-5">
-      {isSuperAdmin && (
-        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Worker view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p></div>
-          </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change worker branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all branches</option>
-            {branches.filter((branch) => branch.isActive !== false).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
-        </section>
-      )}
-      <section className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <WorkerSummaryCard
-          icon={FiUsers}
-          label="Total Workers"
-          value={peopleSummary.length}
-          tone="blue"
-        />
-        <WorkerSummaryCard
-          icon={FiDollarSign}
-          label="Today's Amount"
-          value={formatCurrency(todayWorkerAmount)}
-          helper="Recorded today"
-          tone="amber"
-        />
-      </section>
+  if (authLoading || selectedBranch === null) {
+    return (
+      <div className="space-y-5">
+        <div className="h-56 animate-pulse rounded-[2rem] bg-navy-900/90" />
+        <div className="h-14 animate-pulse rounded-2xl bg-white/70" />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {[0, 1, 2, 3].map((item) => <div key={item} className="h-28 animate-pulse rounded-2xl bg-white/70" />)}
+        </div>
+        <div className="h-96 animate-pulse rounded-3xl bg-white/70" />
+      </div>
+    );
+  }
 
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="flex shrink-0 items-center gap-2 font-display text-lg font-black text-navy-900">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-navy-900 text-white shadow-sm"><FiUserCheck /></span>
-            Worker Management
-          </h1>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:justify-end">
-            <input type="month" className="input-field h-10 w-auto" value={month} onChange={(e) => setMonth(e.target.value)} />
+  return (
+    <div className="space-y-6 pb-24">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100">
+              {isSuperAdmin ? <FiShield /> : <FiLock />}
+              {isSuperAdmin ? 'Super admin workforce centre' : 'Branch workforce workspace'}
+            </div>
+            <h1 className="text-3xl font-black tracking-[-0.04em] sm:text-4xl">Workers &amp; assignments</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              {overallView
+                ? `Review people, truck assignments, and worker amounts across ${branches.length} branches.`
+                : `Manage worker details and daily amounts for ${scopeName}. Driver assignments stay connected to the Trucks page.`}
+            </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+              <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiUsers className="text-emerald-300" />{peopleSummary.length} workers</span>
+              <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiTruck className="text-cyan-300" />{assignedWorkerCount} assigned drivers</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2.5 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50 disabled:opacity-60"><FiRefreshCcw className={loading ? 'animate-spin' : ''} /> Refresh</button>
             {canManageWorkers && <>
-              <button type="button" onClick={() => openCreateBuying()} className="btn-secondary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-                <FiUserCheck /> Amount
-              </button>
-              <button type="button" onClick={openCreateWorker} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-                <FiPlus /> Add Worker
-              </button>
+              <button type="button" onClick={() => openCreateBuying()} className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/10 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-white/15"><FiDollarSign /> Add amount</button>
+              <button type="button" onClick={openCreateWorker} className="inline-flex items-center gap-2 rounded-xl bg-iceblue-500 px-3 py-2.5 text-xs font-bold text-white transition hover:bg-iceblue-400"><FiPlus /> Add worker</button>
             </>}
           </div>
         </div>
-        {error && !workerModalOpen && !buyingModalOpen && (
-          <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{error}</div>
-        )}
+      </section>
+
+      {isSuperAdmin ? (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => changeBranch('')} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? 'bg-navy-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><FiGrid /> All branches <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? 'bg-white/10' : 'bg-slate-100'}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.map((branch) => (
+              <button key={branch._id} type="button" onClick={() => changeBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? 'bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><span className="h-2 w-2 rounded-full bg-emerald-500" />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className={`flex items-center gap-3 rounded-2xl border px-4 py-3 ${canManageWorkers ? 'border-emerald-100 bg-emerald-50/70' : 'border-red-100 bg-red-50/70'}`}>
+          <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white shadow-sm ${canManageWorkers ? 'text-emerald-600' : 'text-red-600'}`}>{canManageWorkers ? <FiCheckCircle /> : <FiAlertTriangle />}</span>
+          <div><p className="text-xs font-extrabold text-navy-900">{canManageWorkers ? 'Assigned branch ready' : 'No branch assigned'}</p><p className="mt-0.5 text-[10px] text-slate-500">{canManageWorkers ? 'Worker changes and amount entries are automatically recorded under your branch.' : 'Ask a super admin to assign your account to a branch before managing workers.'}</p></div>
+        </section>
+      )}
+
+      {overallView && (
+        <section className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-amber-600 shadow-sm"><FiLock /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Network workforce view is read-only</p><p className="mt-1 text-[10px] leading-4 text-slate-600">Review consolidated worker totals and recent amounts here. Select a branch before adding, editing, removing, or recording an amount.</p></div>
+        </section>
+      )}
+      {pageError && <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-sm font-bold text-red-600">{pageError}</div>}
+
+      <section>
+        <div className="mb-4 flex items-center justify-between gap-3 px-1">
+          <div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-xl bg-white text-iceblue-600 shadow-sm ring-1 ring-slate-100"><FiUsers /></span><div><h2 className="font-extrabold text-navy-900">Workforce snapshot</h2><p className="text-xs text-slate-500">People and amount totals for {scopeName.toLowerCase()}.</p></div></div>
+          <input type="month" aria-label="Worker summary month" className="input-field h-9 w-[145px] text-xs" value={month} onChange={(event) => setMonth(event.target.value)} />
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <WorkerSummaryCard
+          icon={FiUsers}
+          label="Total workers"
+          value={peopleSummary.length}
+          helper="Active people"
+          tone="blue"
+        />
+        <WorkerSummaryCard
+          icon={FiTruck}
+          label="Assigned drivers"
+          value={assignedWorkerCount}
+          helper="Linked to trucks"
+          tone="cyan"
+        />
+        <WorkerSummaryCard
+          icon={FiUserCheck}
+          label="Available workers"
+          value={availableWorkerCount}
+          helper="Not assigned to a truck"
+          tone="violet"
+        />
+        <WorkerSummaryCard
+          icon={FiDollarSign}
+          label="Today's amount"
+          value={formatCurrency(todayWorkerAmount)}
+          helper={`${formatCurrency(workerTotal)} in ${month}`}
+          tone="amber"
+        />
+        </div>
+      </section>
+
+      <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex flex-col gap-4 border-b border-slate-100 px-4 py-4 xl:flex-row xl:items-center lg:px-5">
+          <h1 className="flex shrink-0 items-center gap-2 font-display text-lg font-black text-navy-900">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-iceblue-50 text-iceblue-600"><FiUserCheck /></span>
+            <span>Worker directory<span className="mt-0.5 block text-xs font-medium text-slate-500">{peopleSummary.length} people · {assignedWorkerCount} assigned · {availableWorkerCount} available</span></span>
+          </h1>
+          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row xl:justify-end">
+            <div className="relative min-w-0 sm:w-72"><FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input className="input-field h-10 pl-9" placeholder="Search name, role, phone, truck..." value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+            <div className="flex rounded-xl bg-slate-100 p-1">
+              {(['all', 'assigned', 'available'] as const).map((filter) => <button key={filter} type="button" onClick={() => setAssignmentFilter(filter)} className={`flex-1 rounded-lg px-3 py-2 text-[10px] font-bold capitalize transition ${assignmentFilter === filter ? 'bg-white text-navy-900 shadow-sm' : 'text-slate-500 hover:text-navy-900'}`}>{filter}</button>)}
+            </div>
+          </div>
+        </div>
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
           <>
-            <div className="sm:hidden">
-              {peopleSummary.map((row, index) => (
-                <div key={row.id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+            <div className="grid gap-3 p-4 sm:hidden">
+              {visiblePeople.map((row, index) => (
+                <article key={row.id} className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="w-6 shrink-0 text-xs font-semibold tabular-nums text-navy-800/45">{index + 1}</span>
-                        <Link href={`/admin/workers/${row.worker?._id || row.id}`} className="min-w-0 truncate text-sm font-bold text-navy-900 underline-offset-2 hover:underline">{row.name}</Link>
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-white text-xs font-bold text-iceblue-600 shadow-sm ring-1 ring-slate-100">{index + 1}</span>
+                        <Link href={`/admin/workers/${row.id}`} className="min-w-0 truncate text-sm font-extrabold text-navy-900 hover:text-iceblue-700">{row.name}</Link>
                       </div>
-                      <p className="mt-1 pl-8 text-xs text-navy-800/55">{row.role}</p>
-                      {isSuperAdmin && <p className="mt-0.5 pl-8 text-xs text-navy-800/45">{typeof row.branch === 'object' && row.branch ? `${row.branch.name} (${row.branch.code})` : '-'}</p>}
+                      <p className="mt-1 pl-10 text-xs font-semibold text-slate-500">{row.role}</p>
+                      <p className="mt-0.5 pl-10 text-[10px] font-bold text-iceblue-700">Branch: {typeof row.branch === 'object' && row.branch ? `${row.branch.name} · ${row.branch.code}` : scopeName}</p>
                     </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-sm font-bold text-red-600">{formatCurrency(row.buyingAmount)}</p>
-                      <p className="mt-0.5 text-xs text-navy-800/50">{row.buyingDays} days</p>
-                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-black uppercase tracking-wide ${row.isDriver ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>{row.isDriver ? 'Assigned' : 'Available'}</span>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3 text-xs">
+                    <div><p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Phone</p><p className="mt-1 font-bold text-navy-900">{row.worker?.phoneNumber || 'Not added'}</p></div>
+                    <div><p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Truck</p>{row.driver ? <Link href={`/admin/trucks/${row.driver._id}`} className="mt-1 block font-bold text-iceblue-700 hover:underline">{row.driver.truckName}<span className="block text-[10px] text-slate-500">{row.driver.truckNumber}</span></Link> : <p className="mt-1 font-bold text-slate-500">Not assigned</p>}</div>
+                    <div><p className="text-[9px] font-black uppercase tracking-wide text-slate-400">{month} amount</p><p className="mt-1 font-bold text-red-600">{formatCurrency(row.buyingAmount)}</p></div>
+                    <div><p className="text-[9px] font-black uppercase tracking-wide text-slate-400">Entry days</p><p className="mt-1 font-bold text-navy-900">{row.buyingDays}</p></div>
                   </div>
                   {canManageWorkers && (
-                    <div className="mt-2 flex flex-wrap items-center gap-4 pl-8">
-                      <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
-                      {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
-                      {row.worker && !row.isDriver && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <button title="Add worker amount" onClick={() => openCreateBuying(row.id)} className="inline-flex items-center gap-1.5 rounded-lg bg-iceblue-50 px-2.5 py-2 text-[10px] font-bold text-iceblue-700"><FiDollarSign /> Amount</button>
+                      <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-100 px-2.5 py-2 text-[10px] font-bold text-slate-600"><FiEdit2 /> Edit</button>
+                      {!row.isDriver && <button title="Remove worker" disabled={removingId === row.id} onClick={() => removeWorker(row.worker)} className="inline-flex items-center gap-1.5 rounded-lg bg-red-50 px-2.5 py-2 text-[10px] font-bold text-red-600 disabled:opacity-50"><FiTrash2 /> Remove</button>}
                     </div>
                   )}
-                </div>
+                </article>
               ))}
-              {peopleSummary.length === 0 && <p className="px-4 py-10 text-center text-sm text-navy-800/50">No workers or drivers added yet.</p>}
-              {peopleSummary.length > 0 && (
-                <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-navy-900">
-                  <span>TOTAL ({peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)} entry days)</span>
-                  <span className="text-red-600">{formatCurrency(workerTotal)}</span>
-                </div>
-              )}
+              {visiblePeople.length === 0 && <p className="rounded-2xl border border-dashed border-slate-200 px-4 py-12 text-center text-sm text-slate-500">No workers match this view.</p>}
             </div>
             <div className="hidden overflow-x-auto sm:block">
-              <table className={`w-full ${isSuperAdmin ? 'min-w-[900px]' : 'min-w-[760px]'} table-fixed border-collapse text-left text-xs sm:text-sm`}>
-                <thead className="bg-slate-100 text-navy-900">
+              <table className="w-full min-w-[1080px] text-left text-xs">
+                <thead className="bg-slate-50 text-[9px] font-black uppercase tracking-wider text-slate-500">
                   <tr>
-                    <th className="w-[7%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                    {isSuperAdmin && <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Branch</th>}
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Worker Name</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Role / Truck</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Amount</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Entry Days</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                    <th className="px-4 py-3 text-center">No.</th>
+                    <th className="px-4 py-3">Branch</th>
+                    <th className="px-4 py-3">Worker</th>
+                    <th className="px-4 py-3">Role</th>
+                    <th className="px-4 py-3">Truck assignment</th>
+                    <th className="px-4 py-3 text-right">Month amount</th>
+                    <th className="px-4 py-3 text-center">Days</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {peopleSummary.map((row, index) => (
-                    <tr key={row.id} className="text-navy-900 even:bg-slate-50 hover:bg-iceblue-50/70">
-                      <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                      {isSuperAdmin && <td className="break-words border border-slate-300 px-2 py-3 text-center">{typeof row.branch === 'object' && row.branch ? `${row.branch.name} (${row.branch.code})` : '-'}</td>}
-                      <td className="break-words border border-slate-300 px-2 py-3 text-center font-semibold">
+                <tbody className="divide-y divide-slate-100">
+                  {visiblePeople.map((row, index) => (
+                    <tr key={row.id} className="transition hover:bg-iceblue-50/40">
+                      <td className="px-4 py-4 text-center font-bold text-slate-400">{index + 1}</td>
+                      <td className="px-4 py-4"><p className="font-bold text-navy-900">{typeof row.branch === 'object' && row.branch ? row.branch.name : scopeBranch?.name || 'Assigned branch'}</p><p className="mt-0.5 text-[10px] font-semibold text-slate-400">{typeof row.branch === 'object' && row.branch ? row.branch.code : scopeBranch?.code || ''}</p></td>
+                      <td className="px-4 py-4">
                         <Link
-                          href={`/admin/workers/${row.worker?._id || row.id}`}
-                          className="text-navy-900 underline-offset-2 hover:underline"
+                          href={`/admin/workers/${row.id}`}
+                          className="font-extrabold text-navy-900 hover:text-iceblue-700"
                         >
                           {row.name}
                         </Link>
+                        <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-slate-500"><FiPhone />{row.worker?.phoneNumber || 'Phone not added'}</p>
                       </td>
-                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{row.role}</td>
-                      <td className="break-words border border-slate-300 px-2 py-3 text-center font-bold text-red-600">{formatCurrency(row.buyingAmount)}</td>
-                      <td className="border border-slate-300 px-2 py-3 text-center">{row.buyingDays}</td>
-                      <td className="border border-slate-300 px-2 py-3">
+                      <td className="px-4 py-4 font-bold text-slate-600">{row.role}</td>
+                      <td className="px-4 py-4">{row.driver ? <Link href={`/admin/trucks/${row.driver._id}`} className="inline-flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 font-bold text-emerald-700"><FiTruck /><span>{row.driver.truckName}<span className="ml-1 text-[9px] text-emerald-600/70">{row.driver.truckNumber}</span></span></Link> : <span className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 font-bold text-slate-500"><FiUserCheck /> Available</span>}</td>
+                      <td className="px-4 py-4 text-right font-extrabold text-red-600">{formatCurrency(row.buyingAmount)}</td>
+                      <td className="px-4 py-4 text-center font-bold text-navy-900">{row.buyingDays}</td>
+                      <td className="px-4 py-4">
                         {canManageWorkers && (
-                          <div className="flex flex-wrap items-center justify-center gap-3">
-                            <button title="Add buying" onClick={() => openCreateBuying(row.id)} className="text-navy-900 hover:text-black"><FiUserCheck /></button>
-                            {row.worker && <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="text-navy-900 hover:text-black"><FiEdit2 /></button>}
-                            {row.worker && !row.isDriver && <button title="Remove worker" onClick={() => removeWorker(row.worker)} className="text-navy-900 hover:text-black"><FiTrash2 /></button>}
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button title="Add worker amount" onClick={() => openCreateBuying(row.id)} className="grid h-8 w-8 place-items-center rounded-lg bg-iceblue-50 text-iceblue-700 transition hover:bg-iceblue-100"><FiDollarSign /></button>
+                            <button title="Edit worker" onClick={() => openEditWorker(row.worker)} className="grid h-8 w-8 place-items-center rounded-lg bg-slate-100 text-slate-600 transition hover:bg-slate-200"><FiEdit2 /></button>
+                            {!row.isDriver && <button title="Remove worker" disabled={removingId === row.id} onClick={() => removeWorker(row.worker)} className="grid h-8 w-8 place-items-center rounded-lg bg-red-50 text-red-600 transition hover:bg-red-100 disabled:opacity-50"><FiTrash2 /></button>}
                           </div>
                         )}
+                        {!canManageWorkers && <p className="text-right text-[10px] font-bold text-slate-400">View only</p>}
                       </td>
                     </tr>
                   ))}
-                  {peopleSummary.length === 0 && (
-                    <tr><td colSpan={isSuperAdmin ? 7 : 6} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No workers or drivers added yet.</td></tr>
+                  {visiblePeople.length === 0 && (
+                    <tr><td colSpan={8} className="px-4 py-14 text-center text-sm text-slate-500">No workers match this view.</td></tr>
                   )}
                 </tbody>
-                <tfoot className="bg-slate-100 font-bold text-navy-900"><tr><td colSpan={isSuperAdmin ? 4 : 3} className="border border-slate-300 px-3 py-3 text-center">TOTAL</td><td className="border border-slate-300 px-3 py-3 text-center text-red-600">{formatCurrency(workerTotal)}</td><td className="border border-slate-300 px-3 py-3 text-center">{peopleSummary.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)}</td><td className="border border-slate-300 px-3 py-3" /></tr></tfoot>
+                {visiblePeople.length > 0 && <tfoot className="border-t border-slate-200 bg-slate-50 font-extrabold text-navy-900"><tr><td colSpan={5} className="px-4 py-3 text-right uppercase">Visible total</td><td className="px-4 py-3 text-right text-red-600">{formatCurrency(visiblePeople.reduce((sum, row) => sum + Number(row.buyingAmount || 0), 0))}</td><td className="px-4 py-3 text-center">{visiblePeople.reduce((sum, row) => sum + Number(row.buyingDays || 0), 0)}</td><td /></tr></tfoot>}
               </table>
             </div>
           </>
         )}
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-white shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-iceblue-100 px-4 py-3">
-          <div>
-            <h2 className="font-display text-base font-bold text-navy-900">Today&apos;s Amounts</h2>
-            <p className="mt-0.5 text-xs text-navy-800/50">All worker amount entries for today</p>
+      <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4 lg:p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-amber-50 text-amber-600"><FiDollarSign /></span>
+            <div><h2 className="font-extrabold text-navy-900">Today&apos;s worker amounts</h2><p className="text-xs text-slate-500">Latest entries for {scopeName.toLowerCase()}.</p></div>
           </div>
-          <Link href="/admin/workers/buying-history" className="btn-secondary flex items-center gap-2 text-sm">
-            View More <FiArrowRight />
+          <Link href="/admin/workers/buying-history" className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2.5 text-xs font-bold text-navy-900 transition hover:bg-slate-200">
+            Full history <FiArrowRight />
           </Link>
         </div>
-        <div className="md:hidden">
+        <div className="grid gap-3 p-4 md:hidden">
           {recentBuying.map((row, index) => (
-            <div key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+            <article key={`${row.isExpenseAdvance ? 'worker-amount' : 'amount'}-${row._id}`} className="rounded-2xl border border-slate-100 bg-slate-50/60 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-navy-900">{row.worker?.name || 'Worker'}</p>
@@ -556,12 +704,12 @@ export default function WorkersPage() {
               <p className="mt-1.5 text-xs text-navy-800/60">{row.entryType === 'Worker Amount' ? `Worker Amount${row.notes ? ` - ${row.notes}` : ''}` : row.notes || '-'}</p>
               <div className="mt-2">
                 {canManageWorkers && isTodayAmount(row.date) ? (
-                  <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEditBuying(row)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-900 hover:text-black"><FiEdit2 /> Edit</button>
+                  <button type="button" title="Edit today's amount" aria-label={`Edit ${row.worker?.name || 'worker'} amount`} onClick={() => openEditBuying(row)} className="inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-2 text-[10px] font-bold text-slate-600 shadow-sm"><FiEdit2 /> Edit amount</button>
                 ) : (
                   <span className="text-xs text-navy-800/30">—</span>
                 )}
               </div>
-            </div>
+            </article>
           ))}
           {recentBuying.length === 0 && <p className="px-4 py-8 text-center text-sm text-navy-800/50">No amount entries for today.</p>}
           {recentBuying.length > 0 && (
@@ -586,6 +734,16 @@ export default function WorkersPage() {
       {workerModalOpen && (
         <Modal title={editingWorker ? 'Edit Worker' : 'Add Worker'} onClose={() => setWorkerModalOpen(false)}>
           <form onSubmit={saveWorker} className="space-y-3">
+            <div className="flex items-center gap-3 rounded-xl border border-iceblue-100 bg-iceblue-50/70 p-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-iceblue-700 shadow-sm"><FiGitBranch /></span>
+              <div><p className="text-[9px] font-black uppercase tracking-wider text-slate-400">Worker branch</p><p className="mt-0.5 text-sm font-extrabold text-navy-900">{editingWorker && typeof editingWorker.branch === 'object' ? `${editingWorker.branch.name} (${editingWorker.branch.code})` : scopeName}</p></div>
+            </div>
+            {editingWorker?.truck && (
+              <div className="flex items-start gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                <FiTruck className="mt-0.5 shrink-0 text-emerald-600" />
+                <p className="text-xs leading-5 text-emerald-800">This worker is assigned to a truck. You can update the name, phone, and notes here; change the driver or role from the Trucks page.</p>
+              </div>
+            )}
             <div>
               <label className="label-text">Worker Name</label>
               <input className="input-field" required value={workerForm.name} onChange={(e) => setWorkerForm({ ...workerForm, name: e.target.value })} />
@@ -593,12 +751,13 @@ export default function WorkersPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
                 <label className="label-text">Phone Number</label>
-                <input className="input-field" value={workerForm.phoneNumber} onChange={(e) => setWorkerForm({ ...workerForm, phoneNumber: e.target.value })} />
+                <input type="tel" inputMode="numeric" maxLength={10} className="input-field" placeholder="10-digit mobile number" value={workerForm.phoneNumber} onChange={(e) => setWorkerForm({ ...workerForm, phoneNumber: e.target.value.replace(/\D/g, '').slice(0, 10) })} />
               </div>
               <div>
                 <label className="label-text">Work Role</label>
                 <select
-                  className="input-field"
+                  disabled={Boolean(editingWorker?.truck)}
+                  className="input-field disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
                   value={roleMode}
                   onChange={(e) => {
                     const value = e.target.value;
@@ -630,7 +789,7 @@ export default function WorkersPage() {
               <textarea className="input-field" rows={2} value={workerForm.notes} onChange={(e) => setWorkerForm({ ...workerForm, notes: e.target.value })} />
             </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <button className="btn-primary w-full">{editingWorker ? 'Save Worker' : 'Create Worker'}</button>
+            <button disabled={submitting} className="btn-primary w-full disabled:cursor-wait disabled:opacity-60">{submitting ? 'Saving...' : editingWorker ? 'Save Worker' : 'Create Worker'}</button>
           </form>
         </Modal>
       )}
@@ -658,7 +817,7 @@ export default function WorkersPage() {
               <textarea className="input-field" rows={2} value={buyingForm.notes} onChange={(e) => setBuyingForm({ ...buyingForm, notes: e.target.value })} />
             </div>
             {error && <p className="text-sm text-red-500">{error}</p>}
-            <button className="btn-primary w-full">{editingBuying ? 'Update Amount' : 'Save Amount'}</button>
+            <button disabled={submitting} className="btn-primary w-full disabled:cursor-wait disabled:opacity-60">{submitting ? 'Saving...' : editingBuying ? 'Update Amount' : 'Save Amount'}</button>
           </form>
         </Modal>
       )}
@@ -666,7 +825,7 @@ export default function WorkersPage() {
       {workerDetailTarget && (
         <Modal title={`Worker Details: ${workerDetailTarget.name}`} onClose={() => setWorkerDetailTarget(null)} wide>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 rounded-2xl bg-iceblue-50 p-4 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 rounded-2xl bg-iceblue-50 p-4 sm:grid-cols-5">
               <div>
                 <p className="text-[11px] font-semibold uppercase text-navy-800/45">Name</p>
                 <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.name}</p>
@@ -678,6 +837,10 @@ export default function WorkersPage() {
               <div>
                 <p className="text-[11px] font-semibold uppercase text-navy-800/45">Phone</p>
                 <p className="mt-1 font-bold text-navy-900">{workerDetailTarget.worker?.phoneNumber || '-'}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Branch</p>
+                <p className="mt-1 font-bold text-navy-900">{typeof workerDetailTarget.branch === 'object' && workerDetailTarget.branch ? `${workerDetailTarget.branch.name} (${workerDetailTarget.branch.code})` : scopeName}</p>
               </div>
               <div>
                 <p className="text-[11px] font-semibold uppercase text-navy-800/45">Notes</p>

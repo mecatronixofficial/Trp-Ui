@@ -12,7 +12,6 @@ import {
   FiLoader,
   FiLock,
   FiMail,
-  FiMessageCircle,
   FiPackage,
   FiPhone,
   FiShield,
@@ -24,7 +23,7 @@ import { useAuth } from '../../context/AuthContext';
 import api from '../../lib/api';
 import BrandLogo from '../../components/BrandLogo';
 
-type ResetMethod = 'email' | 'mobile' | 'whatsapp';
+type ResetMethod = 'email' | 'mobile';
 type ResetStep = 'request' | 'verify';
 
 const resetMethods: Array<{
@@ -35,11 +34,10 @@ const resetMethods: Array<{
 }> = [
   { value: 'email', label: 'Mail ID', helper: 'OTP to admin email', icon: FiMail },
   { value: 'mobile', label: 'Mobile', helper: 'OTP by SMS', icon: FiPhone },
-  { value: 'whatsapp', label: 'WhatsApp', helper: 'OTP on WhatsApp', icon: FiMessageCircle },
 ];
 
 const brandHighlights: Array<{ icon: typeof FiShield; title: string; helper: string }> = [
-  { icon: FiShield, title: 'OTP-secured recovery', helper: 'Admin passwords reset only via verified email, SMS or WhatsApp' },
+  { icon: FiShield, title: 'OTP-secured recovery', helper: 'Admin passwords reset only through verified email or mobile SMS' },
   { icon: FiTruck, title: 'Built for the fleet', helper: 'Separate, role-based access for admins and truck logins' },
   { icon: FiPackage, title: 'Live production data', helper: 'Sales, stock and dispatch stay in sync across every branch' },
 ];
@@ -58,7 +56,16 @@ const frostParticles = [
 ];
 
 function getApiMessage(err: any, fallback: string) {
-  return err?.response?.data?.message || err?.message || fallback;
+  const message = err?.response?.data?.message;
+  if (err?.response?.status === 429) {
+    const retryAfter = Number(err?.response?.headers?.['retry-after'] || 0);
+    if (retryAfter > 0) {
+      const minutes = Math.max(1, Math.ceil(retryAfter / 60));
+      return `Too many sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`;
+    }
+  }
+  if (Array.isArray(message)) return message.join(' ');
+  return message || err?.message || fallback;
 }
 
 export default function LoginPage() {
@@ -78,6 +85,8 @@ export default function LoginPage() {
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState('');
   const [resetSuccess, setResetSuccess] = useState('');
@@ -127,6 +136,8 @@ export default function LoginPage() {
     setOtp('');
     setNewPassword('');
     setConfirmPassword('');
+    setShowNewPassword(false);
+    setShowConfirmPassword(false);
   };
 
   const closeForgotPassword = () => {
@@ -204,8 +215,11 @@ export default function LoginPage() {
 
   if (authLoading || redirecting || user) {
     return (
-      <main className="flex h-screen items-center justify-center bg-white" aria-label="Loading">
-        <FiLoader className="animate-spin text-2xl text-iceblue-600" />
+      <main className="flex min-h-screen items-center justify-center bg-gradient-to-br from-white via-iceblue-50 to-cyan-50" aria-label="Loading">
+        <div className="flex items-center gap-3 rounded-2xl border border-white bg-white/80 px-5 py-4 text-sm font-semibold text-navy-900 shadow-lg backdrop-blur-sm">
+          <FiLoader className="animate-spin text-xl text-iceblue-600" />
+          Opening your workspace...
+        </div>
       </main>
     );
   }
@@ -284,6 +298,7 @@ export default function LoginPage() {
           </div>
 
           <div className="mb-6 hidden lg:block">
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-iceblue-100 bg-white/80 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.16em] text-iceblue-700 shadow-sm"><FiShield /> Secure role-based access</div>
             <h1 className="text-2xl font-bold tracking-tight text-gray-900">Welcome back</h1>
             <p className="mt-1 text-sm text-gray-500">Sign in to continue to your dashboard</p>
           </div>
@@ -302,7 +317,10 @@ export default function LoginPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   autoFocus
+                  disabled={loading}
                   required
                 />
               </div>
@@ -331,6 +349,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete="current-password"
+                  disabled={loading}
                   required
                 />
                 <button
@@ -353,7 +372,7 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !username.trim() || !password}
               className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-iceblue-600 to-iceblue-500 text-sm font-semibold text-white shadow-lg shadow-iceblue-600/30 transition hover:from-iceblue-700 hover:to-iceblue-600 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? <FiLoader className="animate-spin" /> : null}
@@ -362,7 +381,7 @@ export default function LoginPage() {
           </form>
 
           <p className="mt-5 text-center text-xs text-gray-400">
-            Admin recovery is OTP protected. Truck passwords are reset by admin.
+            Admin recovery uses OTP. Drivers can change passwords from Truck Settings after signing in.
           </p>
         </div>
       </div>
@@ -387,7 +406,7 @@ export default function LoginPage() {
                 </div>
                 <h3 id="reset-password-heading" className="text-lg font-semibold tracking-tight">Reset password</h3>
                 <p className="mt-1 text-sm text-gray-500">
-                  Receive an OTP by mail, mobile SMS, or WhatsApp and set a new admin password.
+                  Receive an OTP by email or mobile SMS and set a new admin password.
                 </p>
               </div>
 
@@ -406,7 +425,7 @@ export default function LoginPage() {
               <form onSubmit={handleSendOtp} className="space-y-4 p-5">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-gray-700">Send OTP using</label>
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
                     {resetMethods.map((method) => {
                       const MethodIcon = method.icon;
                       const active = resetMethod === method.value;
@@ -490,31 +509,39 @@ export default function LoginPage() {
                     <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="new-password">
                       New password
                     </label>
-                    <input
-                      id="new-password"
-                      type="password"
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-iceblue-500 focus:bg-white focus:ring-4 focus:ring-iceblue-500/10"
-                      placeholder="New password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      autoComplete="new-password"
-                      required
-                    />
+                    <div className="relative">
+                      <input
+                        id="new-password"
+                        type={showNewPassword ? 'text' : 'password'}
+                        className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2.5 pl-3 pr-10 text-sm text-gray-900 outline-none transition focus:border-iceblue-500 focus:bg-white focus:ring-4 focus:ring-iceblue-500/10"
+                        placeholder="New password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        autoComplete="new-password"
+                        minLength={6}
+                        required
+                      />
+                      <button type="button" onClick={() => setShowNewPassword((value) => !value)} className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}>{showNewPassword ? <FiEyeOff /> : <FiEye />}</button>
+                    </div>
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-700" htmlFor="confirm-password">
                       Confirm password
                     </label>
-                    <input
-                      id="confirm-password"
-                      type="password"
-                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-900 outline-none transition focus:border-iceblue-500 focus:bg-white focus:ring-4 focus:ring-iceblue-500/10"
-                      placeholder="Confirm password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      autoComplete="new-password"
-                      required
-                    />
+                    <div className="relative">
+                      <input
+                        id="confirm-password"
+                        type={showConfirmPassword ? 'text' : 'password'}
+                        className="w-full rounded-xl border border-gray-200 bg-gray-50 py-2.5 pl-3 pr-10 text-sm text-gray-900 outline-none transition focus:border-iceblue-500 focus:bg-white focus:ring-4 focus:ring-iceblue-500/10"
+                        placeholder="Confirm password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        autoComplete="new-password"
+                        minLength={6}
+                        required
+                      />
+                      <button type="button" onClick={() => setShowConfirmPassword((value) => !value)} className="absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600" aria-label={showConfirmPassword ? 'Hide confirmed password' : 'Show confirmed password'}>{showConfirmPassword ? <FiEyeOff /> : <FiEye />}</button>
+                    </div>
                   </div>
                 </div>
 

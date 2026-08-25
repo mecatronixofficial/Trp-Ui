@@ -1,16 +1,51 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { FiAlertCircle, FiCheckCircle, FiInfo, FiX } from 'react-icons/fi';
+import { FiAlertCircle, FiAlertTriangle, FiCheckCircle, FiInfo, FiX } from 'react-icons/fi';
 import { mutationToast, showToast, TOAST_EVENT, type ToastDetail, type ToastTone } from '../lib/toast';
 
 type ToastItem = ToastDetail & { id: number; duration: number };
 
-const accents: Record<ToastTone, { icon: string; bar: string; color: string }> = {
-  success: { icon: 'bg-emerald-50 text-emerald-600', bar: 'bg-emerald-500', color: '#10b981' },
-  update: { icon: 'bg-blue-50 text-iceblue-700', bar: 'bg-blue-500', color: '#2563eb' },
-  danger: { icon: 'bg-red-50 text-red-600', bar: 'bg-red-500', color: '#ef4444' },
-  warning: { icon: 'bg-amber-50 text-amber-600', bar: 'bg-amber-500', color: '#d97706' },
+const accents: Record<ToastTone, {
+  title: string;
+  icon: string;
+  bar: string;
+  glow: string;
+  surface: string;
+  eyebrow: string;
+}> = {
+  success: {
+    title: 'Success',
+    icon: 'bg-emerald-500 text-white shadow-emerald-500/30',
+    bar: 'bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400',
+    glow: 'bg-emerald-400/20',
+    surface: 'border-emerald-100/90 bg-gradient-to-br from-white via-white to-emerald-50/90',
+    eyebrow: 'text-emerald-700',
+  },
+  update: {
+    title: 'Updated',
+    icon: 'bg-iceblue-600 text-white shadow-iceblue-500/30',
+    bar: 'bg-gradient-to-r from-iceblue-600 via-sky-400 to-cyan-300',
+    glow: 'bg-sky-400/20',
+    surface: 'border-sky-100/90 bg-gradient-to-br from-white via-white to-sky-50/90',
+    eyebrow: 'text-iceblue-700',
+  },
+  danger: {
+    title: 'Action failed',
+    icon: 'bg-red-500 text-white shadow-red-500/30',
+    bar: 'bg-gradient-to-r from-red-600 via-rose-500 to-orange-400',
+    glow: 'bg-red-400/20',
+    surface: 'border-red-100/90 bg-gradient-to-br from-white via-white to-red-50/90',
+    eyebrow: 'text-red-700',
+  },
+  warning: {
+    title: 'Attention',
+    icon: 'bg-amber-500 text-white shadow-amber-500/30',
+    bar: 'bg-gradient-to-r from-amber-500 via-orange-400 to-yellow-300',
+    glow: 'bg-amber-400/20',
+    surface: 'border-amber-100/90 bg-gradient-to-br from-white via-white to-amber-50/90',
+    eyebrow: 'text-amber-700',
+  },
 };
 
 export default function ToastProvider({ children }: { children: React.ReactNode }) {
@@ -21,7 +56,7 @@ export default function ToastProvider({ children }: { children: React.ReactNode 
     const onToast = (event: Event) => {
       const detail = (event as CustomEvent<ToastDetail>).detail;
       const id = Date.now() + Math.random();
-      const duration = detail.duration || 3500;
+      const duration = Math.max(1800, detail.duration || 4000);
       setItems((current) => [...current.slice(-3), { ...detail, id, duration }]);
       timers.set(id, setTimeout(() => {
         setItems((current) => current.filter((item) => item.id !== id));
@@ -58,19 +93,34 @@ export default function ToastProvider({ children }: { children: React.ReactNode 
 
   return <>
     {children}
-    <div className="pointer-events-none fixed right-3 top-3 z-[9999] flex w-[calc(100%-1.5rem)] max-w-sm flex-col gap-2.5 sm:right-6 sm:top-6" aria-live="polite" aria-atomic="true">
+    <div className="pointer-events-none fixed inset-x-2.5 top-2.5 z-[9999] flex flex-col items-end gap-2 sm:inset-x-auto sm:right-4 sm:top-4 sm:w-[20rem]" aria-live="polite" aria-atomic="false">
       {items.map((item) => {
-        const Icon = item.tone === 'success' ? FiCheckCircle : item.tone === 'update' ? FiInfo : FiAlertCircle;
+        const Icon = item.tone === 'success'
+          ? FiCheckCircle
+          : item.tone === 'update'
+            ? FiInfo
+            : item.tone === 'warning'
+              ? FiAlertTriangle
+              : FiAlertCircle;
         const accent = accents[item.tone];
-        return <div key={item.id} role="status" className="toast-enter pointer-events-auto relative flex w-fit min-w-[240px] max-w-full self-end items-start gap-3 overflow-hidden rounded-2xl bg-white py-3 pl-4 pr-3 text-gray-900 shadow-xl shadow-black/10 ring-1 ring-black/5 sm:max-w-sm">
-          <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: accent.color }} aria-hidden="true" />
-          <span className={`relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${accent.icon}`}>
-            <Icon className="h-4 w-4 stroke-[2.5]" />
-          </span>
-          <p className="min-w-0 flex-1 pt-1 text-sm font-medium leading-5 text-gray-800">{item.message}</p>
-          <button type="button" onClick={() => remove(item.id)} className="-mr-1 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600" aria-label="Close notification"><FiX className="h-4 w-4 stroke-[2.5]" /></button>
-          <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gray-100">
-            <span className={`toast-bar block h-full ${accent.bar}`} style={{ animationDuration: `${item.duration}ms` }} />
+        return <div
+          key={item.id}
+          role={item.tone === 'danger' || item.tone === 'warning' ? 'alert' : 'status'}
+          className={`toast-enter pointer-events-auto relative w-full overflow-hidden rounded-2xl border p-0.5 shadow-[0_16px_40px_-22px_rgba(8,35,52,0.42)] backdrop-blur-xl ${accent.surface}`}
+        >
+          <span className={`absolute -right-6 -top-8 h-16 w-16 rounded-full blur-xl ${accent.glow}`} aria-hidden="true" />
+          <div className="relative flex items-start gap-2 rounded-[0.85rem] px-2.5 py-2">
+            <span className={`toast-icon-pop mt-px flex h-8 w-8 shrink-0 items-center justify-center rounded-[0.65rem] shadow-md ${accent.icon}`}>
+              <Icon className="h-4 w-4 stroke-[2.5]" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className={`text-[8px] font-black uppercase tracking-[0.14em] ${accent.eyebrow}`}>{accent.title}</p>
+              <p className="mt-px break-words text-xs font-semibold leading-4 text-slate-700">{item.message}</p>
+            </div>
+            <button type="button" onClick={() => remove(item.id)} className="-mr-1 -mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white/90 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-iceblue-300" aria-label="Close notification"><FiX className="h-3.5 w-3.5 stroke-[2.5]" /></button>
+          </div>
+          <span className="absolute bottom-0 left-0 right-0 h-0.5 overflow-hidden bg-slate-900/[0.04]" aria-hidden="true">
+            <span className={`toast-bar block h-full origin-left ${accent.bar}`} style={{ animationDuration: `${item.duration}ms` }} />
           </span>
         </div>;
       })}

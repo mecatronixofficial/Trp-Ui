@@ -2,7 +2,24 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { FiPlus, FiEdit2, FiTrash2, FiSearch, FiUsers, FiTruck, FiHome, FiGitBranch, FiEye, FiDollarSign, FiCheckCircle } from 'react-icons/fi';
+import {
+  FiAlertCircle,
+  FiCheckCircle,
+  FiDollarSign,
+  FiEdit2,
+  FiEye,
+  FiGitBranch,
+  FiGrid,
+  FiHome,
+  FiLock,
+  FiPlus,
+  FiRefreshCw,
+  FiSearch,
+  FiShield,
+  FiTrash2,
+  FiTruck,
+  FiUsers,
+} from 'react-icons/fi';
 import api from '../../../lib/api';
 import { formatBarQuantity, formatCurrency, formatDate, getItemBarUsed } from '../../../lib/api';
 import Modal from '../../../components/Modal';
@@ -56,6 +73,8 @@ interface Customer {
   phoneNumber: string;
   address: string;
   defaultSaleType: string;
+  retailPrice?: number;
+  wholesalePrice?: number;
   creditBalance: number;
   isActive: boolean;
   customerType?: 'local' | 'truck';
@@ -72,12 +91,18 @@ interface Branch {
   isActive: boolean;
 }
 
-const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', truck: '', notes: '', isActive: true };
+const emptyForm = { customerType: 'local', name: '', phoneNumber: '', address: '', defaultSaleType: 'retail', defaultPrice: '', truck: '', notes: '', isActive: true };
 const creatorFromNotes = (notes?: string) => String(notes || '').match(/^\[Created by: ([^\]]+)\]/)?.[1] || '';
-const priceMarkerFromNotes = (notes?: string) => String(notes || '').match(/\[Customer price: (?:retail|wholesale)=[0-9]+(?:\.[0-9]+)?\]/i)?.[0] || '';
 const notesWithoutCreator = (notes?: string) => String(notes || '')
   .replace(/^\[Created by: [^\]]+\]\s*/, '')
-  .replace(/^\[Customer price: (?:retail|wholesale)=[0-9]+(?:\.[0-9]+)?\]\s*/i, '');
+  .replace(/\[Customer price: (?:retail|wholesale)=[0-9]+(?:\.[0-9]+)?\]\s*/gi, '')
+  .trim();
+const notesPrice = (customer: Customer) => Number(String(customer.notes || '')
+  .match(new RegExp(`\\[Customer price: ${customer.defaultSaleType || 'retail'}=([0-9]+(?:\\.[0-9]+)?)\\]`, 'i'))?.[1] || 0);
+const customerDefaultPrice = (customer: Customer) => {
+  const price = customer.defaultSaleType === 'wholesale' ? customer.wholesalePrice : customer.retailPrice;
+  return Number(price || notesPrice(customer) || 0);
+};
 const creatorName = (customer: Customer) => customer.createdByName
   || (typeof customer.createdBy === 'object' && customer.createdBy
     ? customer.createdBy.displayName || customer.createdBy.name || customer.createdBy.username
@@ -95,6 +120,8 @@ export default function CustomersPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'local' | 'truck'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
@@ -116,6 +143,7 @@ export default function CustomersPage() {
   const isSuperAdmin = user?.role === 'super_admin';
   const canManageCustomers = !isSuperAdmin || Boolean(selectedBranch);
   const activeBranch = branches.find((branch) => branch._id === selectedBranch);
+  const overallView = Boolean(isSuperAdmin && !selectedBranch);
 
   const customerTotals = useMemo(() => customers.reduce((totals, customer) => {
     const type = customer.customerType || (customer.truck ? 'truck' : 'local');
@@ -129,6 +157,18 @@ export default function CustomersPage() {
     }
     return totals;
   }, { total: 0, truck: 0, local: 0, truckPending: 0, localPending: 0 }), [customers]);
+
+  const filteredCustomers = useMemo(() => customers.filter((customer) => {
+    const customerType = customer.customerType || (customer.truck ? 'truck' : 'local');
+    if (typeFilter !== 'all' && customerType !== typeFilter) return false;
+    if (statusFilter === 'active' && customer.isActive === false) return false;
+    if (statusFilter === 'inactive' && customer.isActive !== false) return false;
+    return true;
+  }), [customers, statusFilter, typeFilter]);
+
+  const activeCustomers = useMemo(() => customers.filter((customer) => customer.isActive !== false).length, [customers]);
+  const totalPending = customerTotals.truckPending + customerTotals.localPending;
+  const scopeName = overallView ? 'All branches' : activeBranch?.name || 'Assigned branch';
 
   const load = async (q?: string) => {
     setLoading(true);
@@ -199,6 +239,7 @@ export default function CustomersPage() {
       phoneNumber: c.phoneNumber || '',
       address: c.address || '',
       defaultSaleType: c.defaultSaleType || 'retail',
+      defaultPrice: customerDefaultPrice(c) > 0 ? String(customerDefaultPrice(c)) : '',
       truck: truckId,
       notes: notesWithoutCreator(c.notes),
       isActive: c.isActive !== false,
@@ -211,6 +252,11 @@ export default function CustomersPage() {
     e.preventDefault();
     if (!canManageCustomers) return;
     setFormError('');
+    const defaultPrice = Number(form.defaultPrice);
+    if (!Number.isFinite(defaultPrice) || defaultPrice <= 0) {
+      setFormError('Enter a default ice bar price greater than zero.');
+      return;
+    }
     const normalizedName = String(form.name || '').trim().toLocaleLowerCase();
     const normalizedPhone = String(form.phoneNumber || '').replace(/\D/g, '');
     const duplicate = customers.find((customer) => customer._id !== editing?._id && (customer.name.trim().toLocaleLowerCase() === normalizedName || (normalizedPhone && String(customer.phoneNumber || '').replace(/\D/g, '') === normalizedPhone)));
@@ -218,12 +264,18 @@ export default function CustomersPage() {
       setFormError(duplicate.name.trim().toLocaleLowerCase() === normalizedName ? 'A customer with this name already exists.' : 'A customer with this phone number already exists.');
       return;
     }
+    const { defaultPrice: _defaultPrice, ...customerFields } = form;
+    const saleType = form.defaultSaleType === 'wholesale' ? 'wholesale' : 'retail';
+    const createdBy = editing && creatorName(editing) !== 'Not recorded'
+      ? `[Created by: ${creatorName(editing)}]`
+      : '';
+    const priceMarker = `[Customer price: ${saleType}=${defaultPrice}]`;
     const payload = {
-      ...form,
+      ...customerFields,
       truck: form.customerType === 'truck' ? form.truck : null,
-      notes: editing && creatorName(editing) !== 'Not recorded'
-        ? `[Created by: ${creatorName(editing)}]${priceMarkerFromNotes(editing.notes) ? `\n${priceMarkerFromNotes(editing.notes)}` : ''}${form.notes ? `\n${form.notes}` : ''}`
-        : form.notes,
+      retailPrice: saleType === 'retail' ? defaultPrice : Number(editing?.retailPrice || 0),
+      wholesalePrice: saleType === 'wholesale' ? defaultPrice : Number(editing?.wholesalePrice || 0),
+      notes: [createdBy, priceMarker, String(form.notes || '').trim()].filter(Boolean).join('\n'),
     };
     setSavingCustomer(true);
     try {
@@ -318,27 +370,62 @@ export default function CustomersPage() {
   };
 
   return (
-    <div className="-mt-4 space-y-1 sm:-mt-5">
-      {isSuperAdmin && (
-        <section className="mb-3 flex flex-col gap-3 rounded-2xl border border-iceblue-100 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-iceblue-50 text-iceblue-700"><FiGitBranch /></span>
-            <div><p className="text-[10px] font-bold uppercase tracking-wide text-navy-800/45">Customer view</p><p className="font-semibold text-navy-900">{activeBranch ? `${activeBranch.name} (${activeBranch.code})` : 'Overall — all branches'}</p></div>
+    <div className="space-y-6 pb-10">
+      <section className="relative overflow-hidden rounded-[2rem] bg-navy-900 px-5 py-7 text-white shadow-[0_24px_70px_-35px_rgba(10,28,42,0.85)] sm:px-7 sm:py-8 lg:px-9">
+        <div className="absolute -right-16 -top-20 h-64 w-64 rounded-full bg-iceblue-400/20 blur-3xl" />
+        <div className="absolute -bottom-24 left-1/3 h-52 w-52 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-iceblue-100">
+              {isSuperAdmin ? <FiShield /> : <FiLock />}
+              {isSuperAdmin ? 'Super admin customer centre' : 'Branch customer workspace'}
+            </div>
+            <h1 className="text-3xl font-black tracking-[-0.04em] sm:text-4xl">Customer directory</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300">
+              {overallView
+                ? `Review customers and outstanding balances across ${branches.length} branches. Select a branch to make changes.`
+                : `Manage customer profiles, collections, and purchase history for ${scopeName}.`}
+            </p>
           </div>
-          <select className="input-field h-10 sm:max-w-xs" aria-label="Change customer branch" value={selectedBranch || ''} onChange={(event) => changeBranch(event.target.value)}>
-            <option value="">Overall — all branches</option>
-            {branches.filter((branch) => branch.isActive).map((branch) => <option key={branch._id} value={branch._id}>{branch.name} ({branch.code})</option>)}
-          </select>
+          <div className="flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-xs font-bold text-slate-200"><FiGitBranch className="text-iceblue-300" />{scopeName}</span>
+            <button type="button" onClick={() => void load(search)} className="inline-flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-bold text-navy-900 transition hover:bg-iceblue-50"><FiRefreshCw /> Refresh</button>
+            {canManageCustomers && <button type="button" onClick={openCreate} className="inline-flex items-center gap-2 rounded-xl bg-iceblue-500 px-3 py-2 text-xs font-bold text-white transition hover:bg-iceblue-400"><FiPlus /> Add customer</button>}
+          </div>
+        </div>
+      </section>
+
+      {isSuperAdmin ? (
+        <section className="rounded-2xl border border-white/80 bg-white/90 p-2.5 shadow-[0_14px_40px_-30px_rgba(15,43,61,0.4)] backdrop-blur-sm">
+          <div className="scrollbar-hidden flex items-center gap-1.5 overflow-x-auto">
+            <button type="button" onClick={() => changeBranch('')} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${overallView ? 'bg-navy-900 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><FiGrid /> All branches <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${overallView ? 'bg-white/10' : 'bg-slate-100'}`}>{branches.length}</span></button>
+            <span className="h-6 w-px shrink-0 bg-slate-200" />
+            {branches.filter((branch) => branch.isActive).map((branch) => (
+              <button key={branch._id} type="button" onClick={() => changeBranch(branch._id)} className={`flex shrink-0 items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition ${selectedBranch === branch._id ? 'bg-iceblue-50 text-iceblue-700 ring-1 ring-inset ring-iceblue-100' : 'text-slate-500 hover:bg-slate-50 hover:text-navy-900'}`}><span className="h-2 w-2 rounded-full bg-emerald-500" />{branch.name}<span className="text-[9px] font-semibold text-slate-400">{branch.code}</span></button>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <section className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-emerald-600 shadow-sm"><FiCheckCircle /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Assigned branch active</p><p className="mt-0.5 text-[10px] text-slate-500">Customer records and collections are automatically scoped to your branch.</p></div>
         </section>
       )}
-      <section className="grid grid-cols-1 gap-2 md:grid-cols-3">
+
+      {overallView && (
+        <section className="flex items-start gap-3 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-white text-amber-600 shadow-sm"><FiLock /></span>
+          <div><p className="text-xs font-extrabold text-navy-900">Network directory is read-only</p><p className="mt-1 text-[10px] leading-4 text-slate-600">You can search customers and review purchase history across the network. Select a branch to add, edit, delete, or collect pending payments.</p></div>
+        </section>
+      )}
+
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <CustomerSummaryCard
           icon={FiUsers}
           label="Total Customers"
           value={customerTotals.total}
-          helperLabel="Total Pending"
-          helperValue={formatCurrency(customerTotals.truckPending + customerTotals.localPending)}
-          danger={(customerTotals.truckPending + customerTotals.localPending) > 0}
+          helperLabel="Active"
+          helperValue={String(activeCustomers)}
           tone="blue"
         />
         <CustomerSummaryCard
@@ -359,27 +446,41 @@ export default function CustomersPage() {
           danger={customerTotals.localPending > 0}
           tone="violet"
         />
+        <CustomerSummaryCard
+          icon={FiDollarSign}
+          label="Total Outstanding"
+          value={formatCurrency(totalPending)}
+          helperLabel="Customers due"
+          helperValue={String(customers.filter((customer) => Number(customer.creditBalance || 0) > 0).length)}
+          danger={totalPending > 0}
+          tone="amber"
+        />
       </section>
 
-      <section className="overflow-hidden rounded-2xl border border-iceblue-200 bg-gradient-to-br from-white to-iceblue-50 shadow-sm">
-        <div className="flex flex-col gap-3 border-b border-iceblue-100 bg-white px-4 py-3 sm:flex-row sm:items-center">
-          <h1 className="shrink-0 font-display text-base font-bold text-navy-900">{activeBranch ? `${activeBranch.name} Customers` : 'All Customers'}</h1>
-          <div className="relative min-w-0 flex-1">
-            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-iceblue-400" />
-            <input className="input-field h-10 pl-9" placeholder="Search customers..." value={search} onChange={(e) => setSearch(e.target.value)} />
+      <section className="overflow-hidden rounded-3xl border border-white/80 bg-white shadow-[0_18px_45px_-32px_rgba(15,43,61,0.45)]">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 lg:flex-row lg:items-center lg:p-5">
+          <div className="mr-auto flex items-center gap-3">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-iceblue-50 text-iceblue-600"><FiUsers /></span>
+            <div><h2 className="font-extrabold text-navy-900">{overallView ? 'All customers' : `${scopeName} customers`}</h2><p className="mt-0.5 text-[10px] text-slate-500">{filteredCustomers.length} of {customers.length} customer records</p></div>
           </div>
-          {canManageCustomers && <button onClick={openCreate} className="btn-primary flex h-10 shrink-0 items-center justify-center gap-2 px-4">
-            <FiPlus /> Add Customer
-          </button>}
+          <div className="relative min-w-0 flex-1">
+            <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input className="h-10 w-full rounded-xl border border-slate-200 bg-slate-50/70 pl-9 pr-3 text-xs font-semibold text-navy-900 outline-none transition placeholder:text-slate-400 focus:border-iceblue-300 focus:bg-white focus:ring-4 focus:ring-iceblue-50" placeholder="Search name, phone, or address..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:flex">
+            <select aria-label="Filter customer type" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value as typeof typeFilter)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 outline-none focus:border-iceblue-300"><option value="all">All types</option><option value="local">Local</option><option value="truck">Truck</option></select>
+            <select aria-label="Filter customer status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 outline-none focus:border-iceblue-300"><option value="all">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+          </div>
+          {canManageCustomers && <button onClick={openCreate} className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-navy-900 px-4 text-xs font-bold text-white transition hover:bg-iceblue-800"><FiPlus /> Add customer</button>}
         </div>
-        {pageError && <div className="m-4 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600">{pageError}</div>}
+        {pageError && <div className="m-4 flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 p-3 text-sm font-medium text-red-600"><FiAlertCircle className="mt-0.5 shrink-0" />{pageError}</div>}
         {loading ? (
           <p className="p-5 text-navy-800/50">Loading...</p>
         ) : (
           <>
             <div className="sm:hidden">
-              {customers.map((c, index) => (
-                <div key={c._id} className="border-b border-slate-100 px-4 py-3 last:border-b-0">
+              {filteredCustomers.map((c, index) => (
+                <div key={c._id} className="border-b border-slate-100 px-4 py-4 last:border-b-0">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -392,16 +493,17 @@ export default function CustomersPage() {
                       <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">{c.address || '-'}</p>
                       <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">Created by: {creatorName(c)}</p>
                       <p className="mt-0.5 truncate pl-8 text-xs text-navy-800/45">Truck: {customerTruckName(c)}</p>
+                      <p className="mt-0.5 truncate pl-8 text-xs font-bold text-emerald-700">Default price: {customerDefaultPrice(c) > 0 ? `${formatCurrency(customerDefaultPrice(c))} / bar` : 'Not set'}</p>
                     </div>
                     <div className="shrink-0 text-right">
-                      <p className={`text-sm text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</p>
-                      <span className="mt-1 inline-block pill bg-slate-100 text-navy-900">
+                      <p className={`text-sm font-extrabold ${c.creditBalance > 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatCurrency(c.creditBalance)}</p>
+                      <span className={`mt-1 inline-block rounded-full px-2 py-1 text-[9px] font-bold ${(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'bg-cyan-50 text-cyan-700' : 'bg-violet-50 text-violet-700'}`}>
                         {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
                       </span>
                     </div>
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-3 pl-8">
-                    <span className="pill bg-slate-100 text-navy-900">{c.isActive ? 'Active' : 'Inactive'}</span>
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[9px] font-bold ${c.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className={`h-1.5 w-1.5 rounded-full ${c.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />{c.isActive ? 'Active' : 'Inactive'}</span>
                     <div className="flex flex-wrap items-center gap-3">
                       <button title="View details and purchase history" aria-label={`View ${c.name} details`} onClick={() => openHistory(c)} className="text-navy-900 hover:text-black">
                         <FiEye />
@@ -423,49 +525,51 @@ export default function CustomersPage() {
                   </div>
                 </div>
               ))}
-              {customers.length === 0 && (
-                <p className="px-4 py-10 text-center text-sm text-navy-800/50">No customers found.</p>
+              {filteredCustomers.length === 0 && (
+                <p className="px-4 py-12 text-center text-sm text-navy-800/50">No customers match the current filters.</p>
               )}
             </div>
             <div className="hidden overflow-x-auto sm:block">
-              <table className="w-full min-w-[1160px] table-fixed border-collapse text-left text-xs sm:text-sm">
-                <thead className="bg-slate-100 text-navy-900">
+              <table className="w-full min-w-[1060px] table-fixed border-collapse text-left text-xs sm:text-sm">
+                <thead className="bg-slate-50/80 text-slate-400">
                   <tr>
-                    <th className="w-[6%] border border-slate-300 px-1 py-3 text-center text-[10px] font-bold uppercase leading-tight">S.No</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Name</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Created By</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Truck Name</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Phone Number</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Address</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Customer Type</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Credit Balance</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Status</th>
-                    <th className="border border-slate-300 px-2 py-3 text-center text-[10px] font-bold uppercase leading-tight">Actions</th>
+                    <th className="w-[6%] border-b border-slate-100 px-1 py-3 text-center text-[9px] font-black uppercase tracking-wider">#</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Customer</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Created by</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-left text-[9px] font-black uppercase tracking-wider">Truck</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-center text-[9px] font-black uppercase tracking-wider">Type</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-right text-[9px] font-black uppercase tracking-wider">Default Price</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-right text-[9px] font-black uppercase tracking-wider">Outstanding</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-center text-[9px] font-black uppercase tracking-wider">Status</th>
+                    <th className="border-b border-slate-100 px-3 py-3 text-center text-[9px] font-black uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {customers.map((c, index) => (
-                    <tr key={c._id} className="even:bg-slate-50 hover:bg-iceblue-50/70">
-                      <td className="border border-slate-300 px-2 py-3 text-center font-medium text-navy-900">{index + 1}</td>
-                      <td className="break-words border border-slate-300 px-2 py-3">
+                <tbody className="divide-y divide-slate-100">
+                  {filteredCustomers.map((c, index) => (
+                    <tr key={c._id} className="transition hover:bg-iceblue-50/40">
+                      <td className="px-3 py-4 text-center text-xs text-slate-400">{index + 1}</td>
+                      <td className="break-words px-3 py-4">
                         <Link href={`/admin/customers/${c._id}`} className="font-medium text-navy-900 underline-offset-2 hover:underline">
                           {c.name}
                         </Link>
+                        <p className="mt-1 break-all text-[11px] font-medium text-slate-500">{c.phoneNumber || 'No phone number'}</p>
+                        <p className="mt-1 break-words text-[11px] text-slate-400">{c.address || 'No address'}</p>
                       </td>
-                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{creatorName(c)}</td>
-                      <td className="break-words border border-slate-300 px-2 py-3 text-center">{customerTruckName(c)}</td>
-                      <td className="break-all border border-slate-300 px-2 py-3">{c.phoneNumber || '-'}</td>
-                      <td className="break-words border border-slate-300 px-2 py-3">{c.address || '-'}</td>
-                      <td className="border border-slate-300 px-2 py-3 text-center">
-                        <span className="pill bg-slate-100 text-navy-900">
+                      <td className="break-words px-3 py-4 text-xs text-slate-500">{creatorName(c)}</td>
+                      <td className="break-words px-3 py-4 text-xs text-slate-500">{customerTruckName(c)}</td>
+                      <td className="px-3 py-4 text-center">
+                        <span className={`rounded-full px-2 py-1 text-[9px] font-bold ${(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'bg-cyan-50 text-cyan-700' : 'bg-violet-50 text-violet-700'}`}>
                           {(c.customerType || (c.truck ? 'truck' : 'local')) === 'truck' ? 'Truck' : 'Local'}
                         </span>
                       </td>
-                      <td className={`break-words border border-slate-300 px-2 py-3 text-center text-navy-900 ${c.creditBalance > 0 ? 'font-semibold' : ''}`}>{formatCurrency(c.creditBalance)}</td>
-                      <td className="border border-slate-300 px-2 py-3 text-center">
-                        <span className="pill bg-slate-100 text-navy-900">{c.isActive ? 'Active' : 'Inactive'}</span>
+                      <td className={`px-3 py-4 text-right text-xs font-bold ${customerDefaultPrice(c) > 0 ? 'text-emerald-700' : 'text-red-500'}`}>
+                        {customerDefaultPrice(c) > 0 ? `${formatCurrency(customerDefaultPrice(c))} / bar` : 'Not set'}
                       </td>
-                      <td className="border border-slate-300 px-2 py-3">
+                      <td className={`break-words px-3 py-4 text-right text-xs font-extrabold ${c.creditBalance > 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatCurrency(c.creditBalance)}</td>
+                      <td className="px-3 py-4 text-center">
+                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[9px] font-bold ${c.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className={`h-1.5 w-1.5 rounded-full ${c.isActive ? 'bg-emerald-500' : 'bg-slate-400'}`} />{c.isActive ? 'Active' : 'Inactive'}</span>
+                      </td>
+                      <td className="px-3 py-4">
                         <div className="flex flex-wrap items-center justify-center gap-2">
                           <button title="View details and purchase history" aria-label={`View ${c.name} details`} onClick={() => openHistory(c)} className="text-navy-900 hover:text-black">
                             <FiEye />
@@ -487,8 +591,8 @@ export default function CustomersPage() {
                       </td>
                     </tr>
                   ))}
-                  {customers.length === 0 && (
-                    <tr><td colSpan={10} className="border border-slate-300 px-4 py-10 text-center text-navy-800/50">No customers found.</td></tr>
+                  {filteredCustomers.length === 0 && (
+                    <tr><td colSpan={9} className="px-4 py-14 text-center text-navy-800/50">No customers match the current filters.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -525,6 +629,14 @@ export default function CustomersPage() {
                 <option value="retail">Retail</option>
                 <option value="wholesale">Wholesale</option>
               </select>
+            </div>
+            <div>
+              <label className="label-text">Default Ice Bar Price</label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 font-bold text-navy-800/45">₹</span>
+                <input required type="number" min="0.01" step="0.01" inputMode="decimal" className="input-field pl-8" placeholder="Price for one full ice bar" value={form.defaultPrice} onChange={(e) => setForm({ ...form, defaultPrice: e.target.value })} />
+              </div>
+              <p className="mt-1 text-xs text-navy-800/45">Automatically used when creating a {form.defaultSaleType} sale for this customer.</p>
             </div>
             <div>
               <label className="label-text">Notes</label>
@@ -628,6 +740,10 @@ export default function CustomersPage() {
               <div>
                 <p className="text-[11px] font-semibold uppercase text-navy-800/45">Sale Type</p>
                 <p className="mt-1 font-bold text-navy-900 capitalize">{historyTarget.defaultSaleType}</p>
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold uppercase text-navy-800/45">Default Price</p>
+                <p className={`mt-1 font-bold ${customerDefaultPrice(historyTarget) > 0 ? 'text-emerald-600' : 'text-red-500'}`}>{customerDefaultPrice(historyTarget) > 0 ? `${formatCurrency(customerDefaultPrice(historyTarget))} / bar` : 'Not set'}</p>
               </div>
               <div>
                 <p className="text-[11px] font-semibold uppercase text-navy-800/45">Truck</p>

@@ -2,11 +2,13 @@
 
 import Topbar from '../../components/Topbar';
 import RequireRole from '../../components/RequireRole';
+import TruckLogoutManager from '../../components/TruckLogoutManager';
 import { usePathname } from 'next/navigation';
 
 const titles: Record<string, string> = {
   '/truck/dashboard': 'Driver Dashboard',
   '/truck/customers': 'Customer History',
+  '/truck/settings': 'Truck Settings',
 };
 
 export default function TruckLayout({ children }: { children: React.ReactNode }) {
@@ -18,6 +20,7 @@ export default function TruckLayout({ children }: { children: React.ReactNode })
       <div className="min-h-screen w-full max-w-full overflow-x-hidden">
         <Topbar title={title} />
         <main className="mx-auto w-full min-w-0 max-w-7xl p-3 pb-8 sm:p-4 md:p-6 xl:p-8">{children}</main>
+        <TruckLogoutManager />
       </div>
     </RequireRole>
   );
